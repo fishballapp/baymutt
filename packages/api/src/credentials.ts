@@ -2,6 +2,7 @@
 // account may make another that holds no more than it does.
 
 import { coded } from '@internal/effect-api';
+import * as Effect from 'effect/Effect';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
@@ -30,6 +31,14 @@ export const CredentialGrantSchema = Schema.Struct({
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
 
+/**
+ * A voucher, or null. A store that predates vouchers sends no such key, which reads as null: a
+ * newer client still works against it, as the deploy that brings the store up to date must.
+ */
+const voucherOrNull = Schema.NullOr(VoucherSchema).pipe(
+  Schema.withDecodingDefaultKey(Effect.succeed(null)),
+);
+
 export const ServiceAccountSchema = Schema.Struct({
   id: Schema.String,
   name: LabelSchema,
@@ -49,7 +58,7 @@ export const ServiceAccountSchema = Schema.Struct({
    * login. Null for a login, for any other caller, and for a service account made by a CLI before
    * 0.4.0, which nothing vouches for: it can lose access, and gain none that needs its key.
    */
-  keyVoucher: Schema.NullOr(VoucherSchema),
+  keyVoucher: voucherOrNull,
   createdAt: TimestampSchema,
   lastUsedAt: Schema.NullOr(TimestampSchema),
   grants: Schema.Array(CredentialGrantSchema),
@@ -123,7 +132,7 @@ export const MeSchema = Schema.Struct({
       parentId: Schema.NullOr(Schema.String),
       welcome: Schema.NullOr(SealedSchema),
       /** Its maker vouching for the account's public key; null for a login, or one made before 0.4.0. */
-      accountVoucher: Schema.NullOr(VoucherSchema),
+      accountVoucher: voucherOrNull,
     }),
   ),
 }).annotate({ identifier: 'Me' });
