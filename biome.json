@@ -11,7 +11,7 @@
       "!**/*.astro"
     ]
   },
-  "plugins": ["./biome-plugins/multiline-if-braces.grit"],
+  "plugins": ["./biome-plugins/multiline-if-braces.grit", "./biome-plugins/no-date.grit"],
   "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,

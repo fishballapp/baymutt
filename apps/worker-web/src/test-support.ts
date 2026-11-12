@@ -85,6 +85,7 @@ export const testWorld = () => {
 
   /** A signed-in user with one passkey, and no account (vault) yet. */
   const user = (id = 'user-1') => {
+    // biome-ignore lint/plugin/no-date: Better Auth's `user` table: its createdAt column is a date, which this fixture writes as the ISO text the adapter stores.
     const now = new Date().toISOString();
     insert(sqlite, 'user', {
       id,
@@ -115,6 +116,7 @@ export const testWorld = () => {
   /** A session with the vault locked: what a magic link gives. */
   const signIn = (userId: string): Headers_ => {
     const token = `session-${userId}-${Object.keys(sessions).length}`;
+    // biome-ignore lint/plugin/no-date: Better Auth types a session's createdAt as Date; this fake session mirrors it.
     sessions[token] = { userId, createdAt: new Date() };
     return { cookie: `__Secure-better-auth.session_token=${token}`, origin: ORIGIN };
   };

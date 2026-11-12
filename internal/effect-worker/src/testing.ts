@@ -200,6 +200,7 @@ export const fakeR2 = (
   const meta = (key: string, object: FakeObject) => ({
     key,
     size: bytesOf(object).byteLength,
+    // biome-ignore lint/plugin/no-date: R2's `uploaded` is a Date in the Workers runtime; the fake's default mirrors it.
     uploaded: object.uploaded ?? new Date(0),
     httpEtag: `"${key}"`,
     httpMetadata: object.contentType === undefined ? {} : { contentType: object.contentType },
