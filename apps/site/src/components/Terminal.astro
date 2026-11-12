@@ -9,6 +9,9 @@ type Props = {
 };
 
 const { machine, lines } = Astro.props;
+
+/** A value longer than this (a link) is cut to one line in an abridged output. */
+const LONG_VALUE = 60;
 ---
 
 <figure class="terminal">
@@ -20,9 +23,21 @@ const { machine, lines } = Astro.props;
     if (line.kind === 'stderr') {
       return <span class:list={['line', 'stderr', { clipped: line.isClipped }]}>{line.text}</span>;
     }
-    return jsonLines(line.value).map(tokens => (
-      <span class="line">{tokens.map(token => <span class={token.kind}>{token.text}</span>)}</span>
-    ));
+    const { only } = line;
+    if (only === undefined) {
+      return jsonLines(line.value).map(tokens => (
+        <span class="line">{tokens.map(token => <span class={token.kind}>{token.text}</span>)}</span>
+      ));
+    }
+    const shown = Object.fromEntries(Object.entries(line.value).filter(([key]) => only.includes(key)));
+    const printed = jsonLines(shown);
+    return [
+      ...printed.slice(0, -1).map(tokens => (
+        <span class:list={['line', { clipped: tokens.some(token => token.text.length > LONG_VALUE) }]}>{tokens.map(token => <span class={token.kind}>{token.text}</span>)}</span>
+      )),
+      <span class="line stderr">{'  …'}</span>,
+      <span class="line">{'}'}</span>,
+    ];
   })}</code></pre>
 </figure>
 
@@ -69,10 +84,10 @@ const { machine, lines } = Astro.props;
     color: var(--fog-dim);
   }
 
-  /* The pairing link is a few hundred characters of percent-encoding: one line of it says enough. */
+  /* A pairing or paste link is a few hundred characters: one line of it says enough. */
   .clipped {
     overflow: hidden;
-    white-space: nowrap;
+    white-space: pre;
     text-overflow: ellipsis;
   }
 

@@ -1,6 +1,7 @@
 // The example account the page shows. The ids, keys, code and links were made by @baymutt/keys'
 // own functions (a machine token, its pairing code, a project key's fingerprint), and every
-// printed object has the shape the CLI prints, so a transcript here is one the CLI could print.
+// printed object has the shape the CLI prints, so a transcript here is one the CLI could print. A
+// long one shows a few of its fields and an ellipsis for the rest.
 // The page labels it an example.
 
 import type { TerminalLine } from './terminal.ts';
@@ -86,6 +87,7 @@ export const REQUEST: readonly TerminalLine[] = [
       linkExpiresAt: ASKED_AT + 15 * 60_000,
       url: PASTE_URL,
     },
+    only: ['id', 'name', 'status', 'url'],
   },
   { kind: 'command', text: `baymutt wait ${PASTE_ID}` },
   { kind: 'stdout', value: { id: PASTE_ID, status: 'answered' } },
