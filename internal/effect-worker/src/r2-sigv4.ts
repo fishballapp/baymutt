@@ -38,7 +38,9 @@ const uriEncode = (value: string): string =>
 const encodeKey = (key: string): string => key.split('/').map(uriEncode).join('/');
 
 const amzDates = (now: number): { amzDate: string; dateStamp: string } => {
-  const amzDate = new Date(now).toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const amzDate = Temporal.Instant.fromEpochMilliseconds(now)
+    .toString({ smallestUnit: 'second' })
+    .replace(/[:-]/g, '');
   return { amzDate, dateStamp: amzDate.slice(0, 8) };
 };
 

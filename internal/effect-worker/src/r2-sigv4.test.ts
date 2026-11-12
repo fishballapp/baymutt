@@ -9,7 +9,7 @@ const creds: R2Creds = {
   bucket: 'media-bucket',
 };
 
-const FIXED = Date.parse('2026-06-22T00:00:00.000Z');
+const FIXED = Temporal.Instant.from('2026-06-22T00:00:00.000Z').epochMilliseconds;
 const KEY = 'assets/org_x/asset_y/clip.mp4';
 
 describe('presignPutUrl for a multipart part (AWS SigV4)', () => {
