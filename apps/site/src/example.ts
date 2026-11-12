@@ -30,6 +30,7 @@ const PASTE_URL = `${ORIGIN}/paste/${PASTE_ID}#0lufnXZECBJxIMQD0ogv9TAJFXQvlImpv
 const ASKED_AT = 1794390067512;
 
 export const PAIR: readonly TerminalLine[] = [
+  { kind: 'command', text: 'npm install -g baymutt' },
   { kind: 'command', text: `baymutt pair --name "${MAC_MINI.name}"` },
   {
     kind: 'stderr',

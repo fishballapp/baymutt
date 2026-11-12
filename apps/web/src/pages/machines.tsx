@@ -109,7 +109,8 @@ export const MachinesPage = () => {
       {machines === null && !failureMessage(result) && <Skeleton />}
       {machines?.length === 0 && (
         <Empty title="No machines yet">
-          <p>On the laptop, agent or CI runner, run:</p>
+          <p>On the laptop, agent or CI runner, install the CLI and pair it:</p>
+          <CommandLine>npm install -g baymutt</CommandLine>
           <CommandLine>baymutt pair --name "my laptop"</CommandLine>
           <p>
             It prints a link and a code. Open the link here and pair it if the codes match. A new
