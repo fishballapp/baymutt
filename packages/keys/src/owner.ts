@@ -5,13 +5,13 @@
  * DEK            = random 256 bits, wrapped once per passkey (PRF), once to the password's key
  *                  if there is one, and once to the recovery key
  * accountKey     = X25519 pair; its private half is a vault record   → every project key is wrapped to its public half
- * endorsement    = vault record [credentialId → machine public key]  → written when the owner pairs a machine
+ * endorsement    = vault record [credentialId → service account public key]  → written when the owner pairs a service account
  * recoveryKey    = random 256 bits, shown once, kept by the owner; wraps the DEK like a passkey
  * vaultProof     = HMAC(indexKey, ["vault-proof", accountId])        → the store keeps SHA-256(vaultProof)
  * ```
  *
  * The endorsement is why the store cannot hand the owner a key of its own to wrap a project key
- * to: a machine's public key counts only if the vault vouches for it, and only the owner writes
+ * to: a service account's public key counts only if the vault vouches for it, and only the owner writes
  * there, after comparing the pairing code.
  */
 
@@ -146,27 +146,27 @@ export type OwnerKeys = {
 };
 
 /**
- * What approving a pairing link writes: the vault's endorsement of the machine's key, which the
- * owner just compared by its pairing code, and the welcome that tells the machine which account
+ * What approving a pairing link writes: the vault's endorsement of the service account's key, which the
+ * owner just compared by its pairing code, and the welcome that tells the service account which account
  * key to trust.
  */
 export const approvePairing = async (
   { vault, accountId, accountKey }: OwnerKeys,
-  machine: {
+  serviceAccount: {
     readonly id: string;
     readonly publicKey: string;
     readonly pairingSecret: string;
   },
 ): Promise<{ readonly endorsement: string; readonly welcome: string }> => ({
   endorsement: await endorseCredential(vault, {
-    credentialId: machine.id,
-    publicKey: machine.publicKey,
+    credentialId: serviceAccount.id,
+    publicKey: serviceAccount.publicKey,
   }),
   welcome: await sealWelcome(
     {
-      pairingSecret: machine.pairingSecret,
-      credentialId: machine.id,
-      machinePublicKey: machine.publicKey,
+      pairingSecret: serviceAccount.pairingSecret,
+      credentialId: serviceAccount.id,
+      serviceAccountPublicKey: serviceAccount.publicKey,
     },
     { accountId, accountPublicKey: toBase64Url(accountKey.publicKey) },
   ),
@@ -176,7 +176,7 @@ export const approvePairing = async (
 export type OwnedProject = ProjectKeyBinding & {
   readonly ownerWrap: string;
   readonly ownerProof: string;
-  /** The machine that created it and vouched for its key; null when the owner did. */
+  /** The service account that created it and vouched for its key; null when the owner did. */
   readonly creator: {
     readonly id: string;
     readonly publicKey: string;
@@ -186,7 +186,7 @@ export type OwnedProject = ProjectKeyBinding & {
 
 /**
  * A project's key pair as the owner knows it: the public half its creator vouched for, where the
- * creator is the owner or a machine the vault endorsed, and the private half the wrap opens to.
+ * creator is the owner or a service account the vault endorsed, and the private half the wrap opens to.
  */
 export const openOwnedProject = async (
   owner: OwnerKeys,
@@ -204,7 +204,7 @@ export const openOwnedProject = async (
     if (endorsed === null || endorsed !== creator.publicKey) {
       throw new VaultError(
         'unreadable',
-        'this project’s creator is not a machine the owner paired',
+        'this project’s creator is not a service account the owner approved',
       );
     }
     return endorsed;
@@ -227,39 +227,39 @@ export const openOwnedProject = async (
 };
 
 /**
- * A grant for a machine: the owner's proof of the project's public key, and for a read the
- * project key wrapped to it. Refused unless the vault endorsed that machine's key, so the store
- * cannot name a key of its own as the machine's.
+ * A grant for a service account: the owner's proof of the project's public key, and for a read the
+ * project key wrapped to it. Refused unless the vault endorsed that service account's key, so the store
+ * cannot name a key of its own as the service account's.
  */
-export const grantToMachine = async (
+export const grantToServiceAccount = async (
   owner: OwnerKeys,
   project: OwnedProject,
-  machine: {
+  serviceAccount: {
     readonly id: string;
     readonly publicKey: string;
     readonly endorsement: string | null;
   },
   { canRead }: { readonly canRead: boolean },
 ): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> => {
-  if (machine.endorsement === null) {
+  if (serviceAccount.endorsement === null) {
     throw new VaultError(
       'unreadable',
-      'this machine was not paired by the owner, so nothing vouches for its key',
+      'this service account was not approved by the owner, so nothing vouches for its key',
     );
   }
   const endorsed = await endorsedPublicKey(owner.vault, {
-    credentialId: machine.id,
-    endorsement: machine.endorsement,
+    credentialId: serviceAccount.id,
+    endorsement: serviceAccount.endorsement,
   });
-  if (endorsed !== machine.publicKey) {
+  if (endorsed !== serviceAccount.publicKey) {
     throw new VaultError(
       'unreadable',
-      'the store shows a key for this machine that the owner did not pair',
+      'the store shows a key for this service account that the owner did not approve',
     );
   }
   const { ownerWrap: _, ownerProof: __, creator: ___, ...binding } = project;
   const opened = await openOwnedProject(owner, project);
-  const reader = { id: machine.id, publicKey: endorsed };
+  const reader = { id: serviceAccount.id, publicKey: endorsed };
   return {
     keyProof: await vouchForProjectKey({
       voucherKey: owner.accountKey,
@@ -271,7 +271,7 @@ export const grantToMachine = async (
       ? await wrapProjectKey({
           projectPrivateKey: opened.encoded,
           readerPublicKey: endorsed,
-          readerId: machine.id,
+          readerId: serviceAccount.id,
           binding,
         })
       : null,

@@ -170,7 +170,7 @@ describe('loading', () => {
       status: 200,
       body: { project, wrap: sealedLike('read-wrap'), readerId: reader.id, secrets },
     });
-    // Values leave through a paired machine: a browser session, vault open or not, loads none.
+    // Values leave through a paired service account: a browser session, vault open or not, loads none.
     expect(await call(w, 'GET', `/projects/${projectId}/bundle`, owner)).toMatchObject({
       status: 403,
       body: { code: 'NoAccessError' },
@@ -337,7 +337,7 @@ describe('a paste request', () => {
     for (const headers of [
       { ...link, 'x-baymutt-paste-token': keyLike('x') },
       { origin: ORIGIN },
-      // A machine's bearer is no substitute: only the link or the owner answers.
+      // A service account's bearer is no substitute: only the link or the owner answers.
       reader.headers,
     ]) {
       expect(await call(w, 'GET', `/paste/${id}`, headers)).toMatchObject({
@@ -412,7 +412,7 @@ describe('a paste request', () => {
     ]);
   });
 
-  it('is cancelled by its maker or the owner, and not by another machine', async () => {
+  it('is cancelled by its maker or the owner, and not by another service account', async () => {
     const world = await setup();
     const { w, projectId, reader, writer } = world;
     const { id, link } = await request(world, projectId, writer.headers);

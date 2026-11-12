@@ -79,6 +79,7 @@ catalog:
   repojj: ^2026.7.29
   sharp: ^0.35.5
   tailwindcss: ^4.3.3
+  temporal-polyfill: ^1.0.8
   tsdown: ^0.23.0
   typescript: ~7.0.2
   varlock: ^1.24.0

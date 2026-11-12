@@ -1,16 +1,16 @@
 ---
-type Props = { machine: string; wants: string; project: string; reason: string };
-const { machine, wants, project, reason } = Astro.props;
+type Props = { serviceAccount: string; wants: string; project: string; reason: string };
+const { serviceAccount, wants, project, reason } = Astro.props;
 ---
 
 <div class="decision">
   <div class="sentence">
     <p>
-      <strong>{machine}</strong> asks to <strong>{wants}</strong> <code>{project}</code>
+      <strong>{serviceAccount}</strong> asks to <strong>{wants}</strong> <code>{project}</code>
     </p>
     <p class="reason">{reason}</p>
     <p class="note">
-      Approving wraps the project key to this machine. What it reads afterwards cannot be unread.
+      Approving wraps the project key to this service account. What it reads afterwards cannot be unread.
     </p>
   </div>
   <div class="actions" aria-hidden="true">

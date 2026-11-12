@@ -1,5 +1,5 @@
 // For the varlock plugin, and anything else that needs a project's values in-process: one call,
-// no Effect in its signature. It reads this machine's key the way the CLI does.
+// no Effect in its signature. It reads the service account key the way the CLI does.
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import * as ConfigProvider from 'effect/ConfigProvider';
 import * as Effect from 'effect/Effect';
@@ -8,8 +8,8 @@ import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
 import { describeFailure } from './errors.ts';
 import { KeyStore } from './key-store.ts';
-import { Machine } from './machine.ts';
 import { loadValues } from './projects.ts';
+import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 
 /**
@@ -24,7 +24,7 @@ export const loadProject = (
   loadValues(project).pipe(
     Effect.map(({ values }) => values),
     Effect.provide(
-      Machine.layerUnreported.pipe(
+      ServiceAccount.layerUnreported.pipe(
         Layer.provideMerge(KeyStore.layer),
         Layer.provideMerge(Settings.layerUnreported),
         Layer.provideMerge(

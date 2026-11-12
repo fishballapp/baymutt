@@ -36,7 +36,7 @@ const ownerOnly = (actor: ActorIdentity, what: string) =>
 export const projects = ({
   sql,
   audit,
-  lookups: { projectsOf, projectFor, machineIn, underLimit },
+  lookups: { projectsOf, projectFor, serviceAccountIn, underLimit },
 }: {
   readonly sql: D1Client.D1Client;
   readonly audit: Audit['Service'];
@@ -139,12 +139,12 @@ export const projects = ({
       };
     }) {
       if (
-        actor._tag === 'Machine' &&
+        actor._tag === 'ServiceAccount' &&
         (project.creatorWrap === null || project.creatorProof === null)
       ) {
         return yield* new OwnerRequiredError({
           message:
-            'A machine that creates a project wraps the project key to itself and vouches for it (`creatorWrap`, `creatorProof`), or it could never read what it made.',
+            'A service account that creates a project wraps the project key to itself and vouches for it (`creatorWrap`, `creatorProof`), or it could never read what it made.',
         });
       }
       yield* underLimit(actor.accountId, 'projects');
@@ -162,7 +162,7 @@ export const projects = ({
               VALUES (${project.id}, ${actor.accountId}, ${project.name}, ${project.publicKey}, 1,
                 ${project.ownerWrap}, ${project.ownerProof}, ${encodeActor(actorOf(actor))}, ${now})
               RETURNING id`,
-          ...(actor._tag === 'Machine'
+          ...(actor._tag === 'ServiceAccount'
             ? [
                 sql`INSERT INTO project_grant
                       (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
@@ -277,7 +277,7 @@ export const projects = ({
     }) {
       yield* ownerOnly(actor, 'grants access');
       const { project } = yield* projectFor(actor, id);
-      const machine = yield* machineIn(actor.accountId, credentialId);
+      const serviceAccount = yield* serviceAccountIn(actor.accountId, credentialId);
       if (!canWrite && readWrap === null) {
         return yield* new NotFoundError({
           message: 'A grant gives read, write or both. To take access away, remove the grant.',
@@ -302,7 +302,7 @@ export const projects = ({
             action: 'grant.set',
             projectId: id,
             projectName: project.name,
-            detail: `${machine.name}: ${[readWrap !== null && 'read', canWrite && 'write'].filter(Boolean).join(' + ')}`,
+            detail: `${serviceAccount.name}: ${[readWrap !== null && 'read', canWrite && 'write'].filter(Boolean).join(' + ')}`,
           }),
         ])
         .pipe(Effect.orDie);
@@ -322,8 +322,8 @@ export const projects = ({
     }) {
       yield* ownerOnly(actor, 'removes access');
       const { project } = yield* projectFor(actor, id);
-      const machine = yield* machineIn(actor.accountId, credentialId);
-      // A machine made by this one holds a copy of the same access, so it loses it too.
+      const serviceAccount = yield* serviceAccountIn(actor.accountId, credentialId);
+      // A service account made by this one holds a copy of the same access, so it loses it too.
       const [removed] = yield* sql
         .batch([
           sql`DELETE FROM project_grant
@@ -337,7 +337,7 @@ export const projects = ({
             action: 'grant.remove',
             projectId: id,
             projectName: project.name,
-            detail: machine.name,
+            detail: serviceAccount.name,
           }),
         ])
         .pipe(Effect.orDie);

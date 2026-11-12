@@ -9,11 +9,6 @@ export {
 } from '@internal/zk-vault';
 export { randomToken } from './encoding.ts';
 export {
-  generateMachineToken,
-  type MachineKey,
-  machineKeyFromToken,
-} from './machine.ts';
-export {
   approvePairing,
   createAccountKey,
   createVault,
@@ -22,7 +17,7 @@ export {
   endorseCredential,
   endorsedPublicKey,
   generateRecoveryKey,
-  grantToMachine,
+  grantToServiceAccount,
   MIN_PASSWORD_LENGTH,
   type OwnedProject,
   type OwnerKeys,
@@ -49,4 +44,9 @@ export {
   vouchForProjectKey,
   wrapProjectKey,
 } from './project.ts';
+export {
+  generateServiceAccountToken,
+  type ServiceAccountKey,
+  serviceAccountKeyFromToken,
+} from './service-account.ts';
 export { formatBearer, parseBearer, tokenHash } from './wire.ts';

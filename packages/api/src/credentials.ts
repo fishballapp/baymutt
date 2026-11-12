@@ -1,5 +1,5 @@
-// Machines: what a laptop, an agent or a CI job acts as. The owner pairs one from the dashboard; a
-// machine may make another that holds no more than it does.
+// Service accounts: what the CLI acts as. The owner approves one from the dashboard; a service
+// account may make another that holds no more than it does.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -27,19 +27,19 @@ export const CredentialGrantSchema = Schema.Struct({
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
 
-export const MachineSchema = Schema.Struct({
+export const ServiceAccountSchema = Schema.Struct({
   id: Schema.String,
   name: LabelSchema,
   publicKey: PublicKeySchema,
-  /** The machine that made this one; null for a machine the owner paired. */
+  /** The service account that made this one; null for a service account the owner paired. */
   parentId: Schema.NullOr(Schema.String),
-  /** The owner's vault vouching for `publicKey`. Only a machine the owner paired has one, and only the owner can read it. */
+  /** The owner's vault vouching for `publicKey`. Only a service account the owner paired has one, and only the owner can read it. */
   endorsement: Schema.NullOr(SealedSchema),
   createdAt: TimestampSchema,
   lastUsedAt: Schema.NullOr(TimestampSchema),
   grants: Schema.Array(CredentialGrantSchema),
-}).annotate({ identifier: 'Machine' });
-export type Machine = typeof MachineSchema.Type;
+}).annotate({ identifier: 'ServiceAccount' });
+export type ServiceAccount = typeof ServiceAccountSchema.Type;
 
 const newCredential = {
   id: IdSchema,
@@ -48,7 +48,7 @@ const newCredential = {
   bearerHash: HashSchema,
 };
 
-/** What the pairing link carries in its fragment, from the machine to the owner's browser. */
+/** What the pairing link carries in its fragment, from the service account to the owner's browser. */
 export const PairingRequestSchema = Schema.Struct({
   ...newCredential,
   /** Seals the browser's answer, so the store cannot write one. */
@@ -56,7 +56,7 @@ export const PairingRequestSchema = Schema.Struct({
 }).annotate({ identifier: 'PairingRequest' });
 export type PairingRequest = typeof PairingRequestSchema.Type;
 
-/** Who the caller is. A machine reads its `welcome` here once it has been paired. */
+/** Who the caller is. A service account reads its `welcome` here once the owner has approved it. */
 export const MeSchema = Schema.Struct({
   accountId: Schema.String,
   accountName: Schema.String,
@@ -78,11 +78,12 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({ summary: 'Who this credential is' }),
     ),
     HttpApiEndpoint.get('list', '/credentials', {
-      success: Schema.Struct({ credentials: Schema.Array(MachineSchema) }),
+      success: Schema.Struct({ credentials: Schema.Array(ServiceAccountSchema) }),
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'List machines',
-        description: 'The owner sees every machine; a machine sees itself and those it made.',
+        summary: 'List service accounts',
+        description:
+          'The owner sees every service account; a service account sees itself and those it made.',
       }),
     ),
     HttpApiEndpoint.post('pair', '/credentials/pair', {
@@ -91,12 +92,13 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
         endorsement: SealedSchema,
         welcome: SealedSchema,
       }),
-      success: MachineSchema.pipe(HttpApiSchema.status(201)),
+      success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [coded(OwnerRequiredError), coded(AlreadyExistsError), coded(LimitReachedError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Pair a machine',
-        description: 'The owner’s approval of a pairing link. The machine starts with no access.',
+        summary: 'Approve a service account',
+        description:
+          'The owner’s approval of the link `baymutt login` prints. The service account starts with no access.',
       }),
     ),
     HttpApiEndpoint.post('create', '/credentials', {
@@ -106,14 +108,14 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
           Schema.Struct({
             projectId: Schema.String,
             canWrite: Schema.Boolean,
-            /** The project key wrapped to the new machine by its maker, or null for no read. */
+            /** The project key wrapped to the new service account by its maker, or null for no read. */
             readWrap: Schema.NullOr(WrapSchema),
             /** Its maker's proof of the project's public key. */
             keyProof: KeyProofSchema,
           }),
         ),
       }),
-      success: MachineSchema.pipe(HttpApiSchema.status(201)),
+      success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [
         coded(OwnerRequiredError),
         coded(AlreadyExistsError),
@@ -123,9 +125,9 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       ],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Make a narrower machine',
+        summary: 'Make a narrower service account',
         description:
-          'A machine hands part of its own access to a new one, such as a CI job. It cannot grant what it does not hold, and a machine made this way can make no others.',
+          'A service account hands part of its own access to a new one, such as a CI job. It cannot grant what it does not hold, and a service account made this way can make no others.',
       }),
     ),
     HttpApiEndpoint.delete('revoke', '/credentials/:id', {
@@ -134,12 +136,12 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Revoke a machine',
+        summary: 'Revoke a service account',
         description:
-          'Deletes its bearer and its wraps, and those of every machine it made. What it already read stays read: replace those values at their vendors.',
+          'Deletes its bearer and its wraps, and those of every service account it made. What it already read stays read: replace those values at their vendors.',
       }),
     ),
   )
   .middleware(Authenticated)
   .middleware(Credentials)
-  .annotateMerge(OpenApi.annotations({ title: 'Machines' })) {}
+  .annotateMerge(OpenApi.annotations({ title: 'Service accounts' })) {}

@@ -40,7 +40,7 @@ export class LimitReachedError extends Schema.TaggedError<LimitReachedError>()(
 /** What one account may hold while baymutt is in beta. */
 export const LIMITS = {
   projects: 100,
-  machines: 200,
+  serviceAccounts: 200,
   secretsPerProject: 500,
   versionsPerSecret: 1000,
 } as const;

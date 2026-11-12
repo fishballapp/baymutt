@@ -1,6 +1,6 @@
 {
   "name": "@baymutt/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "homepage": "https://baymutt.fsh.ba",
   "repository": {
@@ -9,7 +9,7 @@
     "directory": "apps/cli"
   },
   "type": "module",
-  "description": "The baymutt CLI: everything an agent does with the secret store. It seals and opens values on this machine, prints JSON, and has no command that prints a value.",
+  "description": "The baymutt CLI: everything an agent does with the secret store. It seals and opens values on this computer, prints JSON, and has no command that prints a value.",
   "bin": {
     "baymutt": "./dist/bin.js"
   },

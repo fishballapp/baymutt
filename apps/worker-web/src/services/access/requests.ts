@@ -1,4 +1,4 @@
-// A machine asking the owner for access it does not hold.
+// A service account asking the owner for access it does not hold.
 import {
   type AccessRequest,
   type ActorIdentity,
@@ -47,7 +47,7 @@ export const accessRequests = ({
       id: Schema.NullOr(Schema.String),
     }),
     Result: RequestRowSchema,
-    // The owner's list is what awaits an answer; a machine's is its own, answered or not.
+    // The owner's list is what awaits an answer; a service account's is its own, answered or not.
     execute: ({ accountId, credentialId, id }) =>
       sql`SELECT r.id, r.project_id, p.name AS project_name, r.credential_id,
             c.name AS credential_name, c.public_key AS credential_public_key, c.endorsement,
@@ -65,7 +65,7 @@ export const accessRequests = ({
   const list = (actor: ActorIdentity, id: string | null = null) =>
     rows({
       accountId: actor.accountId,
-      credentialId: actor._tag === 'Machine' ? actor.credentialId : null,
+      credentialId: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
       id,
     }).pipe(
       Effect.orDie,
@@ -120,15 +120,16 @@ export const accessRequests = ({
         readonly reason: string;
       };
     }) {
-      if (actor._tag !== 'Machine') {
+      if (actor._tag !== 'ServiceAccount') {
         return yield* new OwnerRequiredError({
-          message: 'The owner grants access directly; a request is how a machine asks for it.',
+          message:
+            'The owner grants access directly; a request is how a service account asks for it.',
         });
       }
       if (!request.wantsRead && !request.wantsWrite) {
         return yield* new NotFoundError({ message: 'Ask for read, write or both.' });
       }
-      // By name, and whether or not this machine can see the project: asking is how it comes to.
+      // By name, and whether or not this service account can see the project: asking is how it comes to.
       const [project] = yield* sql`SELECT id FROM project
         WHERE account_id = ${actor.accountId} AND name = ${request.projectName}
           AND archived_at IS NULL`.pipe(Effect.orDie);

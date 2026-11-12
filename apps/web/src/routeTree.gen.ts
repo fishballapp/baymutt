@@ -15,9 +15,9 @@ import { Route as RecoverRouteImport } from './routes/recover'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AppAccountRouteImport } from './routes/_app.account'
 import { Route as AppActivityRouteImport } from './routes/_app.activity'
-import { Route as AppMachinesRouteImport } from './routes/_app.machines'
 import { Route as AppPairRouteImport } from './routes/_app.pair'
 import { Route as AppRequestsRouteImport } from './routes/_app.requests'
+import { Route as AppServiceAccountsRouteImport } from './routes/_app.service-accounts'
 import { Route as AppSigninRouteImport } from './routes/_app.signin'
 import { Route as PasteIdRouteImport } from './routes/paste.$id'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app.projects.index'
@@ -52,11 +52,6 @@ const AppActivityRoute = AppActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => AppRoute,
 } as any)
-const AppMachinesRoute = AppMachinesRouteImport.update({
-  id: '/machines',
-  path: '/machines',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppPairRoute = AppPairRouteImport.update({
   id: '/pair',
   path: '/pair',
@@ -65,6 +60,11 @@ const AppPairRoute = AppPairRouteImport.update({
 const AppRequestsRoute = AppRequestsRouteImport.update({
   id: '/requests',
   path: '/requests',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppServiceAccountsRoute = AppServiceAccountsRouteImport.update({
+  id: '/service-accounts',
+  path: '/service-accounts',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSigninRoute = AppSigninRouteImport.update({
@@ -94,9 +94,9 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/account': typeof AppAccountRoute
   '/activity': typeof AppActivityRoute
-  '/machines': typeof AppMachinesRoute
   '/pair': typeof AppPairRoute
   '/requests': typeof AppRequestsRoute
+  '/service-accounts': typeof AppServiceAccountsRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
   '/projects/$id': typeof AppProjectsIdRoute
@@ -108,9 +108,9 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/account': typeof AppAccountRoute
   '/activity': typeof AppActivityRoute
-  '/machines': typeof AppMachinesRoute
   '/pair': typeof AppPairRoute
   '/requests': typeof AppRequestsRoute
+  '/service-accounts': typeof AppServiceAccountsRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
   '/projects/$id': typeof AppProjectsIdRoute
@@ -124,9 +124,9 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_app/account': typeof AppAccountRoute
   '/_app/activity': typeof AppActivityRoute
-  '/_app/machines': typeof AppMachinesRoute
   '/_app/pair': typeof AppPairRoute
   '/_app/requests': typeof AppRequestsRoute
+  '/_app/service-accounts': typeof AppServiceAccountsRoute
   '/_app/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
   '/_app/projects/$id': typeof AppProjectsIdRoute
@@ -140,9 +140,9 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account'
     | '/activity'
-    | '/machines'
     | '/pair'
     | '/requests'
+    | '/service-accounts'
     | '/signin'
     | '/paste/$id'
     | '/projects/$id'
@@ -154,9 +154,9 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account'
     | '/activity'
-    | '/machines'
     | '/pair'
     | '/requests'
+    | '/service-accounts'
     | '/signin'
     | '/paste/$id'
     | '/projects/$id'
@@ -169,9 +169,9 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_app/account'
     | '/_app/activity'
-    | '/_app/machines'
     | '/_app/pair'
     | '/_app/requests'
+    | '/_app/service-accounts'
     | '/_app/signin'
     | '/paste/$id'
     | '/_app/projects/$id'
@@ -230,13 +230,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppActivityRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/machines': {
-      id: '/_app/machines'
-      path: '/machines'
-      fullPath: '/machines'
-      preLoaderRoute: typeof AppMachinesRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/pair': {
       id: '/_app/pair'
       path: '/pair'
@@ -249,6 +242,13 @@ declare module '@tanstack/react-router' {
       path: '/requests'
       fullPath: '/requests'
       preLoaderRoute: typeof AppRequestsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/service-accounts': {
+      id: '/_app/service-accounts'
+      path: '/service-accounts'
+      fullPath: '/service-accounts'
+      preLoaderRoute: typeof AppServiceAccountsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/signin': {
@@ -285,9 +285,9 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppAccountRoute: typeof AppAccountRoute
   AppActivityRoute: typeof AppActivityRoute
-  AppMachinesRoute: typeof AppMachinesRoute
   AppPairRoute: typeof AppPairRoute
   AppRequestsRoute: typeof AppRequestsRoute
+  AppServiceAccountsRoute: typeof AppServiceAccountsRoute
   AppSigninRoute: typeof AppSigninRoute
   AppProjectsIdRoute: typeof AppProjectsIdRoute
   AppProjectsIndexRoute: typeof AppProjectsIndexRoute
@@ -296,9 +296,9 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppAccountRoute: AppAccountRoute,
   AppActivityRoute: AppActivityRoute,
-  AppMachinesRoute: AppMachinesRoute,
   AppPairRoute: AppPairRoute,
   AppRequestsRoute: AppRequestsRoute,
+  AppServiceAccountsRoute: AppServiceAccountsRoute,
   AppSigninRoute: AppSigninRoute,
   AppProjectsIdRoute: AppProjectsIdRoute,
   AppProjectsIndexRoute: AppProjectsIndexRoute,

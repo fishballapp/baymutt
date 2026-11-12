@@ -1,4 +1,4 @@
-// Where the machine key lives: `BAYMUTT_KEY` in CI, the login keychain on a Mac, an owner-only
+// Where the service account key lives: `BAYMUTT_KEY` in CI, the login keychain on a Mac, an owner-only
 // file elsewhere (or wherever `BAYMUTT_KEY_FILE` says, for a container or a test). It is read into
 // this process and never printed.
 import * as Config from 'effect/Config';
@@ -69,7 +69,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
           write: () =>
             Effect.fail(
               usage(
-                'BAYMUTT_KEY is set, so this machine’s key comes from the environment. Unset it to pair.',
+                'BAYMUTT_KEY is set, so this service account’s key comes from the environment. Unset it to log in.',
               ),
             ),
         });
@@ -107,7 +107,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
                 exitCode === 0
                   ? Effect.void
                   : Effect.fail(
-                      usage('The login keychain refused the machine key. Is it unlocked?'),
+                      usage('The login keychain refused the service account key. Is it unlocked?'),
                     ),
             ),
         });

@@ -30,8 +30,8 @@ export const PastePage = ({ id }: { readonly id: string }) => {
         <h1 className="text-xl leading-tight">Saved</h1>
         <p className="mt-2 text-muted">
           <Code className="text-foreground">{saving.value.name}</Code> is sealed as version{' '}
-          {saving.value.currentVersion}. The machine that asked can use it now. You can close this
-          tab.
+          {saving.value.currentVersion}. The service account that asked can use it now. You can
+          close this tab.
         </p>
       </div>
     );

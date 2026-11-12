@@ -102,7 +102,7 @@ const breakAfterSlashes = (text: string) =>
     </Fragment>
   ));
 
-/** What a machine reads and a person compares: a name, an id, a code. */
+/** What a service account reads and a person compares: a name, an id, a code. */
 export const Code = ({ className, children, ...props }: ComponentProps<'code'>) => (
   <code className={cn('font-mono text-sm [overflow-wrap:anywhere]', className)} {...props}>
     {typeof children === 'string' ? breakAfterSlashes(children) : children}
@@ -137,7 +137,11 @@ export const CommandLine = ({ children }: { readonly children: string }) => {
 
 /** "3 hours ago", with the exact time on hover and for assistive tech. */
 export const Time = ({ at, className }: { readonly at: number; readonly className?: string }) => (
-  <time dateTime={new Date(at).toISOString()} title={exactTime(at)} className={className}>
+  <time
+    dateTime={Temporal.Instant.fromEpochMilliseconds(at).toString({ fractionalSecondDigits: 3 })}
+    title={exactTime(at)}
+    className={className}
+  >
     {ago(at, Date.now())}
   </time>
 );

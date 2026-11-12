@@ -14,7 +14,7 @@ import * as Schema from 'effect/Schema';
 import * as SqlSchema from 'effect/sql/SqlSchema';
 import { ActorJsonSchema } from '../actors.ts';
 
-export const MachineRowSchema = Schema.Struct({
+export const ServiceAccountRowSchema = Schema.Struct({
   id: Schema.String,
   accountId: Schema.String,
   name: Schema.String,
@@ -25,7 +25,7 @@ export const MachineRowSchema = Schema.Struct({
   createdAt: Schema.Finite,
   lastUsedAt: Schema.NullOr(Schema.Finite),
 });
-export type MachineRow = typeof MachineRowSchema.Type;
+export type ServiceAccountRow = typeof ServiceAccountRowSchema.Type;
 
 export const ProjectRowSchema = Schema.Struct({
   id: Schema.String,
@@ -38,7 +38,7 @@ export const ProjectRowSchema = Schema.Struct({
   createdBy: ActorJsonSchema,
   createdAt: Schema.Finite,
   secretCount: Schema.Finite,
-  /** The caller's grant, when the caller is a machine that has one. */
+  /** The caller's grant, when the caller is a service account that has one. */
   canWrite: Schema.NullOr(Schema.Finite),
   readWrap: Schema.NullOr(Schema.String),
   keyProof: Schema.NullOr(Schema.String),
@@ -57,7 +57,7 @@ export type ProjectAccess = {
 export const lookups = (sql: D1Client.D1Client) => {
   /**
    * Live projects of an account with the caller's grant joined on. `credentialId` null is the
-   * owner, who sees every project; a machine sees only those it holds a grant on.
+   * owner, who sees every project; a service account sees only those it holds a grant on.
    */
   const projectRows = SqlSchema.findAll({
     Request: Schema.Struct({
@@ -104,7 +104,7 @@ export const lookups = (sql: D1Client.D1Client) => {
   const projectsOf = (actor: ActorIdentity, projectId: string | null = null) =>
     projectRows({
       accountId: actor.accountId,
-      credentialId: actor._tag === 'Machine' ? actor.credentialId : null,
+      credentialId: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
       projectId,
     }).pipe(
       Effect.orDie,
@@ -119,7 +119,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         message:
           actor._tag === 'Owner'
             ? 'No project has this id.'
-            : 'No project with this id is granted to this machine. List what it holds with `baymutt projects`, or ask for one with `baymutt access request`.',
+            : 'No project with this id is granted to this service account. List what it holds with `baymutt projects`, or ask for one with `baymutt access request`.',
       });
     }
     return access;
@@ -132,14 +132,14 @@ export const lookups = (sql: D1Client.D1Client) => {
       : Effect.fail(
           new NoAccessError({
             need,
-            message: `This machine has no ${need} access to ${access.project.name}. Ask the owner: \`baymutt access request ${access.project.name} --${need} --reason "…"\`.`,
+            message: `This service account has no ${need} access to ${access.project.name}. Ask the owner: \`baymutt access request ${access.project.name} --${need} --reason "…"\`.`,
           }),
         );
   };
 
-  const machineRow = SqlSchema.findOneOption({
+  const serviceAccountRow = SqlSchema.findOneOption({
     Request: Schema.Struct({ accountId: Schema.String, id: Schema.String }),
-    Result: MachineRowSchema,
+    Result: ServiceAccountRowSchema,
     execute: ({ accountId, id }) =>
       sql`SELECT id, account_id, name, public_key, parent_id, endorsement, welcome, created_at,
             last_used_at
@@ -147,10 +147,10 @@ export const lookups = (sql: D1Client.D1Client) => {
           WHERE id = ${id} AND account_id = ${accountId} AND revoked_at IS NULL`,
   });
 
-  const machineIn = Effect.fnUntraced(function* (accountId: string, id: string) {
-    const found = yield* machineRow({ accountId, id }).pipe(Effect.orDie);
+  const serviceAccountIn = Effect.fnUntraced(function* (accountId: string, id: string) {
+    const found = yield* serviceAccountRow({ accountId, id }).pipe(Effect.orDie);
     if (Option.isNone(found)) {
-      return yield* new NotFoundError({ message: 'No machine has this id.' });
+      return yield* new NotFoundError({ message: 'No service account has this id.' });
     }
     return found.value;
   });
@@ -161,7 +161,7 @@ export const lookups = (sql: D1Client.D1Client) => {
    */
   const underLimit = Effect.fnUntraced(function* (
     accountId: string,
-    what: 'projects' | 'machines',
+    what: 'projects' | 'serviceAccounts',
   ) {
     const [row] = yield* (
       what === 'projects'
@@ -173,12 +173,12 @@ export const lookups = (sql: D1Client.D1Client) => {
     if (Number(row?.held ?? 0) >= LIMITS[what]) {
       return yield* new LimitReachedError({
         limit: LIMITS[what],
-        message: `An account holds up to ${LIMITS[what]} ${what} while baymutt is in beta. ${what === 'projects' ? 'Archive one in the dashboard' : 'Revoke one with `baymutt machines revoke`'} to make room.`,
+        message: `An account holds up to ${LIMITS[what]} ${what === 'projects' ? 'projects' : 'service accounts'} while baymutt is in beta. ${what === 'projects' ? 'Archive one in the dashboard' : 'Revoke one with `baymutt service-accounts revoke`'} to make room.`,
       });
     }
   });
 
-  return { projectsOf, projectFor, needing, machineIn, underLimit };
+  return { projectsOf, projectFor, needing, serviceAccountIn, underLimit };
 };
 
 export type Lookups = ReturnType<typeof lookups>;

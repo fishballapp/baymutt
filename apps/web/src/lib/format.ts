@@ -22,22 +22,35 @@ export const ago = (atMs: number, nowMs: number): string => {
 
 /** "Nov 11, 2026, 8:22 PM". */
 export const exactTime = (atMs: number): string =>
-  new Date(atMs).toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' });
+  Temporal.Instant.fromEpochMilliseconds(atMs).toLocaleString('en', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 
 /** "8:22 PM", for a row under a day's heading. */
 export const clockTime = (atMs: number): string =>
-  new Date(atMs).toLocaleTimeString('en', { timeStyle: 'short' });
+  Temporal.Instant.fromEpochMilliseconds(atMs).toLocaleString('en', { timeStyle: 'short' });
 
 /** The local calendar day a time falls on, as its first millisecond: a key to group by. */
-export const dayOf = (atMs: number): number => new Date(atMs).setHours(0, 0, 0, 0);
+export const dayOf = (atMs: number): number =>
+  Temporal.Instant.fromEpochMilliseconds(atMs)
+    .toZonedDateTimeISO(Temporal.Now.timeZoneId())
+    .startOfDay().epochMilliseconds;
 
 /** "Today", "Yesterday", "Monday, Nov 9", or with the year once it is not this one. */
 export const dayLabel = (atMs: number, nowMs: number): string => {
-  const days = Math.round((dayOf(nowMs) - dayOf(atMs)) / (24 * 3600 * 1000));
+  const timeZone = Temporal.Now.timeZoneId();
+  const day = Temporal.Instant.fromEpochMilliseconds(atMs)
+    .toZonedDateTimeISO(timeZone)
+    .toPlainDate();
+  const today = Temporal.Instant.fromEpochMilliseconds(nowMs)
+    .toZonedDateTimeISO(timeZone)
+    .toPlainDate();
+  const days = day.until(today).days;
   if (days === 0) return 'Today';
   if (days === 1) return 'Yesterday';
-  const isThisYear = new Date(atMs).getFullYear() === new Date(nowMs).getFullYear();
-  return new Date(atMs).toLocaleDateString('en', {
+  const isThisYear = day.year === today.year;
+  return day.toLocaleString('en', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',

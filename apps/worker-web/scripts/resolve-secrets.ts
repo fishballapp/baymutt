@@ -14,7 +14,7 @@ if (!outFile) {
 const missing = SECRET_KEYS.filter(key => !process.env[key]);
 if (missing.length > 0) {
   console.error(`Could not load from baymutt: ${missing.join(', ')}`);
-  console.error('Check the machine key and the project named in .env.schema.');
+  console.error('Check the service account key and the project named in .env.schema.');
   process.exit(1);
 }
 

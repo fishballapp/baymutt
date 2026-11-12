@@ -13,10 +13,10 @@ import * as Schedule from 'effect/Schedule';
 import * as Stdio from 'effect/Stdio';
 import * as Stream from 'effect/Stream';
 import { crypto_, report, usage } from '../errors.ts';
-import { Machine } from '../machine.ts';
 import { print, say } from '../output.ts';
 import { resolveProject, trustedKey } from '../projects.ts';
 import { describeWrite, writeValue } from '../secrets.ts';
+import { ServiceAccount } from '../service-account.ts';
 import { Settings } from '../settings.ts';
 import { projectArgument } from './projects.ts';
 
@@ -31,13 +31,13 @@ const listCommand = Command.make(
   'secrets',
   { project: projectArgument },
   Effect.fn('secrets.list')(function* ({ project }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const { id, name } = yield* resolveProject(project);
     const { secrets } = yield* api.secrets.list({ params: { projectId: id } });
     yield* print({ project: name, secrets });
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription('A project’s secrets: names, versions and sizes. Never a value'),
 );
 
@@ -74,7 +74,7 @@ const setCommand = Command.make(
     );
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
     'Set a secret from stdin, as a new version. Needs a write grant. Prints the name, version and length',
   ),
@@ -109,7 +109,7 @@ const generateCommand = Command.make(
     );
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
     'Make a random value here and set it, without showing it. On an existing name this replaces the value',
   ),
@@ -119,12 +119,12 @@ const deleteCommand = Command.make(
   'delete',
   { project: projectArgument, name: nameArgument },
   Effect.fn('secrets.delete')(function* ({ project, name }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const { id } = yield* resolveProject(project);
     yield* print(yield* api.secrets.remove({ params: { projectId: id, name } }));
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
     'Delete a secret. A load stops answering it; its versions are kept, and `rollback` brings it back',
   ),
@@ -141,14 +141,14 @@ const rollbackCommand = Command.make(
     ),
   },
   Effect.fn('secrets.rollback')(function* ({ project, name, to }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const { id } = yield* resolveProject(project);
     yield* print(
       yield* api.secrets.rollback({ params: { projectId: id, name }, payload: { version: to } }),
     );
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription('Make an earlier version of a secret the current one'),
 );
 
@@ -156,12 +156,12 @@ const historyCommand = Command.make(
   'history',
   { project: projectArgument, name: nameArgument },
   Effect.fn('secrets.history')(function* ({ project, name }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const { id } = yield* resolveProject(project);
     yield* print(yield* api.secrets.versions({ params: { projectId: id, name } }));
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription('A secret’s versions: who wrote each, and when'),
 );
 
@@ -184,7 +184,7 @@ const checkCommand = Command.make(
   },
   Effect.fn('secrets.check')(function* ({ project, schema, ignore }) {
     const fs = yield* FileSystem.FileSystem;
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const { id, name } = yield* resolveProject(project);
     const declared = new Set(
       schemaNames(
@@ -219,7 +219,7 @@ const checkCommand = Command.make(
     }
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
     'Compare a .env.schema with what a project holds. Exits 9 when a declared name is missing',
   ),
@@ -240,7 +240,7 @@ const requestCommand = Command.make(
     ),
   },
   Effect.fn('secrets.request')(function* ({ project, name, reason, where }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const { origin } = yield* Settings;
     const resolved = yield* resolveProject(project);
     const id = crypto.randomUUID();
@@ -261,7 +261,7 @@ const requestCommand = Command.make(
     yield* print({ ...request, url });
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
     'Ask the owner to paste a value only they can fetch. Prints a single-use link for one project and name',
   ),
@@ -281,8 +281,8 @@ const waitCommand = Command.make(
     ),
   },
   Effect.fn('secrets.wait')(function* ({ id, timeout }) {
-    const { api } = yield* Machine;
-    // A machine's list holds its own requests while they wait: one that has left it was answered
+    const { api } = yield* ServiceAccount;
+    // A service account's list holds its own requests while they wait: one that has left it was answered
     // or dismissed.
     const isWaiting = Effect.map(api.pasteRequests.list(), ({ requests }) =>
       requests.some(request => request.id === id),
@@ -301,7 +301,7 @@ const waitCommand = Command.make(
     yield* print({ id, status: 'answered' });
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
     'Wait until the owner has answered a paste request (pasted, or dismissed it). Exits 9 on timeout. Check the value arrived with `baymutt secrets <project>`',
   ),
@@ -315,14 +315,14 @@ const cancelCommand = Command.make(
     ),
   },
   Effect.fn('secrets.cancel')(function* ({ id }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     yield* api.pasteRequests.cancel({ params: { id } });
     yield* print({ id, status: 'cancelled' });
   }, report),
 ).pipe(
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Withdraw a paste request this machine made: its link stops working and the owner no longer sees it',
+    'Withdraw a paste request this service account made: its link stops working and the owner no longer sees it',
   ),
 );
 

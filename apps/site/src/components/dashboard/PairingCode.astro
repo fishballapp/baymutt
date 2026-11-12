@@ -1,12 +1,12 @@
 ---
-type Props = { machine: string; account: string; code: string };
-const { machine, account, code } = Astro.props;
+type Props = { serviceAccount: string; account: string; code: string };
+const { serviceAccount, account, code } = Astro.props;
 ---
 
 <div class="pair">
-  <p class="title">Pair {machine}?</p>
+  <p class="title">Approve {serviceAccount}?</p>
   <p class="lede">
-    A machine is asking to join <strong>{account}</strong>. It will be able to ask you for access; it
+    A service account is asking to join <strong>{account}</strong>. It will be able to ask you for access; it
     starts with none.
   </p>
   <div class="code-panel">
@@ -14,8 +14,8 @@ const { machine, account, code } = Astro.props;
     <code class="code">{code}</code>
   </div>
   <div class="actions" aria-hidden="true">
-    <span class="btn primary">The codes match: pair it</span>
-    <span class="btn">Do not pair</span>
+    <span class="btn primary">The codes match: approve it</span>
+    <span class="btn">Do not approve</span>
   </div>
 </div>
 

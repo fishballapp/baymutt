@@ -28,7 +28,7 @@ const softwareApplication = {
   applicationCategory: 'DeveloperApplication',
   url: 'https://baymutt.fsh.ba/',
   description:
-    'A zero-knowledge secret store for people who run coding agents. Agents load and write secrets with no approval prompt; only the owner lets a machine read more.',
+    'A zero-knowledge secret store for people who run coding agents. Agents load and write secrets with no approval prompt; only the owner lets a service account read more.',
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', description: 'Free in beta' },
   publisher: { '@type': 'Organization', name: 'Fishball Ltd', url: 'https://fishball.ltd' },
 };
@@ -36,7 +36,7 @@ const softwareApplication = {
 
 <Layout
   title="baymutt: secrets your coding agents use without asking"
-  description="A zero-knowledge secret store for coding agents. Agents load and write secrets with no approval prompt; only you let a machine read more. Free while in beta."
+  description="A zero-knowledge secret store for coding agents. Agents load and write secrets with no approval prompt; only you let a service account read more. Free while in beta."
   structuredData={softwareApplication}
 >
   <div class="page">
@@ -77,7 +77,7 @@ const softwareApplication = {
         </p>
         <p class="turn">
           baymutt takes the prompt out of using a secret and keeps you for the one decision that
-          matters: which machine can read which project.
+          matters: which service account can read which project.
         </p>
       </div>
     </section>
@@ -85,10 +85,10 @@ const softwareApplication = {
     <section class="bay" aria-labelledby="how-title" id="how">
       <div class="page">
         <header class="bay-head">
-          <h2 id="how-title">On the machine, nobody waits.</h2>
+          <h2 id="how-title">In the terminal, nobody waits.</h2>
           <p>
             Agents work through the <code>baymutt</code> CLI and a varlock plugin. Every command
-            prints JSON on stdout, and none prints a value. You are needed to pair a machine, to
+            prints JSON on stdout, and none prints a value. You are needed to approve a service account, to
             let one read more, and to paste a value only you can fetch.
           </p>
         </header>
@@ -96,17 +96,17 @@ const softwareApplication = {
         <ol class="steps">
           <li class="step">
             <div class="step-text">
-              <h3>Pair a machine, once.</h3>
+              <h3>Log in, once.</h3>
               <p>
-                Install the CLI from npm. The machine makes its own key and prints a link. You open
-                it, check that the code matches the terminal’s, and pair it. It starts with no
-                access.
+                Install the CLI from npm and run <code>baymutt login</code>. It makes the service account’s
+                own key and prints a link. You open it, check that the code matches the terminal’s,
+                and approve it. It starts with no access.
               </p>
             </div>
             <div class="step-visuals">
-              <Terminal machine={MAC_MINI.name} lines={PAIR} />
-              <Screen path="/pair" label="The pairing page, as the dashboard shows it">
-                <PairingCode machine={MAC_MINI.name} account={ACCOUNT.name} code={MAC_MINI.code} />
+              <Terminal serviceAccount={MAC_MINI.name} lines={PAIR} />
+              <Screen path="/pair" label="The approval page, as the dashboard shows it">
+                <PairingCode serviceAccount={MAC_MINI.name} account={ACCOUNT.name} code={MAC_MINI.code} />
               </Screen>
             </div>
           </li>
@@ -116,8 +116,8 @@ const softwareApplication = {
               <h3>Load with no prompt.</h3>
               <p>
                 Name the project in your <code>.env.schema</code>. varlock loads its values through
-                the plugin and opens them on the machine, with no prompt and no cache. The
-                machine’s key stays in the login keychain, or in <code>BAYMUTT_KEY</code> on CI.
+                the plugin and opens them on the computer that runs it, with no prompt and no cache. The
+                service account key stays in the login keychain, or in <code>BAYMUTT_KEY</code> on CI.
               </p>
             </div>
             <div class="step-visuals single">
@@ -140,7 +140,7 @@ const softwareApplication = {
               </p>
             </div>
             <div class="step-visuals">
-              <Terminal machine={MACBOOK.name} lines={WRITE} />
+              <Terminal serviceAccount={MACBOOK.name} lines={WRITE} />
               <Screen
                 path={`/projects/${PROJECT.id}`}
                 label="A project’s secrets, as the dashboard shows them"
@@ -173,11 +173,11 @@ const softwareApplication = {
               </p>
             </div>
             <div class="step-visuals">
-              <Terminal machine={MACBOOK.name} lines={REQUEST} />
+              <Terminal serviceAccount={MACBOOK.name} lines={REQUEST} />
               <Screen path="/paste" label="The paste page, as the dashboard shows it">
                 <PastePage
                   name="RESEND_API_KEY"
-                  machine={MACBOOK.name}
+                  serviceAccount={MACBOOK.name}
                   project={PROJECT.name}
                   reason="to send sign-in emails"
                   where="Resend dashboard, API Keys"
@@ -188,7 +188,7 @@ const softwareApplication = {
         </ol>
 
         <p class="bay-foot">
-          To read a project it can’t, a machine runs <code>{ACCESS_REQUEST_COMMAND}</code>, and
+          To read a project it can’t, a service account runs <code>{ACCESS_REQUEST_COMMAND}</code>, and
           the request waits for you, <a href="#board">as at the top of this page</a>.
         </p>
       </div>
@@ -198,9 +198,9 @@ const softwareApplication = {
       <div class="limits-head">
         <h2 id="limits-title">baymutt cannot read what it stores.</h2>
         <p>
-          Values are sealed on the machine or in your browser, to a project key the store never
+          Values are sealed on the computer running the CLI or in your browser, to a project key the store never
           holds. Writing needs only the project’s public key. Reading needs the project key wrapped
-          to that one machine, which only a holder of the key can make. So a machine cannot widen
+          to that one service account, which only a holder of the key can make. So a service account cannot widen
           its own access, and neither can the store.
         </p>
       </div>
@@ -211,10 +211,10 @@ const softwareApplication = {
           <ul>
             <li>Read a value, in any version.</li>
             <li>
-              Read a project’s, the account’s or a machine’s private key, your data key or your
+              Read a project’s, the account’s or a service account’s private key, your data key or your
               recovery key.
             </li>
-            <li>Let a machine read a project.</li>
+            <li>Let a service account read a project.</li>
             <li>Move a value to another name, version or project.</li>
           </ul>
         </div>
@@ -243,7 +243,7 @@ const softwareApplication = {
           signs you in and never opens it.
         </li>
         <li>
-          Revoking a machine stops its next load. What it already read stays read: replace those
+          Revoking a service account stops its next load. What it already read stays read: replace those
           values at their vendors.
         </li>
       </ul>
@@ -253,10 +253,10 @@ const softwareApplication = {
       <div class="owner-text">
         <h2 id="owner-title">You open it when an agent asks.</h2>
         <ul class="duties">
-          <li>Pair a machine by comparing a code.</li>
-          <li>Approve or deny a request in one line, with the machine’s reason beside it.</li>
+          <li>Approve a service account by comparing a code.</li>
+          <li>Approve or deny a request in one line, with the service account’s reason beside it.</li>
           <li>Paste a value an agent asked for.</li>
-          <li>Grant, narrow and remove access. Revoke a machine, and every machine it made.</li>
+          <li>Grant, narrow and remove access. Revoke a service account, and every service account it made.</li>
           <li>Read the log: who loaded, wrote or granted what.</li>
           <li class="no-reveal">
             There is no reveal. A value is a name, a size and a version, so a stolen session cannot
@@ -272,7 +272,7 @@ const softwareApplication = {
               what: ['asked for access to ', { code: PROJECT.name }],
               when: 'just now',
             },
-            { who: 'Owner', what: [`paired the machine ${MAC_MINI.name}`], when: '3 minutes ago' },
+            { who: 'Owner', what: [`approved the service account ${MAC_MINI.name}`], when: '3 minutes ago' },
             {
               who: 'Paste link',
               what: [
@@ -289,7 +289,7 @@ const softwareApplication = {
               when: '2 days ago',
             },
             { who: 'CI deploy', what: ['loaded ', { code: PROJECT.name }], when: '2 days ago' },
-            { who: MACBOOK.name, what: ['made the machine CI deploy'], when: '3 days ago' },
+            { who: MACBOOK.name, what: ['made the service account CI deploy'], when: '3 days ago' },
           ]}
         />
       </Screen>
@@ -299,7 +299,7 @@ const softwareApplication = {
       <h2 id="close-title">Free while baymutt is in beta.</h2>
       <p>
         Sign up with an email link, then a passkey or a password, and keep the recovery key it
-        shows you once. In beta an account holds up to 100 projects, 200 machines and 500 secrets a
+        shows you once. In beta an account holds up to 100 projects, 200 service accounts and 500 secrets a
         project.
       </p>
       <div class="actions">
@@ -478,7 +478,7 @@ const softwareApplication = {
     }
   }
 
-  /* The bay: where the machines work. Water in both schemes. */
+  /* The bay: where the service accounts work. Water in both schemes. */
   .bay {
     padding-block: clamp(4rem, 9vw, 7rem);
     border-block: 1px solid var(--bay-line);

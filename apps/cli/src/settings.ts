@@ -1,5 +1,5 @@
-// Where the store is, and what this machine remembers about it: the account key it was paired
-// with. Nothing here is secret; the machine key is `KeyStore`'s.
+// Where the store is, and what this computer remembers about it: the account key it logged in
+// to. Nothing here is secret; the service account key is `KeyStore`'s.
 import { homedir } from 'node:os';
 import { PublicKeySchema } from '@baymutt/api';
 import * as Config from 'effect/Config';
@@ -14,7 +14,7 @@ import { report, usage } from './errors.ts';
 const DEFAULT_URL = new URL('https://baymutt.fsh.ba');
 
 const StateSchema = Schema.Struct({
-  /** The account this machine was paired with, learned from the browser that paired it. */
+  /** The account this service account belongs to, learned from the browser that approved its login. */
   account: Schema.optionalKey(
     Schema.Struct({ id: Schema.String, name: Schema.String, publicKey: PublicKeySchema }),
   ),
@@ -44,6 +44,7 @@ const resolve = Effect.gen(function* () {
   return {
     origin: url.origin,
     stateFile: path.join(directory, 'state.json'),
+    // The file's name predates "service account"; renaming it would strand keys already kept there.
     keyFile: path.join(directory, 'machine-key'),
     keychainService: `baymutt ${url.origin}`,
   };

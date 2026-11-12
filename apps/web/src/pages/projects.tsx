@@ -42,7 +42,7 @@ const NewProject = () => {
         label="New project"
         isCode
         placeholder="app/production"
-        hint="Lower-case segments joined by /. Dev and production are separate projects, so a machine granted one cannot reach the other."
+        hint="Lower-case segments joined by /. Dev and production are separate projects, so a service account granted one cannot reach the other."
         error={
           name !== '' && !isValid
             ? 'Use lower-case letters, digits, dots and dashes, in segments joined by /.'
@@ -67,7 +67,7 @@ export const ProjectsPage = () => {
     <>
       <PageHeader
         title="Projects"
-        lede="A project is the unit of access: a machine is granted read, write or both on one."
+        lede="A project is the unit of access: a service account is granted read, write or both on one."
       />
       <NewProject />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
@@ -75,7 +75,7 @@ export const ProjectsPage = () => {
       {projects?.length === 0 && (
         <Empty title="No projects yet">
           <p>
-            Create one above, or let an agent create it from a paired machine. A project an agent
+            Create one above, or let an agent create it from a service account. A project an agent
             creates shows up here, and you can read it.
           </p>
           <CommandLine>baymutt projects create app/production</CommandLine>

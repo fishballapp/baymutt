@@ -1,4 +1,4 @@
-// The two things a machine asks the owner for: access it does not hold, and a value only the owner
+// The two things a service account asks the owner for: access it does not hold, and a value only the owner
 // can fetch (a paste link).
 
 import { coded } from '@internal/effect-api';
@@ -46,7 +46,7 @@ export const AccessRequestSchema = Schema.Struct({
   credentialId: Schema.String,
   credentialName: LabelSchema,
   credentialPublicKey: PublicKeySchema,
-  /** The owner's vault vouching for that key; null for a machine the owner did not pair, which cannot be given a read. */
+  /** The owner's vault vouching for that key; null for a service account the owner did not pair, which cannot be given a read. */
   endorsement: Schema.NullOr(SealedSchema),
   wantsRead: Schema.Boolean,
   wantsWrite: Schema.Boolean,
@@ -63,7 +63,8 @@ export class AccessRequestsGroup extends HttpApiGroup.make('accessRequests')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'List access requests',
-        description: 'The owner sees every pending one; a machine sees its own, resolved or not.',
+        description:
+          'The owner sees every pending one; a service account sees its own, resolved or not.',
       }),
     ),
     HttpApiEndpoint.post('create', '/access-requests', {
@@ -79,7 +80,8 @@ export class AccessRequestsGroup extends HttpApiGroup.make('accessRequests')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Ask the owner for access to a project',
-        description: 'A machine cannot give itself access. The owner approves in the dashboard.',
+        description:
+          'A service account cannot give itself access. The owner approves in the dashboard.',
       }),
     ),
     HttpApiEndpoint.post('approve', '/access-requests/:id/approve', {
@@ -144,7 +146,7 @@ export class PasteRequestsGroup extends HttpApiGroup.make('pasteRequests')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'List paste requests',
-        description: 'The owner sees every pending one; a machine sees those it made.',
+        description: 'The owner sees every pending one; a service account sees those it made.',
       }),
     ),
     HttpApiEndpoint.post('create', '/paste-requests', {
@@ -154,7 +156,7 @@ export class PasteRequestsGroup extends HttpApiGroup.make('pasteRequests')
         name: SecretNameSchema,
         reason: ReasonSchema,
         hint: ReasonSchema,
-        /** SHA-256 of the link's token, which the machine made and the store never sees. */
+        /** SHA-256 of the link's token, which the service account made and the store never sees. */
         tokenHash: HashSchema,
       }),
       success: PasteRequestSchema.pipe(HttpApiSchema.status(201)),

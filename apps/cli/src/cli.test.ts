@@ -8,7 +8,7 @@ import {
   derivePasskeyEncKey,
   generateProjectKey,
   generateRecoveryKey,
-  grantToMachine,
+  grantToServiceAccount,
   type OwnerKeys,
   openAccountKey,
   openOwnedProject,
@@ -36,11 +36,11 @@ import * as TestConsole from 'effect/testing/TestConsole';
 import { CliLayer, cli } from './app.ts';
 import { Reported } from './errors.ts';
 import { KeyStore, Platform } from './key-store.ts';
-import { Machine } from './machine.ts';
 import { loadValues } from './projects.ts';
+import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 
-/** A machine: its own config home, so its own key and state. */
+/** A service account: its own config home, so its own key and state. */
 type Seat = { readonly configHome: string; readonly env?: Record<string, string> };
 
 const withSeat = <A, E, R>(world: TestWorld, seat: Seat, effect: Effect.Effect<A, E, R>) =>
@@ -50,7 +50,7 @@ const withSeat = <A, E, R>(world: TestWorld, seat: Seat, effect: Effect.Effect<A
         Layer.provide(Layer.succeed(FetchHttpClient.Fetch, world.fetch as typeof fetch)),
       ),
     ),
-    // The file store, on any machine the tests run on: never the developer's keychain.
+    // The file store, on any service account the tests run on: never the developer's keychain.
     Effect.provideService(Platform, 'linux'),
     Effect.provideService(
       ConfigProvider.ConfigProvider,
@@ -102,14 +102,17 @@ const run = Effect.fnUntraced(function* (
   );
 });
 
-/** What this machine loads, through the same flow the varlock plugin uses. */
+/** What this service account loads, through the same flow the varlock plugin uses. */
 const load = (world: TestWorld, seat: Seat, project: string) =>
   withSeat(
     world,
     seat,
     Effect.map(loadValues(project), ({ values }) => values).pipe(
       Effect.provide(
-        Machine.layer.pipe(Layer.provideMerge(KeyStore.layer), Layer.provideMerge(Settings.layer)),
+        ServiceAccount.layer.pipe(
+          Layer.provideMerge(KeyStore.layer),
+          Layer.provideMerge(Settings.layer),
+        ),
       ),
     ),
   );
@@ -178,19 +181,19 @@ const makeOwner = async (world: TestWorld) => {
   return {
     accountId,
     api,
-    /** Approves the link `baymutt pair` printed, as the pairing page does. */
+    /** Approves the link `baymutt login` printed, as the pairing page does. */
     approve: async (url: string) => {
       const request: PairingRequest = Schema.decodeUnknownSync(
         Schema.fromJsonString(PairingRequestSchema),
       )(decodeURIComponent(new URL(url).hash.slice(1)));
-      const { pairingSecret, ...machine } = request;
+      const { pairingSecret, ...serviceAccount } = request;
       await api('POST', '/credentials/pair', {
-        ...machine,
-        ...(await approvePairing(keys, { ...machine, pairingSecret })),
+        ...serviceAccount,
+        ...(await approvePairing(keys, { ...serviceAccount, pairingSecret })),
       });
-      return machine.id;
+      return serviceAccount.id;
     },
-    /** Approves every pending access request, wrapping the project key to the machine that asked. */
+    /** Approves every pending access request, wrapping the project key to the service account that asked. */
     approveAccess: async () => {
       const { requests } = await api<{
         requests: {
@@ -208,7 +211,7 @@ const makeOwner = async (world: TestWorld) => {
         await api('POST', `/access-requests/${request.id}/approve`, {
           canWrite: request.wantsWrite,
           keyVersion: project.keyVersion,
-          ...(await grantToMachine(
+          ...(await grantToServiceAccount(
             keys,
             project.owned,
             {
@@ -225,15 +228,15 @@ const makeOwner = async (world: TestWorld) => {
   };
 };
 
-/** A world with an owner and one paired machine. */
+/** A world with an owner and one paired service account. */
 const paired = Effect.gen(function* () {
   const world = testWorld();
   const owner = yield* Effect.promise(() => makeOwner(world));
   const laptop = yield* seat;
-  const pending = yield* run(world, laptop, ['pair', '--name', 'laptop', '--wait', '0']);
-  const machineId = yield* Effect.promise(() => owner.approve(pending.json.url));
-  const done = yield* run(world, laptop, ['pair', '--wait', '0']);
-  return { world, owner, laptop, machineId, pending, done };
+  const pending = yield* run(world, laptop, ['login', '--name', 'laptop', '--wait', '0']);
+  const serviceAccountId = yield* Effect.promise(() => owner.approve(pending.json.url));
+  const done = yield* run(world, laptop, ['login', '--wait', '0']);
+  return { world, owner, laptop, serviceAccountId, pending, done };
 });
 
 const PRIVATE_KEY =
@@ -245,22 +248,26 @@ layer(NodeServices.layer)(it => {
       'prints a link and a code, waits for the owner, then pins the account the browser named',
       () =>
         Effect.gen(function* () {
-          const { owner, machineId, pending, done, world, laptop } = yield* paired;
+          const { owner, serviceAccountId, pending, done, world, laptop } = yield* paired;
 
           expect(pending).toMatchObject({
             exitCode: 0,
             json: {
               status: 'pending',
-              machineId,
+              serviceAccountId,
               code: expect.stringMatching(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/),
             },
           });
           expect(pending.stderr).toContain(pending.json.code);
           expect(done).toMatchObject({
             exitCode: 0,
-            json: { status: 'paired', machineId, account: { id: owner.accountId, name: 'Jason' } },
+            json: {
+              status: 'loggedIn',
+              serviceAccountId,
+              account: { id: owner.accountId, name: 'Jason' },
+            },
           });
-          // A new machine holds nothing.
+          // A new service account holds nothing.
           expect((yield* run(world, laptop, ['projects', 'list'])).json).toEqual({ projects: [] });
         }),
     );
@@ -270,14 +277,14 @@ layer(NodeServices.layer)(it => {
         const world = testWorld();
         const owner = yield* Effect.promise(() => makeOwner(world));
         const laptop = yield* seat;
-        const pending = yield* run(world, laptop, ['pair', '--wait', '0']);
+        const pending = yield* run(world, laptop, ['login', '--wait', '0']);
         yield* Effect.promise(() => owner.approve(pending.json.url));
         // The store answers with a welcome of its own making.
         world.sqlite.exec(
           "UPDATE credential SET welcome = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'",
         );
 
-        const done = yield* run(world, laptop, ['pair', '--wait', '0']);
+        const done = yield* run(world, laptop, ['login', '--wait', '0']);
 
         expect(done.exitCode).toBe(8);
         expect(JSON.parse(done.stderr)).toMatchObject({ error: { code: 'IntegrityError' } });
@@ -285,7 +292,7 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('says a machine with no key is not paired, with exit code 3', () =>
+    it.effect('says a service account with no key is not paired, with exit code 3', () =>
       Effect.gen(function* () {
         const result = yield* run(testWorld(), yield* seat, ['whoami']);
 
@@ -299,7 +306,7 @@ layer(NodeServices.layer)(it => {
   });
 
   describe('values', () => {
-    it.effect('are sealed here, stored as ciphertext, and opened by this machine', () =>
+    it.effect('are sealed here, stored as ciphertext, and opened by this service account', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
         yield* run(world, laptop, ['projects', 'create', 'app/production']);
@@ -413,16 +420,16 @@ layer(NodeServices.layer)(it => {
 
   describe('access', () => {
     it.effect(
-      'is asked for, and a read works once the owner wraps the project key to this machine',
+      'is asked for, and a read works once the owner wraps the project key to this service account',
       () =>
         Effect.gen(function* () {
           const { world, owner, laptop } = yield* paired;
           yield* run(world, laptop, ['projects', 'create', 'app/production']);
           yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'the value');
           const agent = yield* seat;
-          const pending = yield* run(world, agent, ['pair', '--name', 'agent', '--wait', '0']);
+          const pending = yield* run(world, agent, ['login', '--name', 'agent', '--wait', '0']);
           yield* Effect.promise(() => owner.approve(pending.json.url));
-          yield* run(world, agent, ['pair', '--wait', '0']);
+          yield* run(world, agent, ['login', '--wait', '0']);
 
           expect((yield* run(world, agent, ['secrets', 'app/production'])).exitCode).toBe(5);
           const asked = yield* run(world, agent, [
@@ -449,14 +456,14 @@ layer(NodeServices.layer)(it => {
         }),
     );
 
-    it.effect('to write alone seals values this machine can never load', () =>
+    it.effect('to write alone seals values this service account can never load', () =>
       Effect.gen(function* () {
         const { world, owner, laptop } = yield* paired;
         yield* run(world, laptop, ['projects', 'create', 'app/production']);
         const writer = yield* seat;
-        const pending = yield* run(world, writer, ['pair', '--name', 'writer', '--wait', '0']);
+        const pending = yield* run(world, writer, ['login', '--name', 'writer', '--wait', '0']);
         yield* Effect.promise(() => owner.approve(pending.json.url));
-        yield* run(world, writer, ['pair', '--wait', '0']);
+        yield* run(world, writer, ['login', '--wait', '0']);
         yield* run(world, writer, [
           'access',
           'request',
@@ -500,20 +507,20 @@ layer(NodeServices.layer)(it => {
 
     it.effect('is not fooled by a store that forges the whole project: key, wrap and all', () =>
       Effect.gen(function* () {
-        const { world, owner, laptop, machineId } = yield* paired;
+        const { world, owner, laptop, serviceAccountId } = yield* paired;
         yield* run(world, laptop, ['projects', 'create', 'app/production']);
         const project = yield* Effect.promise(() => owner.projectByName('app/production'));
-        const machinePublicKey = String(
+        const serviceAccountPublicKey = String(
           world.sqlite.prepare('SELECT public_key FROM credential').get()?.public_key,
         );
-        // The store makes a key pair of its own and seals its private half to the machine, which
+        // The store makes a key pair of its own and seals its private half to the service account, which
         // anyone can do. Only the proof it cannot make.
         const forged = yield* Effect.promise(async () => {
           const pair = await generateProjectKey();
           const wrap = await wrapProjectKey({
             projectPrivateKey: pair.privateKey,
-            readerPublicKey: machinePublicKey,
-            readerId: machineId,
+            readerPublicKey: serviceAccountPublicKey,
+            readerId: serviceAccountId,
             binding: { accountId: owner.accountId, projectId: project.id, keyVersion: 1 },
           });
           return { publicKey: pair.publicKey, wrap };
@@ -550,14 +557,14 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('gives a CI machine, which keeps no state, the same refusal', () =>
+    it.effect('gives a CI service account, which keeps no state, the same refusal', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
         yield* run(world, laptop, ['projects', 'create', 'app/production']);
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
         yield* run(world, laptop, [
-          'machines',
+          'service-accounts',
           'create',
           '--name',
           'ci',
@@ -610,7 +617,7 @@ layer(NodeServices.layer)(it => {
     );
   });
 
-  describe('a narrower machine', () => {
+  describe('a narrower service account', () => {
     it.effect('gets its key on a command’s stdin, loads what it was handed, and nothing else', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -621,7 +628,7 @@ layer(NodeServices.layer)(it => {
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
 
         const created = yield* run(world, laptop, [
-          'machines',
+          'service-accounts',
           'create',
           '--name',
           'ci',
@@ -662,7 +669,7 @@ layer(NodeServices.layer)(it => {
         yield* run(world, laptop, ['projects', 'create', 'app/production']);
 
         const created = yield* run(world, laptop, [
-          'machines',
+          'service-accounts',
           'create',
           '--name',
           'ci',
@@ -676,7 +683,9 @@ layer(NodeServices.layer)(it => {
 
         expect(created.exitCode).toBe(2);
         expect(JSON.parse(created.stderr).error.message).toContain('revoked');
-        expect((yield* run(world, laptop, ['machines', 'list'])).json.credentials).toHaveLength(1);
+        expect(
+          (yield* run(world, laptop, ['service-accounts', 'list'])).json.credentials,
+        ).toHaveLength(1);
       }),
     );
   });

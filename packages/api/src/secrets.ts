@@ -1,5 +1,5 @@
 // Secrets: named values in a project. Every write adds a version and nothing is overwritten, which
-// is what makes it safe for a machine to write without asking.
+// is what makes it safe for a service account to write without asking.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';

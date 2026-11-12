@@ -41,7 +41,7 @@ const AccessRow = ({
   const [approving, approve] = useAtom(approveAccessAtom(request.id));
   const [denying, deny] = useAtom(denyAccessAtom(request.id));
   const wants = grantWords({ canRead: request.wantsRead, canWrite: request.wantsWrite });
-  // A grant is sealed to the machine's key, and the vault only vouches for the key of a machine
+  // A grant is sealed to the service account's key, and the vault only vouches for the key of a service account
   // the owner paired.
   const cannotRead = request.endorsement === null;
   const isBusy = approving.waiting || denying.waiting;
@@ -73,14 +73,14 @@ const AccessRow = ({
       </div>
       {cannotRead && (
         <Notice tone="plain" className="mt-3">
-          This machine was made by another machine, so nothing here vouches for its key. The machine
-          that made it can hand it access; you can deny this.
+          This service account was made by another service account, so nothing here vouches for its
+          key. The service account that made it can hand it access; you can deny this.
         </Notice>
       )}
       {request.wantsRead && !cannotRead && (
         <p className="mt-3 text-sm text-muted">
-          Approving wraps the project key to this machine. What it reads afterwards cannot be
-          unread.
+          Approving wraps the project key to this service account. What it reads afterwards cannot
+          be unread.
         </p>
       )}
       {failure && <Notice className="mt-3">{failure}</Notice>}
@@ -134,15 +134,15 @@ export const RequestsPage = () => {
     <>
       <PageHeader
         title="Requests"
-        lede="What your machines are waiting on you for. Everything else they do without asking."
+        lede="What your service accounts are waiting on you for. Everything else they do without asking."
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
       {(access === null || paste === null) && !failure && <Skeleton rows={2} />}
       {isEmpty && (
         <Empty title="Nothing is waiting on you">
           <p>
-            A machine asks for access with <Code>baymutt access request</Code>, and for a value only
-            you can fetch with <Code>baymutt request</Code>. Both land here.
+            A service account asks for access with <Code>baymutt access request</Code>, and for a
+            value only you can fetch with <Code>baymutt request</Code>. Both land here.
           </p>
         </Empty>
       )}

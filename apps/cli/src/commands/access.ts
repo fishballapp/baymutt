@@ -1,8 +1,8 @@
-// Access: asking the owner for it, making a narrower machine for a job, revoking, and the log.
+// Access: asking the owner for it, making a narrower service account for a job, revoking, and the log.
 import { LabelSchema, type Project } from '@baymutt/api';
 import {
-  generateMachineToken,
-  machineKeyFromToken,
+  generateServiceAccountToken,
+  serviceAccountKeyFromToken,
   vouchForProjectKey,
   wrapProjectKey,
 } from '@baymutt/keys';
@@ -15,9 +15,9 @@ import * as ChildProcess from 'effect/process/ChildProcess';
 import * as ChildProcessSpawner from 'effect/process/ChildProcessSpawner';
 import * as Stream from 'effect/Stream';
 import { crypto_, report, usage } from '../errors.ts';
-import { Machine } from '../machine.ts';
 import { print } from '../output.ts';
 import { openProject, resolveProject, trustedKey } from '../projects.ts';
+import { ServiceAccount } from '../service-account.ts';
 import { projectArgument } from './projects.ts';
 
 const requestCommand = Command.make(
@@ -36,7 +36,7 @@ const requestCommand = Command.make(
   },
   Effect.fn('access.request')(function* ({ project, read, write, reason }) {
     if (!read && !write) return yield* usage('Ask for --read, --write or both.');
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     yield* print(
       yield* api.accessRequests.create({
         payload: {
@@ -51,7 +51,7 @@ const requestCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Ask the owner for access to a project. A machine cannot give itself any; the owner approves in the dashboard',
+    'Ask the owner for access to a project. A service account cannot give itself any; the owner approves in the dashboard',
   ),
 );
 
@@ -59,30 +59,33 @@ const listRequestsCommand = Command.make(
   'list',
   {},
   Effect.fn('access.list')(function* () {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     yield* print(yield* api.accessRequests.list());
   }, report),
 ).pipe(
-  Command.withDescription('This machine’s access requests and how each was answered'),
+  Command.withDescription('This service account’s access requests and how each was answered'),
   Command.withAlias('ls'),
 );
 
 export const accessCommand = Command.make('access').pipe(
   Command.withDescription('Ask for access to a project'),
   Command.withSubcommands([requestCommand, listRequestsCommand]),
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
 );
 
-const listMachinesCommand = Command.make(
+const listServiceAccountsCommand = Command.make(
   'list',
   {},
-  Effect.fn('machines.list')(function* () {
-    const { api } = yield* Machine;
+  Effect.fn('service-accounts.list')(function* () {
+    const { api } = yield* ServiceAccount;
     yield* print(yield* api.credentials.list());
   }, report),
-).pipe(Command.withDescription('This machine and the machines it made'), Command.withAlias('ls'));
+).pipe(
+  Command.withDescription('This service account and the service accounts it made'),
+  Command.withAlias('ls'),
+);
 
-/** Hands the new machine's key to `command` on its stdin, and to nothing else. */
+/** Hands the new service account's key to `command` on its stdin, and to nothing else. */
 const deliver = Effect.fnUntraced(
   function* (command: ReadonlyArray<string>, token: string) {
     const [executable, ...args] = command;
@@ -103,37 +106,41 @@ const deliver = Effect.fnUntraced(
   ),
 );
 
-const createMachineCommand = Command.make(
+const createServiceAccountCommand = Command.make(
   'create',
   {
     name: Flag.String('name').pipe(
-      Flag.withDescription('What the machine is, such as "CI: app deploy"'),
+      Flag.withDescription('What the service account is, such as "CI: app deploy"'),
       Flag.withSchema(LabelSchema),
     ),
     read: Flag.String('read').pipe(
-      Flag.withDescription('A project it may load (repeatable). This machine must be able to'),
+      Flag.withDescription(
+        'A project it may load (repeatable). This service account must be able to',
+      ),
       Flag.atLeast(0),
     ),
     write: Flag.String('write').pipe(
-      Flag.withDescription('A project it may write (repeatable). This machine must be able to'),
+      Flag.withDescription(
+        'A project it may write (repeatable). This service account must be able to',
+      ),
       Flag.atLeast(0),
     ),
     command: Argument.String('command').pipe(
       Argument.withDescription(
-        'After `--`: the command that receives the new machine’s key on stdin, such as `gh secret set BAYMUTT_KEY -R owner/repo`',
+        'After `--`: the command that receives the new service account’s key on stdin, such as `gh secret set BAYMUTT_KEY -R owner/repo`',
       ),
       Argument.variadic({ min: 1 }),
     ),
   },
-  Effect.fn('machines.create')(function* ({ name, read, write, command }) {
-    const machine = yield* Machine;
+  Effect.fn('service-accounts.create')(function* ({ name, read, write, command }) {
+    const serviceAccount = yield* ServiceAccount;
     const names = [...new Set([...read, ...write])];
     if (names.length === 0) return yield* usage('Give it at least one --read or --write project.');
     const projects = yield* Effect.forEach(names, resolveProject, { concurrency: 4 });
 
-    // The new machine's key carries this machine's public key, so it knows whose proofs to take.
-    const token = generateMachineToken(machine.key.publicKey);
-    const made = yield* crypto_(() => machineKeyFromToken(token));
+    // The new service account's key carries this service account's public key, so it knows whose proofs to take.
+    const token = generateServiceAccountToken(serviceAccount.key.publicKey);
+    const made = yield* crypto_(() => serviceAccountKeyFromToken(token));
     const reader = { id: made.credentialId, publicKey: made.publicKey };
     const grantFor = Effect.fnUntraced(function* (project: Project) {
       const canWrite = write.includes(project.name) || write.includes(project.id);
@@ -141,15 +148,15 @@ const createMachineCommand = Command.make(
       const { publicKey, binding } = yield* trustedKey(project);
       const keyProof = yield* crypto_(() =>
         vouchForProjectKey({
-          voucherKey: machine.key.privateKey,
+          voucherKey: serviceAccount.key.privateKey,
           reader,
           binding,
           projectPublicKey: publicKey,
         }),
       );
       if (!canRead) return { projectId: project.id, canWrite, readWrap: null, keyProof };
-      // A read is the project key wrapped to the new machine, which only a holder of the key
-      // can make: this machine opens it and seals it again.
+      // A read is the project key wrapped to the new service account, which only a holder of the key
+      // can make: this service account opens it and seals it again.
       const { encodedProjectKey } = yield* openProject(project);
       const readWrap = yield* crypto_(() =>
         wrapProjectKey({
@@ -161,7 +168,7 @@ const createMachineCommand = Command.make(
       );
       return { projectId: project.id, canWrite, readWrap, keyProof };
     });
-    const created = yield* machine.api.credentials.create({
+    const created = yield* serviceAccount.api.credentials.create({
       payload: {
         id: made.credentialId,
         name,
@@ -171,21 +178,21 @@ const createMachineCommand = Command.make(
       },
     });
 
-    // A key nobody received is a machine nobody can use: take it back out.
+    // A key nobody received is a service account nobody can use: take it back out.
     const exitCode = yield* deliver(command, token).pipe(
-      Effect.tapError(() => machine.api.credentials.revoke({ params: { id: created.id } })),
+      Effect.tapError(() => serviceAccount.api.credentials.revoke({ params: { id: created.id } })),
     );
     if (exitCode !== 0) {
-      yield* machine.api.credentials.revoke({ params: { id: created.id } });
+      yield* serviceAccount.api.credentials.revoke({ params: { id: created.id } });
       return yield* usage(
-        `\`${command.join(' ')}\` exited ${exitCode}, so the new machine was revoked. Nothing was left behind.`,
+        `\`${command.join(' ')}\` exited ${exitCode}, so the new service account was revoked. Nothing was left behind.`,
       );
     }
     yield* print(created);
   }, report),
 ).pipe(
   Command.withDescription(
-    'Make a machine that holds part of this one’s access, for a CI job or another agent. Its key goes to the command after `--`, on stdin, and is never printed',
+    'Make a service account that holds part of this one’s access, for a CI job or another agent. Its key goes to the command after `--`, on stdin, and is never printed',
   ),
 );
 
@@ -194,13 +201,13 @@ const revokeCommand = Command.make(
   {
     id: Argument.String('id').pipe(
       Argument.withDescription(
-        'The machine’s id (see `baymutt machines`). Omit to revoke this machine itself',
+        'The service account’s id (see `baymutt service-accounts`). Omit to revoke this service account itself',
       ),
       Argument.optional,
     ),
   },
-  Effect.fn('machines.revoke')(function* ({ id }) {
-    const { api, key } = yield* Machine;
+  Effect.fn('service-accounts.revoke')(function* ({ id }) {
+    const { api, key } = yield* ServiceAccount;
     yield* print(
       yield* api.credentials.revoke({
         params: { id: Option.getOrElse(id, () => key.credentialId) },
@@ -209,14 +216,14 @@ const revokeCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke this machine or one it made, with every machine that one made. What it already read stays read: replace those values at their vendors',
+    'Revoke this service account or one it made, with every service account that one made. What it already read stays read: replace those values at their vendors',
   ),
 );
 
-export const machinesCommand = Command.make('machines').pipe(
-  Command.withDescription('List, make and revoke machines'),
-  Command.withSubcommands([listMachinesCommand, createMachineCommand, revokeCommand]),
-  Command.provide(Machine.layer),
+export const serviceAccountsCommand = Command.make('service-accounts').pipe(
+  Command.withDescription('List, make and revoke service accounts'),
+  Command.withSubcommands([listServiceAccountsCommand, createServiceAccountCommand, revokeCommand]),
+  Command.provide(ServiceAccount.layer),
 );
 
 export const auditCommand = Command.make(
@@ -238,7 +245,7 @@ export const auditCommand = Command.make(
     ),
   },
   Effect.fn('audit')(function* ({ project, limit, before }) {
-    const { api } = yield* Machine;
+    const { api } = yield* ServiceAccount;
     const projectId = Option.isSome(project)
       ? (yield* resolveProject(project.value)).id
       : undefined;
@@ -254,7 +261,7 @@ export const auditCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'What this machine did, newest first. The owner reads the whole log in the dashboard',
+    'What this service account did, newest first. The owner reads the whole log in the dashboard',
   ),
-  Command.provide(Machine.layer),
+  Command.provide(ServiceAccount.layer),
 );

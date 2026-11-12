@@ -41,13 +41,13 @@ const check = (label: string, isTrue: boolean) => {
   console.log(`✓ ${label}`);
 };
 
-/** A machine: its own key file and state, so nothing touches this Mac's keychain. */
-const machine = (name: string) => {
+/** A service account: its own key file and state, so nothing touches this Mac's keychain. */
+const serviceAccount = (name: string) => {
   const home = mkdtempSync(join(tmpdir(), `baymutt-drive-${name}-`));
   const env = {
     ...process.env,
     BAYMUTT_URL: WEB,
-    BAYMUTT_KEY_FILE: join(home, 'machine-key'),
+    BAYMUTT_KEY_FILE: join(home, 'service-account-key'),
     XDG_CONFIG_HOME: home,
   };
   return {
@@ -178,33 +178,33 @@ const main = async (browser: Browser) => {
     !(await page.content()).includes('made-up-line-two'),
   );
 
-  // --- pair a machine ------------------------------------------------------------------------
-  const laptop = machine('laptop');
-  const pending = laptop.cli(['pair', '--name', 'Jason’s MacBook', '--wait', '0']);
-  check('`baymutt pair` prints a link and a code', pending.json?.status === 'pending');
+  // --- log in a service account ------------------------------------------------------------------------
+  const laptop = serviceAccount('laptop');
+  const pending = laptop.cli(['login', '--name', 'Jason’s MacBook', '--wait', '0']);
+  check('`baymutt login` prints a link and a code', pending.json?.status === 'pending');
   const signedOut = await browser.newContext({ viewport: DESKTOP });
   const signedOutPage = await signedOut.newPage();
   await signedOutPage.goto(pending.json.url);
   await signedOutPage.getByRole('heading', { name: 'Sign in to baymutt' }).waitFor();
   check(
-    'a pairing link opened signed out asks to sign in and keeps its fragment',
+    'an approval link opened signed out asks to sign in and keeps its fragment',
     signedOutPage.url() === pending.json.url,
   );
   await signedOut.close();
   await page.goto(pending.json.url);
   await page.getByText(pending.json.code).waitFor();
-  check('the pairing page shows the terminal’s code', true);
-  await shoot(page, '07-pair');
-  await page.getByRole('button', { name: 'The codes match: pair it' }).click();
-  await page.getByRole('heading', { name: /is paired/ }).waitFor();
+  check('the approval page shows the terminal’s code', true);
+  await shoot(page, '07-approve');
+  await page.getByRole('button', { name: 'The codes match: approve it' }).click();
+  await page.getByRole('heading', { name: /is approved/ }).waitFor();
   check(
-    '`baymutt pair` finishes once approved',
-    laptop.cli(['pair', '--wait', '0']).json?.status === 'paired',
+    '`baymutt login` finishes once approved',
+    laptop.cli(['login', '--wait', '0']).json?.status === 'loggedIn',
   );
 
-  // --- the machine asks; the owner approves; the machine loads and writes ---------------------
+  // --- the service account asks; the owner approves; the service account loads and writes ---------------------
   check(
-    'a new machine sees no project',
+    'a new service account sees no project',
     laptop.cli(['projects', 'list']).json?.projects.length === 0,
   );
   const asked = laptop.cli([
@@ -216,7 +216,7 @@ const main = async (browser: Browser) => {
     '--reason',
     'to deploy the worker',
   ]);
-  check('the machine asks for access', asked.json?.status === 'pending');
+  check('the service account asks for access', asked.json?.status === 'pending');
   await page.goto(`${WEB}/requests`);
   await page.getByRole('button', { name: 'Approve read + write' }).waitFor();
   await shoot(page, '08-requests');
@@ -226,9 +226,12 @@ const main = async (browser: Browser) => {
   await shoot(page, '08c-requests-empty');
 
   const set = laptop.cli(['set', 'app/production', 'API_KEY'], 'value-from-the-cli\n');
-  check('the machine sets a value from stdin', set.json?.version === 1 && set.json?.length === 18);
+  check(
+    'the service account sets a value from stdin',
+    set.json?.version === 1 && set.json?.length === 18,
+  );
   const generated = laptop.cli(['generate', 'app/production', 'SESSION_SECRET']);
-  check('the machine generates a value without showing it', generated.json?.length === 43);
+  check('the service account generates a value without showing it', generated.json?.length === 43);
 
   // The varlock plugin loads the project and gives the values to a child process only.
   const schemaDir = mkdtempSync(join(tmpdir(), 'baymutt-drive-schema-'));
@@ -281,10 +284,10 @@ const main = async (browser: Browser) => {
     laptop.cli(['secrets', 'app/production']).json?.secrets.length === 4,
   );
 
-  // --- a narrower machine for CI --------------------------------------------------------------
+  // --- a narrower service account for CI --------------------------------------------------------------
   const ciKey = join(laptop.home, 'ci-key');
   const created = laptop.cli([
-    'machines',
+    'service-accounts',
     'create',
     '--name',
     'CI deploy',
@@ -295,7 +298,10 @@ const main = async (browser: Browser) => {
     '-c',
     `cat > ${ciKey}`,
   ]);
-  check('the machine makes a read-only one for CI', created.json?.grants?.[0]?.canWrite === false);
+  check(
+    'the service account makes a read-only one for CI',
+    created.json?.grants?.[0]?.canWrite === false,
+  );
 
   // --- the dashboard after all that -----------------------------------------------------------
   await page.goto(`${WEB}/projects`);
@@ -309,10 +315,10 @@ const main = async (browser: Browser) => {
   await page.goto(`${WEB}/projects`);
   await page.getByRole('link', { name: /app\/production/ }).waitFor();
   await shootPhone(page, '10d-projects-phone');
-  await page.goto(`${WEB}/machines`);
+  await page.goto(`${WEB}/service-accounts`);
   await page.getByText('CI deploy').waitFor();
-  await shoot(page, '11-machines');
-  await shootPhone(page, '11b-machines-phone');
+  await shoot(page, '11-service-accounts');
+  await shootPhone(page, '11b-service-accounts-phone');
   await page.goto(`${WEB}/activity`);
   await page.getByText('pasted').waitFor();
   await shoot(page, '12-activity');
@@ -327,14 +333,14 @@ const main = async (browser: Browser) => {
   await page.getByRole('heading', { name: 'Passkeys' }).waitFor();
   check('a reload leaves the vault open', await keepsVaultOpen(page));
 
-  // Revoking the laptop takes the CI machine with it.
-  await page.goto(`${WEB}/machines`);
+  // Revoking the laptop takes the CI service account with it.
+  await page.goto(`${WEB}/service-accounts`);
   await page.getByRole('button', { name: 'Revoke' }).first().click();
   await shoot(page, '14-revoke');
-  await page.getByRole('button', { name: 'Revoke machine' }).click();
-  await page.getByText('No machines yet').waitFor();
-  await shoot(page, '14b-machines-empty');
-  check('a revoked machine is refused', laptop.cli(['projects', 'list']).status === 3);
+  await page.getByRole('button', { name: 'Revoke service account' }).click();
+  await page.getByText('No service accounts yet').waitFor();
+  await shoot(page, '14b-service-accounts-empty');
+  check('a revoked service account is refused', laptop.cli(['projects', 'list']).status === 3);
 
   // --- dark, and a phone ----------------------------------------------------------------------
   // The same page: the virtual authenticator belongs to its target.
@@ -346,9 +352,9 @@ const main = async (browser: Browser) => {
   await page.setViewportSize(PHONE);
   await shoot(page, '16-project-dark-phone');
   await page.setViewportSize(DESKTOP);
-  await page.goto(`${WEB}/machines`);
-  await page.getByText('No machines yet').waitFor();
-  await shoot(page, '16b-machines-empty-dark');
+  await page.goto(`${WEB}/service-accounts`);
+  await page.getByText('No service accounts yet').waitFor();
+  await shoot(page, '16b-service-accounts-empty-dark');
   await context.close();
 
   // --- a second person, with a password and no passkey ------------------------------------------

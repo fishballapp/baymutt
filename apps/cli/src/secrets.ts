@@ -3,8 +3,8 @@ import { MAX_VALUE_BYTES, type Project } from '@baymutt/api';
 import { sealValue } from '@baymutt/keys';
 import * as Effect from 'effect/Effect';
 import { crypto_, usage } from './errors.ts';
-import { Machine } from './machine.ts';
 import { trustedKey } from './projects.ts';
+import { ServiceAccount } from './service-account.ts';
 
 export const writeValue = Effect.fn('secrets.write')(function* ({
   project,
@@ -19,7 +19,7 @@ export const writeValue = Effect.fn('secrets.write')(function* ({
   if (bytes > MAX_VALUE_BYTES) {
     return yield* usage(`${name} is ${bytes} bytes; a value may be ${MAX_VALUE_BYTES}.`);
   }
-  const { api } = yield* Machine;
+  const { api } = yield* ServiceAccount;
   const { publicKey: projectPublicKey, binding } = yield* trustedKey(project);
   const { secrets } = yield* api.secrets.list({ params: { projectId: project.id } });
   const latest = secrets.find(secret => secret.name === name)?.latestVersion ?? 0;

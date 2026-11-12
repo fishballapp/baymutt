@@ -1,11 +1,11 @@
 /**
- * Pairing: how a new machine and the owner's browser learn each other's public keys without
+ * Pairing: how a new service account and the owner's browser learn each other's public keys without
  * trusting the store that sits between them.
  *
  * ```
- * machine → browser   the pairing link's fragment: credentialId, name, machine public key,
+ * service account → browser   the pairing link's fragment: credentialId, name, service account public key,
  *                     bearer hash, pairingSecret. A fragment never reaches the store.
- * browser → machine   welcome = iv ‖ AES-GCM(HKDF(pairingSecret, salt = machinePub,
+ * browser → service account   welcome = iv ‖ AES-GCM(HKDF(pairingSecret, salt = serviceAccountPub,
  *                               info "baymutt-pairing-welcome"),
  *                               [accountId, accountPub], aad = [credentialId])   → via the store
  * ```
@@ -36,16 +36,16 @@ type Pairing = {
   /** 32 random bytes, base64url. */
   readonly pairingSecret: string;
   readonly credentialId: string;
-  readonly machinePublicKey: string;
+  readonly serviceAccountPublicKey: string;
 };
 
-const welcomeKey = ({ pairingSecret, machinePublicKey }: Pairing): Promise<CryptoKey> =>
+const welcomeKey = ({ pairingSecret, serviceAccountPublicKey }: Pairing): Promise<CryptoKey> =>
   hkdf(
     fromBase64(pairingSecret, 'the pairing secret', 'base64url'),
     'baymutt-pairing-welcome',
     { name: 'AES-GCM', length: 256 },
     ['encrypt', 'decrypt'],
-    decodePublicKey(machinePublicKey, 'the machine public key'),
+    decodePublicKey(serviceAccountPublicKey, 'the service account public key'),
   );
 
 export const sealWelcome = async (pairing: Pairing, welcome: Welcome): Promise<string> => {
@@ -73,7 +73,7 @@ export const openWelcome = async (pairing: Pairing, welcome: string): Promise<We
     .catch(() => {
       throw new VaultError(
         'unreadable',
-        'the welcome was not sealed by the browser that paired this machine',
+        'the welcome was not sealed by the browser that approved this service account',
       );
     });
   const parts: unknown = JSON.parse(fromUtf8(new Uint8Array(opened)));

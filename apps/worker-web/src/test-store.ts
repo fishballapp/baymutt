@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// An account, its machines and a project, set up through the API as a client would.
+// An account, its service accounts and a project, set up through the API as a client would.
 import { tokenHash } from '@baymutt/keys/wire';
 import { json } from '@internal/effect-worker/testing';
 import { expect } from 'vitest';
@@ -48,7 +48,7 @@ export const newAccount = async (id: string, credentialId: string) => ({
   vaultProofHash: await tokenHash(VAULT_PROOF),
 });
 
-let machineCount = 0;
+let serviceAccountCount = 0;
 
 export const storeWorld = async (userId = 'user-1') => {
   const w = testWorld();
@@ -67,10 +67,10 @@ export const storeWorld = async (userId = 'user-1') => {
     201,
   );
 
-  /** A machine the owner paired. It starts with no access. */
-  const pair = async (name = `machine-${++machineCount}`) => {
+  /** A service account the owner paired. It starts with no access. */
+  const pair = async (name = `service-account-${++serviceAccountCount}`) => {
     const id = crypto.randomUUID();
-    const secret = keyLike(String(machineCount % 10));
+    const secret = keyLike(String(serviceAccountCount % 10));
     await ok(
       w,
       'POST',
@@ -112,10 +112,10 @@ export const storeWorld = async (userId = 'user-1') => {
 
   const grant = (
     projectId: string,
-    machineId: string,
+    serviceAccountId: string,
     { read = false, write = false }: { readonly read?: boolean; readonly write?: boolean },
   ) =>
-    ok(w, 'PUT', `/projects/${projectId}/grants/${machineId}`, owner, {
+    ok(w, 'PUT', `/projects/${projectId}/grants/${serviceAccountId}`, owner, {
       canWrite: write,
       readWrap: read ? sealedLike('read-wrap') : null,
       keyProof: sealedLike('key-proof'),

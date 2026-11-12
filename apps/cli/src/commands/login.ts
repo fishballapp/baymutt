@@ -1,7 +1,7 @@
-// `baymutt pair`: makes this machine's key and asks the owner to approve it. Run it again to
+// `baymutt login`: makes a service account key and asks the owner to approve it. Run it again to
 // finish: it picks up where it left off.
 import { PairingRequestSchema } from '@baymutt/api';
-import { generateMachineToken, openWelcome, pairingCode, randomToken } from '@baymutt/keys';
+import { generateServiceAccountToken, openWelcome, pairingCode, randomToken } from '@baymutt/keys';
 import * as Command from 'effect/cli/Command';
 import * as Flag from 'effect/cli/Flag';
 import * as Duration from 'effect/Duration';
@@ -12,29 +12,29 @@ import * as Schedule from 'effect/Schedule';
 import * as Schema from 'effect/Schema';
 import { crypto_, report, usage } from '../errors.ts';
 import { KeyStore } from '../key-store.ts';
-import { machineFromToken } from '../machine.ts';
 import { print, say } from '../output.ts';
+import { serviceAccountFromToken } from '../service-account.ts';
 import { readState, Settings, updateState } from '../settings.ts';
 
 const PairingFragmentSchema = Schema.fromJsonString(PairingRequestSchema);
 
 const POLL_EVERY = Duration.seconds(2);
 
-/** The machine's key: the one already kept when a pairing is under way, or a new one. */
-const machineToken = Effect.gen(function* () {
+/** The service account's key: the one already kept when a pairing is under way, or a new one. */
+const serviceAccountToken = Effect.gen(function* () {
   const store = yield* KeyStore;
   const kept = yield* store.read;
   if (Option.isSome(kept)) return kept.value;
-  const token = Redacted.make(generateMachineToken());
+  const token = Redacted.make(generateServiceAccountToken());
   yield* store.write(token);
   return token;
 });
 
-export const pairCommand = Command.make(
-  'pair',
+export const loginCommand = Command.make(
+  'login',
   {
     name: Flag.String('name').pipe(
-      Flag.withDescription('What the owner will see this machine as, such as "Jason’s MacBook"'),
+      Flag.withDescription('What the owner will see this service account as, such as "my laptop"'),
       Flag.optional,
     ),
     wait: Flag.Int('wait').pipe(
@@ -44,22 +44,22 @@ export const pairCommand = Command.make(
       Flag.withDefault(300),
     ),
   },
-  Effect.fn('pair')(function* ({ name, wait }) {
+  Effect.fn('login')(function* ({ name, wait }) {
     const { origin } = yield* Settings;
-    const { key, api } = yield* machineFromToken(yield* machineToken);
+    const { key, api } = yield* serviceAccountFromToken(yield* serviceAccountToken);
     const state = yield* readState;
 
     if (state.account !== undefined) {
       return yield* print({
-        status: 'paired',
-        machineId: key.credentialId,
+        status: 'loggedIn',
+        serviceAccountId: key.credentialId,
         account: state.account,
       });
     }
 
     const pending = state.pendingPairing ?? {
       pairingSecret: randomToken(),
-      name: Option.getOrElse(name, () => `machine ${key.credentialId.slice(0, 8)}`),
+      name: Option.getOrElse(name, () => `service account ${key.credentialId.slice(0, 8)}`),
     };
     yield* updateState(current => ({ ...current, pendingPairing: pending }));
 
@@ -73,7 +73,7 @@ export const pairCommand = Command.make(
     const url = `${origin}/pair#${encodeURIComponent(fragment)}`;
     const code = yield* crypto_(() => pairingCode(key.publicKey));
 
-    // Paired once the store recognises the bearer; until then it answers 401.
+    // Approved once the store recognises the bearer; until then it answers 401.
     const approved = api.credentials.me().pipe(
       Effect.asSome,
       Effect.catchTag('UnauthorizedError', () => Effect.succeedNone),
@@ -98,35 +98,35 @@ export const pairCommand = Command.make(
     if (Option.isNone(me)) {
       return yield* print({
         status: 'pending',
-        machineId: key.credentialId,
+        serviceAccountId: key.credentialId,
         code,
         url,
-        next: 'Run `baymutt pair` again once the owner has approved it.',
+        next: 'Run `baymutt login` again once the owner has approved it.',
       });
     }
 
     const welcome = me.value.credential?.welcome;
     if (welcome === null || welcome === undefined) {
       return yield* usage(
-        'The store knows this machine key but has no answer from a browser that paired it. Use a machine key made by `baymutt pair`.',
+        'The store knows this service account key but has no answer from a browser that approved its login. Use a service account key made by `baymutt login`.',
         'integrity',
       );
     }
-    // Sealed by the owner's browser under a secret the store never saw: this is where the machine
+    // Sealed by the owner's browser under a secret the store never saw: this is where the service account
     // learns which account key to trust.
     const account = yield* crypto_(() =>
       openWelcome(
         {
           pairingSecret: pending.pairingSecret,
           credentialId: key.credentialId,
-          machinePublicKey: key.publicKey,
+          serviceAccountPublicKey: key.publicKey,
         },
         welcome,
       ),
     );
     if (account.accountId !== me.value.accountId) {
       return yield* usage(
-        'The browser paired this machine with one account and the store answers as another. Nothing was kept.',
+        'The browser approved this login for one account and the store answers as another. Nothing was kept.',
         'integrity',
       );
     }
@@ -136,10 +136,10 @@ export const pairCommand = Command.make(
       publicKey: account.accountPublicKey,
     };
     yield* updateState(({ pendingPairing: _, ...current }) => ({ ...current, account: pinned }));
-    yield* print({ status: 'paired', machineId: key.credentialId, account: pinned });
+    yield* print({ status: 'loggedIn', serviceAccountId: key.credentialId, account: pinned });
   }, report),
 ).pipe(
   Command.withDescription(
-    'Pair this machine with the owner’s account. It starts with no access: ask for some with `baymutt access request`.',
+    'Log in as a new service account of the owner’s account: make its key here and ask the owner to approve it. It starts with no access: ask for some with `baymutt access request`.',
   ),
 );

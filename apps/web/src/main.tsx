@@ -1,17 +1,6 @@
-import './styles/index.css';
-import { RegistryProvider } from '@effect/atom-react';
-import { RouterProvider } from '@tanstack/react-router';
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import { router } from './router.ts';
+// Safari has no native Temporal, so it alone downloads the polyfill. The app is imported after
+// it, never statically, so no module reads `Temporal` before the polyfill has installed it.
+if (!('Temporal' in globalThis)) await import('temporal-polyfill/global');
+await import('./app.tsx');
 
-const root = document.getElementById('root');
-if (root === null) throw new Error('index.html has no #root');
-
-createRoot(root).render(
-  <StrictMode>
-    <RegistryProvider>
-      <RouterProvider router={router} />
-    </RegistryProvider>
-  </StrictMode>,
-);
+export {};

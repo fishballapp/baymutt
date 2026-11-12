@@ -51,7 +51,7 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
 
 const NAV = [
   { to: '/projects', label: 'Projects' },
-  { to: '/machines', label: 'Machines' },
+  { to: '/service-accounts', label: 'Service accounts' },
   { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
   { to: '/account', label: 'Account' },
@@ -59,9 +59,9 @@ const NAV = [
 
 type NavPath = (typeof NAV)[number]['to'];
 
-/** The nav item a page belongs to: a pairing link is about a machine. */
+/** The nav item a page belongs to: a pairing link is about a service account. */
 const sectionOf = (path: string): NavPath | undefined =>
-  path.startsWith('/pair') ? '/machines' : NAV.find(({ to }) => path.startsWith(to))?.to;
+  path.startsWith('/pair') ? '/service-accounts' : NAV.find(({ to }) => path.startsWith(to))?.to;
 
 const PendingCount = () => {
   const pending =

@@ -1,4 +1,4 @@
-/** Who may do what: machines, projects and the grants between them. */
+/** Who may do what: service accounts, projects and the grants between them. */
 import { tokenHash } from '@baymutt/keys/wire';
 import { describe, expect, it } from 'vitest';
 import { call, newAccount, ok, type StoreWorld, storeWorld, VAULT_PROOF } from '../test-store.ts';
@@ -26,27 +26,27 @@ const child = async (
   return { id, answer, headers: { authorization: `Bearer baymutt_${id}_${secret}` } };
 };
 
-describe('a machine', () => {
+describe('a service account', () => {
   it('is recognised by its bearer once paired, and starts with no access', async () => {
     const { w, pair, project, accountId } = await storeWorld();
     await project('app/production');
-    const machine = await pair('laptop');
+    const serviceAccount = await pair('laptop');
 
-    expect(await call(w, 'GET', '/me', machine.headers)).toEqual({
+    expect(await call(w, 'GET', '/me', serviceAccount.headers)).toEqual({
       status: 200,
       body: {
         accountId,
         accountName: 'Jason',
         accountPublicKey: keyLike('a'),
         credential: {
-          id: machine.id,
+          id: serviceAccount.id,
           name: 'laptop',
           parentId: null,
           welcome: sealedLike('welcome'),
         },
       },
     });
-    expect(await call(w, 'GET', '/projects', machine.headers)).toEqual({
+    expect(await call(w, 'GET', '/projects', serviceAccount.headers)).toEqual({
       status: 200,
       body: { projects: [] },
     });
@@ -54,8 +54,8 @@ describe('a machine', () => {
 
   it('is refused with a wrong secret, an unknown id or a malformed bearer', async () => {
     const { w, pair } = await storeWorld();
-    const machine = await pair();
-    const [, id] = machine.headers.authorization.split('_');
+    const serviceAccount = await pair();
+    const [, id] = serviceAccount.headers.authorization.split('_');
 
     for (const authorization of [
       `Bearer baymutt_${id}_${keyLike('z')}`,
@@ -69,11 +69,11 @@ describe('a machine', () => {
     }
   });
 
-  it('cannot be paired by a machine, nor twice under one id', async () => {
+  it('cannot be paired by a service account, nor twice under one id', async () => {
     const { w, owner, pair } = await storeWorld();
-    const machine = await pair();
+    const serviceAccount = await pair();
     const pairing = {
-      id: machine.id,
+      id: serviceAccount.id,
       name: 'again',
       publicKey: keyLike('m'),
       bearerHash: keyLike('h'),
@@ -86,7 +86,7 @@ describe('a machine', () => {
       body: { code: 'AlreadyExistsError' },
     });
     expect(
-      await call(w, 'POST', '/credentials/pair', machine.headers, {
+      await call(w, 'POST', '/credentials/pair', serviceAccount.headers, {
         ...pairing,
         id: crypto.randomUUID(),
       }),
@@ -97,31 +97,37 @@ describe('a machine', () => {
     const world = await storeWorld();
     const { w, pair, project, grant } = world;
     const projectId = await project('app/production');
-    const machine = await pair();
+    const serviceAccount = await pair();
     const other = await pair();
 
-    expect(await call(w, 'GET', `/projects/${projectId}`, machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
       status: 404,
       body: { code: 'NotFoundError' },
     });
     expect(
-      await call(w, 'PUT', `/projects/${projectId}/grants/${machine.id}`, machine.headers, {
-        canWrite: true,
-        readWrap: sealedLike('self-made'),
-        keyProof: sealedLike('proof'),
-        keyVersion: 1,
-      }),
+      await call(
+        w,
+        'PUT',
+        `/projects/${projectId}/grants/${serviceAccount.id}`,
+        serviceAccount.headers,
+        {
+          canWrite: true,
+          readWrap: sealedLike('self-made'),
+          keyProof: sealedLike('proof'),
+          keyVersion: 1,
+        },
+      ),
     ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
 
-    await grant(projectId, machine.id, { write: true });
+    await grant(projectId, serviceAccount.id, { write: true });
 
-    expect(await call(w, 'GET', `/projects/${projectId}`, machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
       status: 200,
       body: { name: 'app/production', canRead: false, canWrite: true },
     });
-    // A grant of its own does not let it grant another machine.
+    // A grant of its own does not let it grant another service account.
     expect(
-      await call(w, 'PUT', `/projects/${projectId}/grants/${other.id}`, machine.headers, {
+      await call(w, 'PUT', `/projects/${projectId}/grants/${other.id}`, serviceAccount.headers, {
         canWrite: true,
         readWrap: null,
         keyProof: sealedLike('proof'),
@@ -135,11 +141,11 @@ describe('a machine', () => {
 
   it('creates a project and holds read and write on what it created', async () => {
     const { w, owner, pair, project } = await storeWorld();
-    const machine = await pair('laptop');
+    const serviceAccount = await pair('laptop');
 
-    const projectId = await project('app/development', machine.headers);
+    const projectId = await project('app/development', serviceAccount.headers);
 
-    expect(await call(w, 'GET', '/projects', machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', '/projects', serviceAccount.headers)).toMatchObject({
       body: {
         projects: [
           {
@@ -148,7 +154,7 @@ describe('a machine', () => {
             keyVersion: 1,
             canRead: true,
             canWrite: true,
-            createdBy: { kind: 'machine', id: machine.id, name: 'laptop' },
+            createdBy: { kind: 'machine', id: serviceAccount.id, name: 'laptop' },
           },
         ],
       },
@@ -161,14 +167,14 @@ describe('a machine', () => {
         ownerProof: sealedLike('owner-proof'),
         keyVersion: 1,
         creator: {
-          id: machine.id,
+          id: serviceAccount.id,
           publicKey: keyLike('m'),
           endorsement: sealedLike('endorsement'),
         },
       },
     });
     expect(
-      await call(w, 'GET', `/projects/${projectId}/owner-wrap`, machine.headers),
+      await call(w, 'GET', `/projects/${projectId}/owner-wrap`, serviceAccount.headers),
     ).toMatchObject({ status: 403 });
     expect(
       await call(w, 'POST', '/projects', owner, {
@@ -184,7 +190,7 @@ describe('a machine', () => {
   });
 });
 
-describe('a narrower machine', () => {
+describe('a narrower service account', () => {
   it('holds what its maker handed on and nothing its maker lacks', async () => {
     const world = await storeWorld();
     const { w, pair, project, grant } = world;
@@ -237,7 +243,7 @@ describe('a narrower machine', () => {
     });
   });
 
-  it('can make no machine of its own, and neither can the owner’s session through this route', async () => {
+  it('can make no service account of its own, and neither can the owner’s session through this route', async () => {
     const world = await storeWorld();
     const parent = await world.pair();
     const ci = await child(world, parent, []);
@@ -274,8 +280,8 @@ describe('a narrower machine', () => {
 
     await ok(w, 'DELETE', `/projects/${projectId}/grants/${parent.id}`, owner);
 
-    for (const machine of [parent, ci, second]) {
-      expect(await call(w, 'GET', '/projects', machine.headers)).toMatchObject({
+    for (const serviceAccount of [parent, ci, second]) {
+      expect(await call(w, 'GET', '/projects', serviceAccount.headers)).toMatchObject({
         body: { projects: [] },
       });
     }
@@ -291,8 +297,8 @@ describe('a narrower machine', () => {
       ),
     ).toEqual(new Set([parent.id, ci.id, second.id]));
 
-    for (const machine of [parent, ci, second]) {
-      expect(await call(w, 'GET', '/me', machine.headers)).toMatchObject({ status: 401 });
+    for (const serviceAccount of [parent, ci, second]) {
+      expect(await call(w, 'GET', '/me', serviceAccount.headers)).toMatchObject({ status: 401 });
     }
     expect(await call(w, 'GET', '/me', bystander.headers)).toMatchObject({ status: 200 });
     expect(
@@ -302,7 +308,7 @@ describe('a narrower machine', () => {
 });
 
 describe('what a caller is shown', () => {
-  it('lists every machine to the owner, and to a machine only itself and those it made', async () => {
+  it('lists every service account to the owner, and to a service account only itself and those it made', async () => {
     const world = await storeWorld();
     const { w, owner, pair } = world;
     const laptop = await pair('laptop');
@@ -327,10 +333,10 @@ describe('what a caller is shown', () => {
     expect((await names(ci.headers)).map(({ id }) => id)).toEqual([ci.id]);
   });
 
-  it('keeps one account’s projects and machines from another’s', async () => {
+  it('keeps one account’s projects and service accounts from another’s', async () => {
     const one = await storeWorld();
     const projectId = await one.project('app/production');
-    const machine = await one.pair();
+    const serviceAccount = await one.pair();
     const stranger = one.w.user('user-2');
     const strangerLocked = one.w.signIn(stranger.id);
     await ok(
@@ -348,10 +354,10 @@ describe('what a caller is shown', () => {
       ['GET', `/projects/${projectId}`, undefined],
       ['GET', `/projects/${projectId}/bundle`, undefined],
       ['DELETE', `/projects/${projectId}`, undefined],
-      ['DELETE', `/credentials/${machine.id}`, undefined],
+      ['DELETE', `/credentials/${serviceAccount.id}`, undefined],
       [
         'PUT',
-        `/projects/${projectId}/grants/${machine.id}`,
+        `/projects/${projectId}/grants/${serviceAccount.id}`,
         { canWrite: true, readWrap: null, keyProof: sealedLike('proof'), keyVersion: 1 },
       ],
     ] as const) {
@@ -383,13 +389,13 @@ describe('an access request', () => {
     }).then(answer => ({ id, answer }));
   };
 
-  it('names a project the machine cannot yet see, and the owner’s approval is the grant', async () => {
+  it('names a project the service account cannot yet see, and the owner’s approval is the grant', async () => {
     const world = await storeWorld();
     const { w, owner, pair, project } = world;
     const projectId = await project('app/production');
-    const machine = await pair('laptop');
+    const serviceAccount = await pair('laptop');
 
-    const { id, answer } = await ask(world, machine.headers, {
+    const { id, answer } = await ask(world, serviceAccount.headers, {
       projectName: 'app/production',
       wantsRead: true,
       wantsWrite: true,
@@ -412,7 +418,7 @@ describe('an access request', () => {
       },
     });
     expect(
-      await call(w, 'POST', `/access-requests/${id}/approve`, machine.headers, {
+      await call(w, 'POST', `/access-requests/${id}/approve`, serviceAccount.headers, {
         canWrite: true,
         readWrap: sealedLike('self'),
         keyProof: sealedLike('proof'),
@@ -427,14 +433,14 @@ describe('an access request', () => {
       keyVersion: 1,
     });
 
-    expect(await call(w, 'GET', `/projects/${projectId}`, machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
       body: { canRead: true, canWrite: true },
     });
     expect(await call(w, 'GET', '/access-requests', owner)).toEqual({
       status: 200,
       body: { requests: [] },
     });
-    expect(await call(w, 'GET', '/access-requests', machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', '/access-requests', serviceAccount.headers)).toMatchObject({
       body: { requests: [{ id, status: 'approved' }] },
     });
     expect(await call(w, 'POST', `/access-requests/${id}/deny`, owner)).toMatchObject({
@@ -447,36 +453,37 @@ describe('an access request', () => {
     const world = await storeWorld();
     const { w, owner, pair, project } = world;
     const projectId = await project('app/production');
-    const machine = await pair();
+    const serviceAccount = await pair();
 
     expect(
-      (await ask(world, machine.headers, { projectName: 'app/missing', wantsRead: true })).answer,
+      (await ask(world, serviceAccount.headers, { projectName: 'app/missing', wantsRead: true }))
+        .answer,
     ).toMatchObject({ status: 404 });
     expect(
       (await ask(world, owner, { projectName: 'app/production', wantsRead: true })).answer,
     ).toMatchObject({ status: 403 });
 
-    const { id } = await ask(world, machine.headers, {
+    const { id } = await ask(world, serviceAccount.headers, {
       projectName: 'app/production',
       wantsRead: true,
     });
     await ok(w, 'POST', `/access-requests/${id}/deny`, owner);
 
-    expect(await call(w, 'GET', `/projects/${projectId}`, machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
       status: 404,
     });
   });
 });
 
 describe('the audit log', () => {
-  it('records who did what, newest first, and shows a machine only its own entries', async () => {
+  it('records who did what, newest first, and shows a service account only its own entries', async () => {
     const world = await storeWorld();
     const { w, owner, pair, project, grant, write } = world;
     const projectId = await project('app/production');
-    const machine = await pair('laptop');
-    await grant(projectId, machine.id, { read: true, write: true });
-    await write(projectId, 'API_KEY', 1, machine.headers);
-    await ok(w, 'GET', `/projects/${projectId}/bundle`, machine.headers);
+    const serviceAccount = await pair('laptop');
+    await grant(projectId, serviceAccount.id, { read: true, write: true });
+    await write(projectId, 'API_KEY', 1, serviceAccount.headers);
+    await ok(w, 'GET', `/projects/${projectId}/bundle`, serviceAccount.headers);
 
     const all = await ok<{ events: { action: string }[] }>(w, 'GET', '/audit', owner);
 
@@ -489,7 +496,7 @@ describe('the audit log', () => {
       'account.create',
     ]);
     expect(all.events[1]).toMatchObject({
-      actor: { kind: 'machine', id: machine.id, name: 'laptop' },
+      actor: { kind: 'machine', id: serviceAccount.id, name: 'laptop' },
       projectName: 'app/production',
       secretName: 'API_KEY',
       version: 1,
@@ -499,9 +506,9 @@ describe('the audit log', () => {
       detail: 'laptop: read + write',
     });
     expect(
-      (await ok<{ events: { action: string }[] }>(w, 'GET', '/audit', machine.headers)).events.map(
-        ({ action }) => action,
-      ),
+      (
+        await ok<{ events: { action: string }[] }>(w, 'GET', '/audit', serviceAccount.headers)
+      ).events.map(({ action }) => action),
     ).toEqual(['project.load', 'secret.write']);
   });
 

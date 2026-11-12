@@ -128,11 +128,11 @@ describe('the account', () => {
     ).toMatchObject({ status: 404, body: { code: 'NotFoundError' } });
   });
 
-  it('refuses a machine’s bearer and a request with no credential', async () => {
+  it('refuses a service account’s bearer and a request with no credential', async () => {
     const { w, pair } = await storeWorld();
-    const machine = await pair();
+    const serviceAccount = await pair();
 
-    expect(await call(w, 'GET', '/account', machine.headers)).toMatchObject({
+    expect(await call(w, 'GET', '/account', serviceAccount.headers)).toMatchObject({
       status: 403,
       body: { code: 'OwnerRequiredError' },
     });
@@ -158,10 +158,10 @@ describe('the account', () => {
 });
 
 describe('a session whose vault is locked', () => {
-  it('reads, and changes nothing: not the account, not a project, not a machine', async () => {
+  it('reads, and changes nothing: not the account, not a project, not a service account', async () => {
     const { w, user, owner, locked, project, pair } = await storeWorld();
     const projectId = await project('app/production');
-    const machine = await pair();
+    const serviceAccount = await pair();
     const second = user.passkey('second');
 
     // What a magic link gives: enough to look around.
@@ -176,10 +176,10 @@ describe('a session whose vault is locked', () => {
       ['PUT', '/account/password', { authValue: authValue('h'), wrappedDek: sealedLike('p') }],
       ['DELETE', '/account/password', undefined],
       ['DELETE', `/projects/${projectId}`, undefined],
-      ['DELETE', `/credentials/${machine.id}`, undefined],
+      ['DELETE', `/credentials/${serviceAccount.id}`, undefined],
       [
         'PUT',
-        `/projects/${projectId}/grants/${machine.id}`,
+        `/projects/${projectId}/grants/${serviceAccount.id}`,
         { canWrite: true, readWrap: null, keyProof: sealedLike('p'), keyVersion: 1 },
       ],
       [

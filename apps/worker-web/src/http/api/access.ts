@@ -1,4 +1,4 @@
-/** Machines, projects, grants and access requests (`Access`), and the audit log (`Audit`). */
+/** Service accounts, projects, grants and access requests (`Access`), and the audit log (`Audit`). */
 import { Api, CurrentActor } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
@@ -16,13 +16,22 @@ const CredentialsHandlers = HttpApiBuilder.group(
         return yield* access.me(yield* CurrentActor);
       }),
       list: Effect.fn(function* () {
-        return { credentials: yield* access.listMachines(yield* CurrentActor) };
+        return { credentials: yield* access.listServiceAccounts(yield* CurrentActor) };
       }),
-      pair: Effect.fn(function* ({ payload: { endorsement, welcome, ...machine } }) {
-        return yield* access.pair({ actor: yield* CurrentActor, machine, endorsement, welcome });
+      pair: Effect.fn(function* ({ payload: { endorsement, welcome, ...serviceAccount } }) {
+        return yield* access.pair({
+          actor: yield* CurrentActor,
+          serviceAccount,
+          endorsement,
+          welcome,
+        });
       }),
-      create: Effect.fn(function* ({ payload: { grants, ...machine } }) {
-        return yield* access.createMachine({ actor: yield* CurrentActor, machine, grants });
+      create: Effect.fn(function* ({ payload: { grants, ...serviceAccount } }) {
+        return yield* access.createServiceAccount({
+          actor: yield* CurrentActor,
+          serviceAccount,
+          grants,
+        });
       }),
       revoke: Effect.fn(function* ({ params }) {
         return yield* access.revoke({ actor: yield* CurrentActor, id: params.id });

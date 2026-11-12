@@ -1,5 +1,5 @@
 /**
- * The store's side of a machine's bearer: its wire form, and the hash the store keeps of it. No
+ * The store's side of a service account's bearer: its wire form, and the hash the store keeps of it. No
  * key material and no imports, so the Worker takes this module without the rest of the schedule.
  *
  * ```

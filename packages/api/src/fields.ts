@@ -19,7 +19,7 @@ export const HashSchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u),
 ).annotate({ description: 'A SHA-256 digest, base64url without padding.' });
 
-/** What a person calls a machine, a passkey or an account. */
+/** What a person calls a service account, a passkey or an account. */
 export const LabelSchema = Schema.String.check(Schema.isPattern(/^\S(.{0,58}\S)?$/u)).annotate({
   description: 'A name of 1 to 60 characters, with no space at either end.',
 });
@@ -56,13 +56,14 @@ export const WrapSchema = base64(256).annotate({
 
 /** Something the owner’s vault sealed: a wrapped data key, the account key, an endorsement, a pairing welcome. */
 export const SealedSchema = base64(512).annotate({
-  description: 'Sealed by the owner’s vault or for one machine, base64. The store cannot open it.',
+  description:
+    'Sealed by the owner’s vault or for one service account, base64. The store cannot open it.',
 });
 
 /** A project's public key, vouched for to one reader by a party that reader trusts. */
 export const KeyProofSchema = base64(128).annotate({
   description:
-    'The project’s public key as the owner, or the machine that made the reader, vouches for it to that reader, base64. The store cannot make one.',
+    'The project’s public key as the owner, or the service account that made the reader, vouches for it to that reader, base64. The store cannot make one.',
 });
 
 export const VersionSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
@@ -71,7 +72,10 @@ export const ReasonSchema = Schema.String.check(Schema.isMaxLength(500)).annotat
   description: 'Why, for the owner to read.',
 });
 
-/** Who did something: the owner, or a machine by its credential. */
+/**
+ * Who did something: the owner, or a service account by its credential. The kind `'machine'` is
+ * the wire and stored name of a service account (audit rows hold it), kept so they stay readable.
+ */
 export const ActorSchema = Schema.Struct({
   kind: Schema.Literals(['owner', 'machine', 'link']),
   id: Schema.String,

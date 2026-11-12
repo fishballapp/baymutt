@@ -26,12 +26,12 @@ import { SelectField, TextArea, TextField } from '../components/ui/field.tsx';
 import {
   archiveProjectAtom,
   grantsAtom,
-  machinesAtom,
   projectAtom,
   removeGrantAtom,
   removeSecretAtom,
   rollbackSecretAtom,
   secretsAtom,
+  serviceAccountsAtom,
   setGrantAtom,
   versionsAtom,
   writeSecretAtom,
@@ -203,8 +203,8 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
               }}
             >
               <p>
-                Machines stop receiving it on their next load. Its versions are kept, so you can
-                restore it from its history.
+                Service accounts stop receiving it on their next load. Its versions are kept, so you
+                can restore it from its history.
               </p>
             </Confirm>
           )}
@@ -248,7 +248,9 @@ const Secrets = ({ project }: { readonly project: Project }) => {
       {secrets === null && !failureMessage(result) && <Skeleton />}
       {secrets?.length === 0 && !isAdding && (
         <Empty title="No secrets yet">
-          <p>Add one here, or from a machine that can write here, with the value on stdin:</p>
+          <p>
+            Add one here, or from a service account that can write here, with the value on stdin:
+          </p>
           <CommandLine>{`baymutt set ${project.name} NAME < file`}</CommandLine>
           <p>
             For a value only you can fetch, an agent runs <Code>baymutt request</Code> and you paste
@@ -297,7 +299,7 @@ const GrantRow = ({ project, grant }: { readonly project: Project; readonly gran
           <p className="font-medium">{grant.credentialName}</p>
           <p className="mt-0.5 text-sm text-muted">
             can {grantWords(grant)}
-            {!isOwnerPaired && ' · made by another machine, which handed this on'}
+            {!isOwnerPaired && ' · made by another service account, which handed this on'}
           </p>
         </div>
         <RowActions>
@@ -346,22 +348,24 @@ const NewGrant = ({
   readonly held: ReadonlyArray<Grant>;
 }) => {
   const owner = useOwner();
-  const machines = latest(useAtomValue(machinesAtom)) ?? [];
+  const serviceAccounts = latest(useAtomValue(serviceAccountsAtom)) ?? [];
   const [granting, grant] = useAtom(setGrantAtom, { mode: 'promiseExit' });
-  const [machineId, setMachineId] = useState('');
+  const [serviceAccountId, setServiceAccountId] = useState('');
   const [canRead, setCanRead] = useState(true);
   const [canWrite, setCanWrite] = useState(false);
-  // Only a machine the owner paired: the vault vouches for its key, so the project key can be wrapped to it.
-  const candidates = machines.filter(
-    machine =>
-      machine.endorsement !== null && !held.some(grant => grant.credentialId === machine.id),
+  // Only a service account the owner paired: the vault vouches for its key, so the project key can be wrapped to it.
+  const candidates = serviceAccounts.filter(
+    serviceAccount =>
+      serviceAccount.endorsement !== null &&
+      !held.some(grant => grant.credentialId === serviceAccount.id),
   );
-  const machine = candidates.find(({ id }) => id === machineId);
-  // With no machine paired at all, the empty list above already says how to pair one.
+  const serviceAccount = candidates.find(({ id }) => id === serviceAccountId);
+  // With no service account approved at all, the empty list above already says how to log one in.
   if (candidates.length === 0) {
     return held.length === 0 ? null : (
       <p className="mt-3 text-sm text-muted">
-        Every machine you paired has access here. Pair another with <Code>baymutt pair</Code>.
+        Every service account you approved has access here. Log in another with{' '}
+        <Code>baymutt login</Code>.
       </p>
     );
   }
@@ -370,28 +374,28 @@ const NewGrant = ({
       className="mt-4 flex flex-wrap items-end gap-x-4 gap-y-3"
       onSubmit={async event => {
         event.preventDefault();
-        if (machine === undefined) return;
+        if (serviceAccount === undefined) return;
         const exit = await grant({
           owner,
           project,
           reader: {
-            credentialId: machine.id,
-            credentialPublicKey: machine.publicKey,
-            endorsement: machine.endorsement,
+            credentialId: serviceAccount.id,
+            credentialPublicKey: serviceAccount.publicKey,
+            endorsement: serviceAccount.endorsement,
           },
           canRead,
           canWrite,
         });
-        if (exit._tag === 'Success') setMachineId('');
+        if (exit._tag === 'Success') setServiceAccountId('');
       }}
     >
       <div className="w-full sm:w-64">
         <SelectField
-          label="Give a machine access"
-          value={machineId}
-          onChange={event => setMachineId(event.target.value)}
+          label="Give a service account access"
+          value={serviceAccountId}
+          onChange={event => setServiceAccountId(event.target.value)}
         >
-          <option value="">Choose a machine</option>
+          <option value="">Choose a service account</option>
           {candidates.map(({ id, name }) => (
             <option key={id} value={id}>
               {name}
@@ -422,7 +426,7 @@ const NewGrant = ({
       </fieldset>
       <Button
         type="submit"
-        disabled={machine === undefined || (!canRead && !canWrite) || granting.waiting}
+        disabled={serviceAccount === undefined || (!canRead && !canWrite) || granting.waiting}
       >
         {granting.waiting ? 'Granting…' : `Grant ${grantWords({ canRead, canWrite })}`}
       </Button>
@@ -438,17 +442,17 @@ const Access = ({ project }: { readonly project: Project }) => {
   return (
     <Section
       title="Who can reach it"
-      lede="You can always read and write. A machine that reads keeps what it read: taking access away stops the next load, not the last one."
+      lede="You can always read and write. A service account that reads keeps what it read: taking access away stops the next load, not the last one."
     >
       {grants === null ? (
         <Skeleton rows={2} />
       ) : (
         <>
           {grants.length === 0 ? (
-            <Empty title="No machine has access">
+            <Empty title="No service account has access">
               <p>
-                Pair a machine with <Code>baymutt pair</Code>, then grant it here, or let it ask.
-                What it asks appears under Requests:
+                Log in a service account with <Code>baymutt login</Code>, then grant it here, or let
+                it ask. What it asks appears under Requests:
               </p>
               <CommandLine>{`baymutt access request ${project.name} --read --reason "…"`}</CommandLine>
             </Empty>

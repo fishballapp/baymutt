@@ -7,7 +7,7 @@
    are dropped from the built CSS and the body ships unstyled. */
 @source "../../node_modules/@internal/marketing/src";
 
-/* The landing's own: the bay, where the machines work, and a display scale the dashboard never
+/* The landing's own: the bay, where the service accounts work, and a display scale the dashboard never
    needs. The bay is water in both schemes: deep ink under paper in light, a step below the page
    in dark. Its text pairs are at least 4.5:1 on it and on a terminal. */
 :root {

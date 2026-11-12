@@ -50,7 +50,7 @@ export class Audit extends Context.Service<
       entry: AuditEntry,
       onlyIf?: Statement.Fragment,
     ) => Effect.Effect<Statement.Statement<unknown>>;
-    /** Newest first. The owner reads the account's; a machine reads what it did itself. */
+    /** Newest first. The owner reads the account's; a service account reads what it did itself. */
     readonly list: (query: {
       readonly actor: ActorIdentity;
       readonly projectId?: string | undefined;
@@ -101,7 +101,7 @@ export class Audit extends Context.Service<
           const size = limit ?? DEFAULT_PAGE;
           const rows = yield* page({
             accountId: actor.accountId,
-            actorId: actor._tag === 'Machine' ? actor.credentialId : null,
+            actorId: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
             projectId: projectId ?? null,
             before: before ?? null,
             // One more than asked for says whether another page follows.

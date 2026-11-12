@@ -1,11 +1,11 @@
 ---
-type Props = { name: string; machine: string; project: string; reason: string; where: string };
-const { name, machine, project, reason, where } = Astro.props;
+type Props = { name: string; serviceAccount: string; project: string; reason: string; where: string };
+const { name, serviceAccount, project, reason, where } = Astro.props;
 ---
 
 <div class="paste">
   <p class="title">Paste <code>{name}</code></p>
-  <p class="lede"><strong>{machine}</strong> asks for it in <code>{project}</code>.</p>
+  <p class="lede"><strong>{serviceAccount}</strong> asks for it in <code>{project}</code>.</p>
   <dl>
     <div><dt>Why</dt><dd>{reason}</dd></div>
     <div><dt>Where to find it</dt><dd>{where}</dd></div>

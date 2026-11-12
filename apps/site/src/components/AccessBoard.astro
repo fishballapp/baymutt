@@ -1,6 +1,6 @@
 ---
-// Which machine can reach which project in the example account, and who filled each cell. Every
-// filled cell is one the store lets an agent fill without the owner; the empty one a machine asks
+// Which service account can reach which project in the example account, and who filled each cell. Every
+// filled cell is one the store lets an agent fill without the owner; the empty one a service account asks
 // for is the one that waits for the owner.
 import { MAC_MINI, MACBOOK } from '../example.ts';
 import DecisionRow from './dashboard/DecisionRow.astro';
@@ -13,23 +13,23 @@ type Cell =
 
 const PROJECTS = ['app/dev', 'app/production'] as const;
 
-const ROWS: readonly { machine: string; origin: string; cells: readonly [Cell, Cell] }[] = [
+const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [Cell, Cell] }[] = [
   {
-    machine: MACBOOK.name,
-    origin: 'paired by you',
+    serviceAccount: MACBOOK.name,
+    origin: 'approved by you',
     cells: [
       { kind: 'grant', grant: 'read + write', by: 'made the project' },
       { kind: 'grant', grant: 'read + write', by: 'made the project' },
     ],
   },
   {
-    machine: 'CI deploy',
+    serviceAccount: 'CI deploy',
     origin: `made by ${MACBOOK.name}`,
     cells: [{ kind: 'none' }, { kind: 'grant', grant: 'read', by: `handed on by ${MACBOOK.name}` }],
   },
   {
-    machine: MAC_MINI.name,
-    origin: 'paired by you',
+    serviceAccount: MAC_MINI.name,
+    origin: 'approved by you',
     cells: [{ kind: 'none' }, { kind: 'asks', grant: 'read' }],
   },
 ];
@@ -46,16 +46,16 @@ const ROWS: readonly { machine: string; origin: string; cells: readonly [Cell, C
       </caption>
       <thead>
         <tr>
-          <th scope="col">Machine</th>
+          <th scope="col">Service account</th>
           {PROJECTS.map(project => <th scope="col"><code>{project}</code></th>)}
         </tr>
       </thead>
       <tbody>
         {
-          ROWS.map(({ machine, origin, cells }) => (
+          ROWS.map(({ serviceAccount, origin, cells }) => (
             <tr>
               <th scope="row">
-                <span class="machine">{machine}</span>
+                <span class="service-account">{serviceAccount}</span>
                 <span class="sub">{origin}</span>
               </th>
               {cells.map(cell => {
@@ -91,7 +91,7 @@ const ROWS: readonly { machine: string; origin: string; cells: readonly [Cell, C
   <div class="request">
     <Screen path="/requests" label="The request, as the dashboard shows it">
       <DecisionRow
-        machine={MAC_MINI.name}
+        serviceAccount={MAC_MINI.name}
         wants="read"
         project="app/production"
         reason="to run the checkout tests against live prices"
@@ -100,7 +100,7 @@ const ROWS: readonly { machine: string; origin: string; cells: readonly [Cell, C
   </div>
   <figcaption>
     An agent filled every other cell: MacBook made both projects, then made CI deploy and handed it
-    a read. Letting a machine read more is the one change that waits for you.
+    a read. Letting a service account read more is the one change that waits for you.
   </figcaption>
 </figure>
 
@@ -185,13 +185,13 @@ const ROWS: readonly { machine: string; origin: string; cells: readonly [Cell, C
     border-left: 1px solid var(--line);
   }
 
-  .machine,
+  .service-account,
   .grant {
     display: block;
     font-weight: 500;
   }
 
-  tbody th .machine {
+  tbody th .service-account {
     font-weight: 650;
   }
 

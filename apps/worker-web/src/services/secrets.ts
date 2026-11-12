@@ -430,11 +430,11 @@ export class Secrets extends Context.Service<
             yield* access.project(actor, projectId),
             'read',
           );
-          // Values leave through a paired machine, never a browser session: the dashboard seals
+          // Values leave through an approved service account, never a browser session: the dashboard seals
           // and never opens.
-          if (actor._tag !== 'Machine') {
+          if (actor._tag !== 'ServiceAccount') {
             return yield* new NoAccessError({
-              message: 'Only a paired machine loads a project’s values.',
+              message: 'Only an approved service account loads a project’s values.',
               need: 'read',
             });
           }
@@ -500,7 +500,7 @@ export class Secrets extends Context.Service<
         listPasteRequests: Effect.fn('Secrets.listPasteRequests')(function* (actor) {
           const rows = yield* pasteRows({
             accountId: actor.accountId,
-            createdBy: actor._tag === 'Machine' ? actor.credentialId : null,
+            createdBy: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
             id: null,
           }).pipe(Effect.orDie);
           return rows.map(toPasteRequest);
@@ -552,8 +552,8 @@ export class Secrets extends Context.Service<
 
         cancelPaste: Effect.fn('Secrets.cancelPaste')(function* ({ actor, id }) {
           const row = yield* pasteRow(id, actor.accountId);
-          // A machine cancels what it asked for; a request it did not make is not its to see.
-          if (actor._tag === 'Machine' && row.createdBy.id !== actor.credentialId) {
+          // A service account cancels what it asked for; a request it did not make is not its to see.
+          if (actor._tag === 'ServiceAccount' && row.createdBy.id !== actor.credentialId) {
             return yield* new NotFoundError({ message: 'No paste request has this id.' });
           }
           if (row.status !== 'pending') {

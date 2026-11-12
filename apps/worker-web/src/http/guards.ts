@@ -1,5 +1,5 @@
 // Declared with the API (`@baymutt/api` guards.ts) so the clients type their errors; implemented
-// here over `Auth` (the owner's session) and `Access` (a machine's bearer).
+// here over `Auth` (the owner's session) and `Access` (a service account's bearer).
 import {
   type ActorIdentity,
   Authenticated,
@@ -42,10 +42,12 @@ const withCredential = <A, E, R>(effect: Effect.Effect<A, E, R>, credential: Cre
 const CredentialsLive = Layer.succeed(
   Credentials,
   Credentials.of({
-    machine: (httpEffect, { credential }) =>
+    serviceAccount: (httpEffect, { credential }) =>
       isPresent(credential)
         ? withCredential(httpEffect, { _tag: 'Bearer', bearer: credential })
-        : Effect.fail(new UnauthorizedError({ message: 'This request sends no machine bearer.' })),
+        : Effect.fail(
+            new UnauthorizedError({ message: 'This request sends no service account bearer.' }),
+          ),
     session: (httpEffect, { credential }) =>
       withCredential(httpEffect, isPresent(credential) ? { _tag: 'Session' } : { _tag: 'None' }),
   }),
@@ -116,7 +118,7 @@ const AuthenticatedLive = Layer.effect(
         if (actor === null) {
           return yield* new UnauthorizedError({
             message:
-              'Send a machine bearer (`Authorization: Bearer …`, from `baymutt pair`), or sign in to the dashboard.',
+              'Send a service account bearer (`Authorization: Bearer …`, from `baymutt login`), or sign in to the dashboard.',
           });
         }
         return yield* Effect.provideService(httpEffect, CurrentActor, actor);

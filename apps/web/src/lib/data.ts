@@ -5,7 +5,7 @@ import type { AccessRequest, Grant, PairingRequest, Project } from '@baymutt/api
 import {
   approvePairing,
   createProjectKey,
-  grantToMachine,
+  grantToServiceAccount,
   openOwnedProject,
   publicKeyFingerprint,
   sealValue,
@@ -140,7 +140,7 @@ export const archiveProjectAtom = ApiClient.runtime.fn(
 
 /**
  * The project as the owner's vault proves it: the public key its creator vouched for (the owner,
- * or a machine the vault endorsed) and the private key the owner's wrap opens to. Nothing the
+ * or a service account the vault endorsed) and the private key the owner's wrap opens to. Nothing the
  * store lists beside the project is used past this point.
  */
 const ownedProject = Effect.fnUntraced(function* (owner: Owner, projectId: string) {
@@ -211,34 +211,34 @@ export const rollbackSecretAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['secrets', 'projects', 'audit'] },
 );
 
-// --- machines and access -----------------------------------------------------------------------
+// --- service accounts and access -----------------------------------------------------------------------
 
-export const machinesAtom = ApiClient.query('credentials', 'list', {
-  reactivityKeys: ['machines', 'grants'],
+export const serviceAccountsAtom = ApiClient.query('credentials', 'list', {
+  reactivityKeys: ['serviceAccounts', 'grants'],
 }).pipe(Atom.mapResult(({ credentials }) => credentials));
 
-/** Approves a pairing link: the vault vouches for the machine's key and tells it which account key to trust. */
+/** Approves a pairing link: the vault vouches for the service account's key and tells it which account key to trust. */
 export const pairAtom = ApiClient.runtime.fn(
   ({ owner, request }: { readonly owner: Owner; readonly request: PairingRequest }) =>
     Effect.gen(function* () {
-      const { pairingSecret, ...machine } = request;
-      const sealed = yield* keys(() => approvePairing(owner, { ...machine, pairingSecret }));
+      const { pairingSecret, ...serviceAccount } = request;
+      const sealed = yield* keys(() => approvePairing(owner, { ...serviceAccount, pairingSecret }));
       return yield* ApiClient.use(client =>
-        client.credentials.pair({ payload: { ...machine, ...sealed } }),
+        client.credentials.pair({ payload: { ...serviceAccount, ...sealed } }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['machines', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'audit'] },
 );
 
-export const revokeMachineAtom = ApiClient.runtime.fn(
+export const revokeServiceAccountAtom = ApiClient.runtime.fn(
   (id: string) =>
     ApiClient.use(client => client.credentials.revoke({ params: { id } })).pipe(faultsAsDefects),
-  { reactivityKeys: ['machines', 'grants', 'requests', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'grants', 'requests', 'audit'] },
 );
 
 type Reader = Pick<Grant, 'credentialId' | 'credentialPublicKey' | 'endorsement'>;
 
-/** A grant for a machine the vault vouches for: the proof of the project's key, and the wrap when it may read. */
+/** A grant for a service account the vault vouches for: the proof of the project's key, and the wrap when it may read. */
 const grantFor = Effect.fnUntraced(function* (
   owner: Owner,
   projectId: string,
@@ -247,7 +247,7 @@ const grantFor = Effect.fnUntraced(function* (
 ) {
   const { owned, keyVersion } = yield* ownedProject(owner, projectId);
   const grant = yield* keys(() =>
-    grantToMachine(
+    grantToServiceAccount(
       owner,
       owned,
       {
@@ -284,13 +284,13 @@ export const setGrantAtom = ApiClient.runtime.fn(
         }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['grants', 'machines', 'audit'] },
+  { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
 );
 
 export const removeGrantAtom = ApiClient.runtime.fn(
   (params: { readonly id: string; readonly credentialId: string }) =>
     ApiClient.use(client => client.projects.removeGrant({ params })).pipe(faultsAsDefects),
-  { reactivityKeys: ['grants', 'machines', 'audit'] },
+  { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
 );
 
 // --- requests ----------------------------------------------------------------------------------
@@ -324,7 +324,7 @@ export const approveAccessAtom = Atom.family((id: string) =>
           }),
         );
       }).pipe(faultsAsDefects),
-    { reactivityKeys: ['requests', 'grants', 'machines', 'audit'] },
+    { reactivityKeys: ['requests', 'grants', 'serviceAccounts', 'audit'] },
   ),
 );
 

@@ -1,5 +1,5 @@
 // The example account the page shows. The ids, keys, code and links were made by @baymutt/keys'
-// own functions (a machine token, its pairing code, a project key's fingerprint), and every
+// own functions (a service account token, its pairing code, a project key's fingerprint), and every
 // printed object has the shape the CLI prints, so a transcript here is one the CLI could print. A
 // long one shows a few of its fields and an ellipsis for the rest.
 // The page labels it an example.
@@ -32,7 +32,7 @@ const ASKED_AT = 1794390067512;
 
 export const PAIR: readonly TerminalLine[] = [
   { kind: 'command', text: 'npm install -g baymutt' },
-  { kind: 'command', text: `baymutt pair --name "${MAC_MINI.name}"` },
+  { kind: 'command', text: `baymutt login --name "${MAC_MINI.name}"` },
   {
     kind: 'stderr',
     text: `Ask the owner to open this link and approve it. The page must show the code ${MAC_MINI.code}.`,
@@ -40,7 +40,7 @@ export const PAIR: readonly TerminalLine[] = [
   { kind: 'stderr', text: PAIR_URL, isClipped: true },
   {
     kind: 'stdout',
-    value: { status: 'paired', machineId: MAC_MINI.id, account: ACCOUNT },
+    value: { status: 'loggedIn', serviceAccountId: MAC_MINI.id, account: ACCOUNT },
   },
 ];
 

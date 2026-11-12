@@ -1,4 +1,4 @@
-// The owner's account and what opens its vault. Every endpoint here is the dashboard's: a machine's
+// The owner's account and what opens its vault. Every endpoint here is the dashboard's: a service account's
 // bearer is refused.
 
 import { coded, ErrorMessageSchema } from '@internal/effect-api';

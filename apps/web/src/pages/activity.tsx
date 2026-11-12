@@ -15,7 +15,7 @@ const secret = ({ secretName, version }: AuditEvent) => (
 );
 
 /**
- * A grant's detail is "<machine>: <read + write>": as a sentence, "<read + write> for <machine>".
+ * A grant's detail is "<service account>: <read + write>": as a sentence, "<read + write> for <service account>".
  * Anything else is shown as it came.
  */
 const grantDetail = ({ detail }: AuditEvent) => {
@@ -32,9 +32,9 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
   'password.set': () => 'set a new password',
   'password.remove': () => 'removed the password',
   'recovery.rotate': () => 'made a new recovery key',
-  'credential.pair': ({ detail }) => <>paired the machine {detail}</>,
-  'credential.create': ({ detail }) => <>made the machine {detail}</>,
-  'credential.revoke': ({ detail }) => <>revoked the machine {detail}</>,
+  'credential.pair': ({ detail }) => <>approved the service account {detail}</>,
+  'credential.create': ({ detail }) => <>made the service account {detail}</>,
+  'credential.revoke': ({ detail }) => <>revoked the service account {detail}</>,
   'project.create': event => <>created {project(event)}</>,
   'project.archive': event => <>archived {project(event)}</>,
   'project.load': event => <>loaded {project(event)}</>,
@@ -127,7 +127,9 @@ export const ActivityPage = () => {
                     {DEEDS[event.action](event)}
                   </p>
                   <time
-                    dateTime={new Date(event.at).toISOString()}
+                    dateTime={Temporal.Instant.fromEpochMilliseconds(event.at).toString({
+                      fractionalSecondDigits: 3,
+                    })}
                     title={exactTime(event.at)}
                     className="shrink-0 text-sm whitespace-nowrap text-muted sm:text-right"
                   >

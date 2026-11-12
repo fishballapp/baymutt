@@ -4,8 +4,8 @@
 //   # @initBaymutt(key=$BAYMUTT_KEY)
 //   # @setValuesBulk(baymuttLoad("app/production"))
 //
-// `key` is the machine key where the environment holds one (CI). Left unset or empty, the key is
-// read from where `baymutt pair` put it: the login keychain on a Mac, an owner-only file elsewhere.
+// `key` is the service account key where the environment holds one (CI). Left unset or empty, the key is
+// read from where `baymutt login` put it: the login keychain on a Mac, an owner-only file elsewhere.
 import { loadProject } from '@baymutt/cli/load';
 import { plugin } from 'varlock/plugin-lib';
 
@@ -26,7 +26,7 @@ const optionalString = async (resolver: Resolver | undefined, what: string) => {
 
 plugin.registerRootDecorator({
   name: 'initBaymutt',
-  description: 'Connect to baymutt with this machine’s key, for baymuttLoad()',
+  description: 'Connect to baymutt with a service account key, for baymuttLoad()',
   isFunction: true,
   async process(argsVal) {
     const { key, url } = argsVal.objArgs ?? {};

@@ -5,8 +5,8 @@ import * as GlobalFlag from 'effect/cli/GlobalFlag';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
 import * as Logger from 'effect/Logger';
-import { accessCommand, auditCommand, machinesCommand } from './commands/access.ts';
-import { pairCommand } from './commands/pair.ts';
+import { accessCommand, auditCommand, serviceAccountsCommand } from './commands/access.ts';
+import { loginCommand } from './commands/login.ts';
 import { projectsCommand, whoamiCommand } from './commands/projects.ts';
 import { secretCommands } from './commands/secrets.ts';
 import { KeyStore } from './key-store.ts';
@@ -14,15 +14,15 @@ import { Settings } from './settings.ts';
 
 export const cli = Command.make('baymutt').pipe(
   Command.withDescription(
-    'A zero-knowledge secret store, from an agent’s side. Values are sealed and opened on this machine; every command prints JSON on stdout and no command prints a value. Failures are one JSON line on stderr: exit 2 usage, 3 not paired, 4 no access, 5 not found, 6 conflict, 7 unreachable, 8 integrity, 9 check differs.',
+    'A zero-knowledge secret store, from an agent’s side. Values are sealed and opened on this computer; every command prints JSON on stdout and no command prints a value. Failures are one JSON line on stderr: exit 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict, 7 unreachable, 8 integrity, 9 check differs.',
   ),
   Command.withSubcommands([
-    pairCommand,
+    loginCommand,
     whoamiCommand,
     projectsCommand,
     ...secretCommands,
     accessCommand,
-    machinesCommand,
+    serviceAccountsCommand,
     auditCommand,
   ]),
   // Inside the tree, so `--help` and `--version` never read the settings or the key.

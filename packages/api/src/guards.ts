@@ -1,4 +1,4 @@
-// A caller is the owner (the dashboard's session cookie) or a machine (its bearer). A credential
+// A caller is the owner (the dashboard's session cookie) or a service account (its bearer). A credential
 // that doesn't verify is refused, never downgraded.
 
 import { coded, ErrorMessageSchema } from '@internal/effect-api';
@@ -9,10 +9,10 @@ import * as OpenApi from 'effect/http-api/OpenApi';
 import type * as Redacted from 'effect/Redacted';
 import * as Schema from 'effect/Schema';
 
-export const MachineSecurity = HttpApiSecurity.bearer.pipe(
+export const ServiceAccountSecurity = HttpApiSecurity.bearer.pipe(
   HttpApiSecurity.annotate(
     OpenApi.Description,
-    'A machine’s bearer (`Authorization: Bearer baymutt_<credentialId>_<secret>`), derived from its machine key.',
+    'A service account’s bearer (`Authorization: Bearer baymutt_<credentialId>_<secret>`), derived from its service account key.',
   ),
 );
 
@@ -76,16 +76,16 @@ export type OwnerActor = {
   readonly userId: string;
 };
 
-export type MachineActor = {
-  readonly _tag: 'Machine';
+export type ServiceAccountActor = {
+  readonly _tag: 'ServiceAccount';
   readonly accountId: string;
   readonly credentialId: string;
   readonly name: string;
-  /** The machine that made this one, which bounds what it can ever hold. */
+  /** The service account that made this one, which bounds what it can ever hold. */
   readonly parentId: string | null;
 };
 
-export type ActorIdentity = OwnerActor | MachineActor;
+export type ActorIdentity = OwnerActor | ServiceAccountActor;
 
 export class CurrentActor extends Context.Service<CurrentActor, ActorIdentity>()(
   '@baymutt/api/CurrentActor',
@@ -120,10 +120,10 @@ export class Credentials extends HttpApiMiddleware.Service<
   { provides: CurrentCredential }
 >()('@baymutt/api/Credentials', {
   error: coded(UnauthorizedError),
-  security: { machine: MachineSecurity, session: SessionSecurity },
+  security: { serviceAccount: ServiceAccountSecurity, session: SessionSecurity },
 }) {}
 
-/** The owner with the vault open (a locked session may only read), or a machine of an account. */
+/** The owner with the vault open (a locked session may only read), or a service account of an account. */
 export class Authenticated extends HttpApiMiddleware.Service<
   Authenticated,
   { requires: CurrentCredential; provides: CurrentActor }
@@ -131,7 +131,7 @@ export class Authenticated extends HttpApiMiddleware.Service<
   error: [coded(UnauthorizedError), coded(AccountRequiredError), coded(VaultLockedError)],
 }) {}
 
-/** A dashboard session; a machine's bearer is refused. */
+/** A dashboard session; a service account's bearer is refused. */
 export class SignedIn extends HttpApiMiddleware.Service<
   SignedIn,
   { requires: CurrentCredential; provides: CurrentUser }

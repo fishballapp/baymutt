@@ -9,11 +9,10 @@ import {
   derivePasskeyEncKey,
   endorseCredential,
   endorsedPublicKey,
-  generateMachineToken,
   generateProjectKey,
   generateRecoveryKey,
-  grantToMachine,
-  machineKeyFromToken,
+  generateServiceAccountToken,
+  grantToServiceAccount,
   openAccountKey,
   openOwnedProject,
   openValue,
@@ -26,6 +25,7 @@ import {
   rewrapDek,
   sealValue,
   sealWelcome,
+  serviceAccountKeyFromToken,
   unwrapProjectKey,
   vaultProof,
   vouchedProjectKey,
@@ -41,48 +41,50 @@ const ownerVault = async () => {
   return { key, ...(await createVault(key)) };
 };
 
-describe('a machine key', () => {
+describe('a service account key', () => {
   it('derives its key pair and bearer from the seed alone, as HKDF says', async () => {
-    const token = generateMachineToken();
+    const token = generateServiceAccountToken();
     // The seed is base64url, so it may hold an underscore itself: split on the prefix's, not every one.
     const { credentialId, seed } =
       /^baymutt_key_(?<credentialId>[^_]+)_(?<seed>.+)$/.exec(token)?.groups ?? {};
-    const machine = await machineKeyFromToken(token);
-    const again = await machineKeyFromToken(token);
+    const serviceAccount = await serviceAccountKeyFromToken(token);
+    const again = await serviceAccountKeyFromToken(token);
     const seedBytes = Buffer.from(seed ?? '', 'base64url');
     const bearerSecret = Buffer.from(
       hkdfSync('sha256', seedBytes, Buffer.alloc(0), 'baymutt-machine-bearer', 32),
     ).toString('base64url');
 
-    expect(machine.credentialId).toBe(credentialId);
-    expect(machine.bearer).toBe(`baymutt_${credentialId}_${bearerSecret}`);
-    expect(machine.publicKey).toBe(again.publicKey);
-    expect(machine.bearer).not.toContain(seed);
-    expect(await parseBearer(machine.bearer)).toEqual({
+    expect(serviceAccount.credentialId).toBe(credentialId);
+    expect(serviceAccount.bearer).toBe(`baymutt_${credentialId}_${bearerSecret}`);
+    expect(serviceAccount.publicKey).toBe(again.publicKey);
+    expect(serviceAccount.bearer).not.toContain(seed);
+    expect(await parseBearer(serviceAccount.bearer)).toEqual({
       credentialId,
-      bearerHash: machine.bearerHash,
+      bearerHash: serviceAccount.bearerHash,
     });
   });
 
-  it('gives two machines nothing in common', async () => {
+  it('gives two service accounts nothing in common', async () => {
     const [one, two] = await Promise.all([
-      machineKeyFromToken(generateMachineToken()),
-      machineKeyFromToken(generateMachineToken()),
+      serviceAccountKeyFromToken(generateServiceAccountToken()),
+      serviceAccountKeyFromToken(generateServiceAccountToken()),
     ]);
 
     expect(one.publicKey).not.toBe(two.publicKey);
     expect(one.bearerHash).not.toBe(two.bearerHash);
   });
 
-  it('refuses what is not a machine key or a bearer', async () => {
-    const machine = await machineKeyFromToken(generateMachineToken());
+  it('refuses what is not a service account key or a bearer', async () => {
+    const serviceAccount = await serviceAccountKeyFromToken(generateServiceAccountToken());
 
-    await expect(machineKeyFromToken(machine.bearer)).rejects.toMatchObject({ code: 'malformed' });
-    await expect(machineKeyFromToken('baymutt_key_nope')).rejects.toMatchObject({
+    await expect(serviceAccountKeyFromToken(serviceAccount.bearer)).rejects.toMatchObject({
+      code: 'malformed',
+    });
+    await expect(serviceAccountKeyFromToken('baymutt_key_nope')).rejects.toMatchObject({
       code: 'malformed',
     });
     expect(await parseBearer('Bearer nope')).toBeNull();
-    expect(await parseBearer(`${machine.bearer}x`)).toBeNull();
+    expect(await parseBearer(`${serviceAccount.bearer}x`)).toBeNull();
   });
 });
 
@@ -233,20 +235,20 @@ describe('the owner’s vault', () => {
     });
   });
 
-  it('vouches for a paired machine’s key, for that credential only', async () => {
+  it('vouches for a paired service account’s key, for that credential only', async () => {
     const { vault } = await ownerVault();
-    const machine = await machineKeyFromToken(generateMachineToken());
-    const endorsement = await endorseCredential(vault, machine);
+    const serviceAccount = await serviceAccountKeyFromToken(generateServiceAccountToken());
+    const endorsement = await endorseCredential(vault, serviceAccount);
 
     expect(
-      await endorsedPublicKey(vault, { credentialId: machine.credentialId, endorsement }),
-    ).toBe(machine.publicKey);
+      await endorsedPublicKey(vault, { credentialId: serviceAccount.credentialId, endorsement }),
+    ).toBe(serviceAccount.publicKey);
     await expect(
       endorsedPublicKey(vault, { credentialId: crypto.randomUUID(), endorsement }),
     ).rejects.toMatchObject({ code: 'unreadable' });
     await expect(
       endorsedPublicKey((await ownerVault()).vault, {
-        credentialId: machine.credentialId,
+        credentialId: serviceAccount.credentialId,
         endorsement,
       }),
     ).rejects.toMatchObject({ code: 'unreadable' });
@@ -306,11 +308,11 @@ describe('Crockford base32', () => {
 
 describe('the pairing welcome', () => {
   const setup = async () => {
-    const machine = await machineKeyFromToken(generateMachineToken());
+    const serviceAccount = await serviceAccountKeyFromToken(generateServiceAccountToken());
     const pairing = {
       pairingSecret: randomToken(),
-      credentialId: machine.credentialId,
-      machinePublicKey: machine.publicKey,
+      credentialId: serviceAccount.credentialId,
+      serviceAccountPublicKey: serviceAccount.publicKey,
     };
     const welcome = {
       accountId: 'account-1',
@@ -319,15 +321,15 @@ describe('the pairing welcome', () => {
     return { pairing, welcome, sealedWelcome: await sealWelcome(pairing, welcome) };
   };
 
-  it('tells the machine which account key to trust', async () => {
+  it('tells the service account which account key to trust', async () => {
     const { pairing, welcome, sealedWelcome } = await setup();
 
     expect(await openWelcome(pairing, sealedWelcome)).toEqual(welcome);
   });
 
-  it('cannot be written without the pairing secret, or moved to another machine', async () => {
+  it('cannot be written without the pairing secret, or moved to another service account', async () => {
     const { pairing, welcome, sealedWelcome } = await setup();
-    const other = await machineKeyFromToken(generateMachineToken());
+    const other = await serviceAccountKeyFromToken(generateServiceAccountToken());
 
     const forged = await sealWelcome({ ...pairing, pairingSecret: randomToken() }, welcome);
 
@@ -336,7 +338,7 @@ describe('the pairing welcome', () => {
       openWelcome({ ...pairing, credentialId: other.credentialId }, sealedWelcome),
     ).rejects.toMatchObject({ code: 'unreadable' });
     await expect(
-      openWelcome({ ...pairing, machinePublicKey: other.publicKey }, sealedWelcome),
+      openWelcome({ ...pairing, serviceAccountPublicKey: other.publicKey }, sealedWelcome),
     ).rejects.toMatchObject({ code: 'unreadable' });
   });
 });
@@ -424,7 +426,7 @@ describe('a project key proof', () => {
 });
 
 describe('the owner and a project', () => {
-  /** An owner, a machine it paired, and a project that machine created. */
+  /** An owner, a service account it paired, and a project that service account created. */
   const setup = async () => {
     const { vault } = await ownerVault();
     const account = await createAccountKey(vault);
@@ -433,21 +435,25 @@ describe('the owner and a project', () => {
       accountId: BINDING.accountId,
       accountKey: await openAccountKey(vault, account),
     };
-    const machine = await machineKeyFromToken(generateMachineToken());
-    const endorsement = await endorseCredential(vault, machine);
-    const creator = { id: machine.credentialId, publicKey: machine.publicKey, endorsement };
+    const serviceAccount = await serviceAccountKeyFromToken(generateServiceAccountToken());
+    const endorsement = await endorseCredential(vault, serviceAccount);
+    const creator = {
+      id: serviceAccount.credentialId,
+      publicKey: serviceAccount.publicKey,
+      endorsement,
+    };
     const created = await createProjectKey({
-      voucherKey: machine.privateKey,
+      voucherKey: serviceAccount.privateKey,
       binding: BINDING,
       readers: [{ id: BINDING.accountId, publicKey: account.publicKey }],
     });
     const [grant] = created.grants;
     if (grant === undefined) throw new Error('no grant');
     const owned = { ...BINDING, ownerWrap: grant.wrap, ownerProof: grant.proof, creator };
-    return { owner, account, machine, creator, created, owned };
+    return { owner, account, serviceAccount, creator, created, owned };
   };
 
-  it('opens a project a paired machine created, to the key that machine vouched for', async () => {
+  it('opens a project a paired service account created, to the key that service account vouched for', async () => {
     const { owner, created, owned } = await setup();
 
     expect((await openOwnedProject(owner, owned)).publicKey).toBe(created.publicKey);
@@ -482,17 +488,17 @@ describe('the owner and a project', () => {
     }
   });
 
-  it('grants a paired machine the key it can open and a proof it can check', async () => {
+  it('grants a paired service account the key it can open and a proof it can check', async () => {
     const { owner, account, created, owned } = await setup();
-    const reader = await machineKeyFromToken(generateMachineToken());
+    const reader = await serviceAccountKeyFromToken(generateServiceAccountToken());
     const paired = {
       id: reader.credentialId,
       publicKey: reader.publicKey,
       endorsement: await endorseCredential(owner.vault, reader),
     };
 
-    const grant = await grantToMachine(owner, owned, paired, { canRead: true });
-    const writeOnly = await grantToMachine(owner, owned, paired, { canRead: false });
+    const grant = await grantToServiceAccount(owner, owned, paired, { canRead: true });
+    const writeOnly = await grantToServiceAccount(owner, owned, paired, { canRead: false });
 
     const publicKey = await vouchedProjectKey({
       proof: grant.keyProof,
@@ -514,27 +520,27 @@ describe('the owner and a project', () => {
     ).resolves.toBeDefined();
   });
 
-  it('grants nothing to a machine the vault did not endorse, or whose key the store swapped', async () => {
+  it('grants nothing to a service account the vault did not endorse, or whose key the store swapped', async () => {
     const { owner, owned } = await setup();
-    const reader = await machineKeyFromToken(generateMachineToken());
+    const reader = await serviceAccountKeyFromToken(generateServiceAccountToken());
     const endorsement = await endorseCredential(owner.vault, reader);
     const swapped = (await generateKeyPair()).publicKey;
 
-    for (const machine of [
+    for (const serviceAccount of [
       { id: reader.credentialId, publicKey: reader.publicKey, endorsement: null },
       { id: reader.credentialId, publicKey: swapped, endorsement },
     ]) {
-      await expect(grantToMachine(owner, owned, machine, { canRead: false })).rejects.toMatchObject(
-        { code: 'unreadable' },
-      );
+      await expect(
+        grantToServiceAccount(owner, owned, serviceAccount, { canRead: false }),
+      ).rejects.toMatchObject({ code: 'unreadable' });
     }
   });
 });
 
-describe('a machine key made by another machine', () => {
+describe('a service account key made by another service account', () => {
   it('carries its maker’s public key, which is what it trusts', async () => {
-    const maker = await machineKeyFromToken(generateMachineToken());
-    const made = await machineKeyFromToken(generateMachineToken(maker.publicKey));
+    const maker = await serviceAccountKeyFromToken(generateServiceAccountToken());
+    const made = await serviceAccountKeyFromToken(generateServiceAccountToken(maker.publicKey));
 
     expect(maker.issuerPublicKey).toBeNull();
     expect(made.issuerPublicKey).toBe(maker.publicKey);

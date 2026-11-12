@@ -10,7 +10,7 @@ type FieldProps = {
   readonly hint?: ReactNode;
   /** Shown in place of the hint, and announced. */
   readonly error?: string | null;
-  /** For what a machine reads and a person compares: names, keys. */
+  /** For what a service account reads and a person compares: names, keys. */
   readonly isCode?: boolean;
 };
 

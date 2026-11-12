@@ -17,7 +17,7 @@
  * and can seal a key pair of its own making into a wrap.
  *
  * So **which public key is the project's comes from the proof and from nothing else.** Only a
- * party the reader already trusts (the owner's account, the machine that made this one, itself)
+ * party the reader already trusts (the owner's account, the service account that made this one, itself)
  * can vouch for one, and a client seals to, and unwraps against, the key that was vouched for.
  */
 
@@ -62,7 +62,7 @@ const valueAad = ({ accountId, projectId, keyVersion, name, version }: ValueSlot
 
 export const generateProjectKey = generateKeyPair;
 
-/** SHA-256 of a public key: what a paste link carries in its fragment and a machine pins, to refuse a key the store swapped. */
+/** SHA-256 of a public key: what a paste link carries in its fragment and a service account pins, to refuse a key the store swapped. */
 export const publicKeyFingerprint = (publicKey: string): Promise<string> =>
   sha256Base64Url(decodePublicKey(publicKey, 'the public key'));
 
@@ -177,12 +177,12 @@ export const vouchedProjectKey = async ({
   }
   throw new VaultError(
     'unreadable',
-    'nobody this machine trusts vouched for this project’s public key',
+    'nobody this service account trusts vouched for this project’s public key',
   );
 };
 
 /**
- * A new project's key pair. Each first reader (the owner's account always, and the machine that
+ * A new project's key pair. Each first reader (the owner's account always, and the service account that
  * creates it) gets the private half wrapped to it and the creator's proof of the public half. The
  * private key never leaves this call unwrapped.
  */

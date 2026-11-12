@@ -13,7 +13,7 @@ import * as Schema from 'effect/Schema';
 export const EXIT_CODES = {
   failure: 1,
   usage: 2,
-  notPaired: 3,
+  notLoggedIn: 3,
   noAccess: 4,
   notFound: 5,
   conflict: 6,
@@ -23,10 +23,10 @@ export const EXIT_CODES = {
 } as const;
 type ExitKind = keyof typeof EXIT_CODES;
 
-/** The command was used wrongly, or this machine is not set up for it. */
+/** The command was used wrongly, or this computer is not logged in for it. */
 export class UsageError extends Schema.TaggedError<UsageError>()('UsageError', {
   message: Schema.String,
-  kind: Schema.Literals(['usage', 'notPaired', 'notFound', 'integrity', 'differs']),
+  kind: Schema.Literals(['usage', 'notLoggedIn', 'notFound', 'integrity', 'differs']),
 }) {}
 
 export const usage = (message: string, kind: UsageError['kind'] = 'usage') =>
@@ -47,8 +47,8 @@ export class Reported extends Schema.TaggedError<Reported>()('Reported', {
 const ApiErrorBodySchema = Schema.Struct({ code: Schema.String, message: Schema.String });
 
 const API_ERROR_KINDS: { readonly [code: string]: ExitKind } = {
-  UnauthorizedError: 'notPaired',
-  AccountRequiredError: 'notPaired',
+  UnauthorizedError: 'notLoggedIn',
+  AccountRequiredError: 'notLoggedIn',
   NoAccessError: 'noAccess',
   OwnerRequiredError: 'noAccess',
   NotFoundError: 'notFound',
@@ -129,7 +129,7 @@ export const crypto_ = <A>(run: () => Promise<A>): Effect.Effect<A, IntegrityErr
       cause instanceof VaultError
         ? Effect.fail(
             new IntegrityError({
-              message: `${cause.message}. Nothing was used. If the machine key is right, the store answered with something this machine did not seal.`,
+              message: `${cause.message}. Nothing was used. If the service account key is right, the store answered with something this computer did not seal.`,
             }),
           )
         : Effect.die(cause),

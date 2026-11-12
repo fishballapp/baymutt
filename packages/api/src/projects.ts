@@ -31,7 +31,7 @@ export const ProjectSchema = Schema.Struct({
   createdBy: ActorSchema,
   secretCount: Schema.Int,
   /**
-   * The proof of `publicKey` made for the calling machine: a client seals to the key the proof
+   * The proof of `publicKey` made for the calling service account: a client seals to the key the proof
    * opens to, never to `publicKey` as it stands here. Null for the owner, whose proof comes with
    * the owner wrap.
    */
@@ -63,7 +63,8 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'List projects',
-        description: 'The owner sees every project; a machine sees those it holds a grant on.',
+        description:
+          'The owner sees every project; a service account sees those it holds a grant on.',
       }),
     ),
     HttpApiEndpoint.post('create', '/projects', {
@@ -75,7 +76,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
         ownerWrap: WrapSchema,
         /** The creator's proof of `publicKey`, to the account. */
         ownerProof: KeyProofSchema,
-        /** The private key wrapped to the machine creating it, and its proof to itself. Null when the owner creates it. */
+        /** The private key wrapped to the service account creating it, and its proof to itself. Null when the owner creates it. */
         creatorWrap: Schema.NullOr(WrapSchema),
         creatorProof: Schema.NullOr(KeyProofSchema),
       }),
@@ -108,7 +109,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
         ownerWrap: WrapSchema,
         ownerProof: KeyProofSchema,
         keyVersion: Schema.Int,
-        /** The machine that created the project and made the proof, even if since revoked; null when the owner did. */
+        /** The service account that created the project and made the proof, even if since revoked; null when the owner did. */
         creator: Schema.NullOr(
           Schema.Struct({
             id: Schema.String,
@@ -128,7 +129,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
       params: { ...idParam, credentialId: Schema.String },
       payload: Schema.Struct({
         canWrite: Schema.Boolean,
-        /** The project key wrapped to the machine, or null for no read. */
+        /** The project key wrapped to the service account, or null for no read. */
         readWrap: Schema.NullOr(WrapSchema),
         keyProof: KeyProofSchema,
         keyVersion: Schema.Int,
@@ -137,7 +138,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Grant a machine access',
+        summary: 'Grant a service account access',
         description: 'Owner only: it is what lets a new party read.',
       }),
     ),
@@ -145,7 +146,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
       params: { ...idParam, credentialId: Schema.String },
       success: Schema.Struct({ removed: Schema.Boolean }),
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
-    }).annotateMerge(OpenApi.annotations({ summary: 'Remove a machine’s access' })),
+    }).annotateMerge(OpenApi.annotations({ summary: 'Remove a service account’s access' })),
   )
   .middleware(Authenticated)
   .middleware(Credentials)

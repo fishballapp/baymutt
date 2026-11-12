@@ -34,10 +34,10 @@ export const PairPage = () => {
   if (request === null) {
     return (
       <div className="max-w-[34rem] space-y-4">
-        <h1 className="text-xl">This is not a pairing link</h1>
+        <h1 className="text-xl">This is not a login link</h1>
         <p className="text-muted">
-          Run <Code>baymutt pair</Code> on the machine and open the whole link it prints, including
-          everything after the #.
+          Run <Code>baymutt login</Code> on the computer and open the whole link it prints,
+          including everything after the #.
         </p>
       </div>
     );
@@ -46,10 +46,10 @@ export const PairPage = () => {
   if (AsyncResult.isSuccess(pairing)) {
     return (
       <div className="max-w-[34rem] space-y-4">
-        <h1 className="text-xl">{request.name} is paired</h1>
+        <h1 className="text-xl">{request.name} is approved</h1>
         <p className="text-muted">
-          The terminal picks this up by itself. The machine has no access yet: it can ask with{' '}
-          <Code>baymutt access request</Code>, or you can grant it a project now.
+          The terminal picks this up by itself. The service account has no access yet: it can ask
+          with <Code>baymutt access request</Code>, or you can grant it a project now.
         </p>
         <Link to="/projects" className={buttonStyles({ intent: 'primary' })}>
           Go to projects
@@ -61,10 +61,11 @@ export const PairPage = () => {
   return (
     <div className="max-w-[34rem] space-y-5">
       <div>
-        <h1 className="text-xl">Pair {request.name}?</h1>
+        <h1 className="text-xl">Approve {request.name}?</h1>
         <p className="mt-2 text-muted">
-          A machine is asking to join <span className="text-foreground">{owner.accountName}</span>.
-          It will be able to ask you for access; it starts with none.
+          A service account is asking to join{' '}
+          <span className="text-foreground">{owner.accountName}</span>. It will be able to ask you
+          for access; it starts with none.
         </p>
       </div>
       <div className="rounded-panel border border-line bg-surface px-5 py-5 sm:px-6">
@@ -74,8 +75,8 @@ export const PairPage = () => {
         <p className="mt-2 text-sm text-muted">This must match the code in the terminal.</p>
       </div>
       <Notice tone="warn">
-        If the codes differ, or you did not run <Code>baymutt pair</Code> yourself, this link
-        carries someone else’s key. Do not pair it.
+        If the codes differ, or you did not run <Code>baymutt login</Code> yourself, this link
+        carries someone else’s key. Do not approve it.
       </Notice>
       {failureMessage(pairing) && <Notice>{failureMessage(pairing)}</Notice>}
       <div className="flex flex-wrap gap-2">
@@ -84,10 +85,10 @@ export const PairPage = () => {
           disabled={pairing.waiting || code === null}
           onClick={() => pair({ owner, request })}
         >
-          {pairing.waiting ? 'Pairing…' : 'The codes match: pair it'}
+          {pairing.waiting ? 'Approving…' : 'The codes match: approve it'}
         </Button>
         <Link to="/projects" className={buttonStyles()}>
-          Do not pair
+          Do not approve
         </Link>
       </div>
     </div>

@@ -1,7 +1,7 @@
 # baymutt
 
 A zero-knowledge secret store for people who run coding agents. Agents load, write and replace
-secrets with no approval prompt, and only the owner lets a machine read more. The store keeps every
+secrets with no approval prompt, and only the owner lets a service account read more. The store keeps every
 value sealed, so it cannot read them either.
 
 Hosted at **[baymutt.fsh.ba](https://baymutt.fsh.ba)**, free while it is in beta. The name is 秘密
@@ -9,11 +9,11 @@ Hosted at **[baymutt.fsh.ba](https://baymutt.fsh.ba)**, free while it is in beta
 
 ## Use it
 
-Create an account at [baymutt.fsh.ba](https://baymutt.fsh.ba/signup), then on each machine:
+Create an account at [baymutt.fsh.ba](https://baymutt.fsh.ba/signup), then, where an agent runs:
 
 ```sh
 npm install -g baymutt            # or run any command as `npx baymutt …`
-baymutt pair --name "MacBook"     # prints a link; the owner opens it and approves
+baymutt login --name "MacBook"     # makes a service account and prints a link; the owner opens it and approves
 baymutt projects create app/production
 baymutt generate app/production SESSION_SECRET
 ```
@@ -21,15 +21,15 @@ baymutt generate app/production SESSION_SECRET
 Every command prints JSON on stdout and one JSON error line on stderr, and no command prints a
 value. `baymutt --help` lists them all.
 
-- **A machine starts with no access.** It asks with `baymutt access request <project> --read`, and
-  the owner approves in the dashboard. A machine cannot widen its own access.
+- **A service account starts with no access.** It asks with `baymutt access request <project> --read`, and
+  the owner approves in the dashboard. A service account cannot widen its own access.
 - **A value only the owner can fetch** (a vendor's API key) is asked for with
   `baymutt request <project> <NAME>`, which prints a single-use link to a page where they paste it.
-- **A CI job gets a narrower machine of its own.** Its key goes straight into the secret store of
+- **A service account can make a narrower one**, for a CI job. Its key goes straight into the secret store of
   the CI, never onto a screen:
 
   ```sh
-  baymutt machines create --name "CI: deploy" --read app/production -- gh secret set BAYMUTT_KEY -R owner/repo
+  baymutt service-accounts create --name "CI: deploy" --read app/production -- gh secret set BAYMUTT_KEY -R owner/repo
   ```
 
 ### Loading values with varlock
@@ -46,19 +46,19 @@ DATABASE_URL=
 SESSION_SECRET=
 ```
 
-Then `varlock run -- <command>`. On a paired machine `BAYMUTT_KEY` stays unset and the plugin reads
-the key `baymutt pair` stored; in CI it is the job's secret.
+Then `varlock run -- <command>`. Where you ran `baymutt login`, `BAYMUTT_KEY` stays unset and the plugin reads
+the key it stored; in CI it is the job's secret.
 
 ## How it keeps values from the host
 
 - **Values are sealed and opened on the client**, with keys the host never holds: the owner's vault
-  is opened in the browser by a passkey or a password, and a machine's key is made on that machine
+  is opened in the browser by a passkey or a password, and a service account's key is made where it is used
   and never sent.
 - **Read access is cryptographic.** Reading a project means holding its key, wrapped to yours by
   someone who already holds it. The Worker stores ciphertext, public keys, wraps, grants and the
   audit log.
 - **A client does not trust a public key the store serves.** Which key belongs to a project or a
-  machine is vouched for by a party the reader already trusts, in a box only those two can make.
+  service account is vouched for by a party the reader already trusts, in a box only those two can make.
 - **The dashboard has no reveal.** A value can be put in through a browser and cannot be taken out
   through one.
 - **Every write is a new version and every delete is soft**, so what an agent changes can be rolled

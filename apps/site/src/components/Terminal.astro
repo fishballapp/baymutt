@@ -4,18 +4,18 @@ import type { TerminalLine } from '../terminal.ts';
 
 type Props = {
   /** Where it runs, such as "Mac mini". */
-  machine: string;
+  serviceAccount: string;
   lines: readonly TerminalLine[];
 };
 
-const { machine, lines } = Astro.props;
+const { serviceAccount, lines } = Astro.props;
 
 /** A value longer than this (a link) is cut to one line in an abridged output. */
 const LONG_VALUE = 60;
 ---
 
 <figure class="terminal">
-  <figcaption>{machine}</figcaption>
+  <figcaption>{serviceAccount}</figcaption>
   <pre><code>{lines.map(line => {
     if (line.kind === 'command') {
       return <span class="line command"><span class="prompt" aria-hidden="true">$ </span>{line.text}</span>;

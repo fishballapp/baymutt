@@ -1,5 +1,5 @@
 // Who acted, as history keeps it: stored beside what they did, so it reads the same after a
-// machine is renamed or revoked.
+// service account is renamed or revoked.
 import { type Actor, type ActorIdentity, ActorSchema } from '@baymutt/api';
 import * as Schema from 'effect/Schema';
 

@@ -45,7 +45,7 @@ export const AuditEventSchema = Schema.Struct({
   projectName: Schema.NullOr(Schema.String),
   secretName: Schema.NullOr(Schema.String),
   version: Schema.NullOr(Schema.Int),
-  /** The other party or the detail the action names: a machine's name, a grant's shape. */
+  /** The other party or the detail the action names: a service account's name, a grant's shape. */
   detail: Schema.NullOr(Schema.String),
 }).annotate({ identifier: 'AuditEvent' });
 export type AuditEvent = typeof AuditEventSchema.Type;
@@ -72,7 +72,8 @@ export class AuditGroup extends HttpApiGroup.make('audit')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Read the audit log',
-        description: 'Newest first. The owner reads all of it; a machine reads what it did itself.',
+        description:
+          'Newest first. The owner reads all of it; a service account reads what it did itself.',
       }),
     ),
   )
