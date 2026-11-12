@@ -1,4 +1,4 @@
-import { getConsent, setConsent } from './consent';
+import { getConsent, setConsent } from './consent.ts';
 
 const STYLE_ID = 'fishball-cookie-consent-styles';
 
