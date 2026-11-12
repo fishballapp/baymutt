@@ -170,7 +170,7 @@ describe('loading', () => {
       status: 200,
       body: { project, wrap: sealedLike('read-wrap'), readerId: reader.id, secrets },
     });
-    // Values leave through a paired service account: a browser session, vault open or not, loads none.
+    // Values load through a paired service account: the dashboard reveals one at a time instead.
     expect(await call(w, 'GET', `/projects/${projectId}/bundle`, owner)).toMatchObject({
       status: 403,
       body: { code: 'NoAccessError' },
@@ -194,6 +194,38 @@ describe('loading', () => {
       status: 200,
       body: { projects: [] },
     });
+  });
+});
+
+describe('revealing in the dashboard', () => {
+  it('answers the owner one version’s ciphertext with the vault open, and logs it', async () => {
+    const { w, owner, locked, projectId, reader, write } = await setup();
+    await write(projectId, 'API_KEY', 1);
+    await write(projectId, 'API_KEY', 2);
+    const reveal = (version: number, headers = owner) =>
+      call(w, 'POST', `/projects/${projectId}/secrets/API_KEY/reveal`, headers, { version });
+
+    expect(await reveal(1)).toEqual({
+      status: 200,
+      body: { version: 1, keyVersion: 1, ciphertext: sealedLike('API_KEY-v1', 96) },
+    });
+    expect(await reveal(3)).toMatchObject({ status: 404, body: { code: 'NotFoundError' } });
+    // A session the vault did not open, and a service account even with a read grant, get nothing.
+    expect(await reveal(2, locked)).toMatchObject({
+      status: 403,
+      body: { code: 'VaultLockedError' },
+    });
+    expect(await reveal(2, reader.headers)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    expect(
+      w.sqlite
+        .prepare(
+          "SELECT secret_name, version FROM audit_event WHERE action = 'secret.reveal' ORDER BY id",
+        )
+        .all(),
+    ).toEqual([{ secret_name: 'API_KEY', version: 1 }]);
   });
 });
 

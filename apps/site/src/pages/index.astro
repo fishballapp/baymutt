@@ -260,9 +260,9 @@ const softwareApplication = {
           <li>See every login and service account, what each is for and when it expires.</li>
           <li>Revoke one, and every service account it made.</li>
           <li>Read the log: who loaded, wrote or granted what.</li>
-          <li class="no-reveal">
-            There is no reveal. A value is a name, a size and a version, so a stolen session cannot
-            read one.
+          <li class="with-vault">
+            Reveal or copy a value. It opens in your browser with your vault, and the log records
+            it; a session an email link made cannot open one.
           </li>
         </ul>
       </div>
@@ -689,7 +689,7 @@ const softwareApplication = {
     border-top: 1px solid var(--line);
   }
 
-  .duties .no-reveal {
+  .duties .with-vault {
     border-top: 2px solid var(--foreground);
     font-weight: 500;
   }

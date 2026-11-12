@@ -24,6 +24,7 @@ export const AUDIT_ACTIONS = [
   'secret.write',
   'secret.delete',
   'secret.rollback',
+  'secret.reveal',
   'grant.set',
   'grant.remove',
   'access.request',

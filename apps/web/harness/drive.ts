@@ -29,6 +29,16 @@ const varlockBin = fileURLToPath(
 );
 
 const PHONE = { width: 390, height: 844 };
+
+/** A made-up value long enough to wrap: one line of JSON. */
+const LONG_VALUE = JSON.stringify({
+  type: 'service_account',
+  project_id: 'made-up-project',
+  private_key_id: 'f'.repeat(40),
+  client_email: 'deploy@made-up-project.example.test',
+  token_uri: 'https://example.test/token',
+  universe_domain: 'example.test',
+});
 const DESKTOP = { width: 1280, height: 860 };
 
 const fail = (message: string): never => {
@@ -177,6 +187,54 @@ const main = async (browser: Browser) => {
     'the dashboard seals a multi-line value and never shows it',
     !(await page.content()).includes('made-up-line-two'),
   );
+  await page.getByRole('button', { name: 'Add a secret' }).click();
+  await page.getByLabel('Name').fill('SERVICE_ACCOUNT_JSON');
+  await page.getByLabel('Value').fill(LONG_VALUE);
+  await page.getByRole('button', { name: 'Seal and save' }).click();
+  await page.getByText('SERVICE_ACCOUNT_JSON').waitFor();
+  await shoot(page, '06a-project-masked');
+
+  // --- reveal, hide and copy: opened in this browser, logged by the store -------------------
+  const signingRow = page.getByRole('listitem').filter({ hasText: 'SIGNING_KEY' });
+  await signingRow.getByRole('button', { name: 'Reveal' }).click();
+  await signingRow.getByText('made-up-line-two').waitFor();
+  check(
+    'Reveal opens a multi-line value in the browser, its lines kept',
+    (await signingRow.locator('pre').innerText()) ===
+      '-----BEGIN KEY-----\nmade-up-line-two\n-----END KEY-----',
+  );
+  const longRow = page.getByRole('listitem').filter({ hasText: 'SERVICE_ACCOUNT_JSON' });
+  await longRow.getByRole('button', { name: 'Reveal' }).click();
+  await longRow.getByRole('button', { name: 'Hide' }).waitFor();
+  check(
+    'a long value wraps inside its row',
+    await longRow.evaluate(row => row.scrollWidth <= row.clientWidth),
+  );
+  await shoot(page, '06b-project-revealed');
+  await shootPhone(page, '06c-project-revealed-phone');
+  await signingRow.getByRole('button', { name: 'Hide' }).click();
+  await longRow.getByRole('button', { name: 'Hide' }).click();
+  check('Hide masks it again', !(await page.content()).includes('made-up-line-two'));
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: WEB });
+  await signingRow.getByRole('button', { name: 'Copy' }).click();
+  await signingRow.getByRole('button', { name: 'Copied' }).waitFor();
+  check(
+    'Copy copies a value without showing it',
+    (await page.evaluate(() => navigator.clipboard.readText())) ===
+      '-----BEGIN KEY-----\nmade-up-line-two\n-----END KEY-----' &&
+      !(await page.content()).includes('made-up-line-two'),
+  );
+  await page.goto(`${WEB}/activity`);
+  await page
+    .getByText(/revealed or copied/)
+    .first()
+    .waitFor();
+  check(
+    'each reveal and copy is in the activity log',
+    (await page.getByText(/revealed or copied/).count()) === 3,
+  );
+  await page.goBack();
+  await page.getByRole('button', { name: 'Add a secret' }).waitFor();
 
   // --- log in: approving gives every project -------------------------------------------------
   const laptop = serviceAccount('laptop');
@@ -287,7 +345,7 @@ const main = async (browser: Browser) => {
   await stranger.close();
   check(
     'the pasted value is the project’s',
-    laptop.cli(['secrets', 'app/production']).json?.secrets.length === 4,
+    laptop.cli(['secrets', 'app/production']).json?.secrets.length === 5,
   );
 
   // --- a second login; a project one login makes reaches the other through the dashboard ------

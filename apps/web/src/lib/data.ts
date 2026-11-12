@@ -16,6 +16,7 @@ import {
   grantToServiceAccount,
   grantToTrustedReader,
   openOwnedProject,
+  openValue,
   publicKeyFingerprint,
   sealValue,
 } from '@baymutt/keys';
@@ -184,8 +185,8 @@ const ownedProject = Effect.fnUntraced(function* (owner: Owner, projectId: strin
     ownerProof,
     creator,
   };
-  const { publicKey } = yield* keys(() => openOwnedProject(owner, owned));
-  return { owned, publicKey, keyVersion };
+  const { publicKey, key } = yield* keys(() => openOwnedProject(owner, owned));
+  return { owned, publicKey, key, keyVersion };
 });
 
 /** Seals `value` here, to a public key the vault has just proved, and writes it as the next version. */
@@ -225,6 +226,46 @@ export const writeSecretAtom = ApiClient.runtime.fn(
 );
 
 type SecretKey = { readonly projectId: string; readonly name: string };
+
+/**
+ * One version's value, opened here with the project key the vault just proved. The store logs the
+ * request and never sees the value. One per secret, and nothing keeps it: a row resets it on hide
+ * and when it unmounts, and locking the vault unmounts every row.
+ */
+export const revealSecretAtom = Atom.family((_slot: string) =>
+  ApiClient.runtime.fn(
+    ({
+      owner,
+      projectId,
+      name,
+      version,
+    }: SecretKey & { readonly owner: Owner; readonly version: number }) =>
+      Effect.gen(function* () {
+        const { key } = yield* ownedProject(owner, projectId);
+        const sealed = yield* ApiClient.use(client =>
+          client.secrets.reveal({ params: { projectId, name }, payload: { version } }),
+        );
+        return yield* keys(
+          () =>
+            openValue({
+              projectKey: key,
+              slot: {
+                accountId: owner.accountId,
+                projectId,
+                keyVersion: sealed.keyVersion,
+                name,
+                // The version asked for, not the one the store says it answered: another
+                // version's ciphertext must not open under this one's label.
+                version,
+              },
+              ciphertext: sealed.ciphertext,
+            }),
+          'The store answered a value that does not open with this project’s key.',
+        );
+      }).pipe(faultsAsDefects),
+    { reactivityKeys: ['audit'] },
+  ),
+);
 
 export const removeSecretAtom = ApiClient.runtime.fn(
   (params: SecretKey) =>

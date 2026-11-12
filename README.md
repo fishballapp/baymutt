@@ -61,8 +61,9 @@ the key it stored; in CI it is the job's secret.
   public keys, wraps, grants and the audit log.
 - **A client does not trust a public key the store serves.** Which key belongs to a project or a
   service account is vouched for by a party the reader already trusts, in a box only those two can make.
-- **The dashboard has no reveal.** A value can be put in through a browser and cannot be taken out
-  through one.
+- **The dashboard reveals a value only with the vault open.** The owner's browser fetches one
+  version's ciphertext and opens it with the vault; the store logs the request and never sees the
+  value. A session an email link made cannot.
 - **Every write is a new version and every delete is soft**, so what an agent changes can be rolled
   back.
 

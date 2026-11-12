@@ -17,7 +17,7 @@ import {
   VersionSchema,
   WrapSchema,
 } from './fields.ts';
-import { Authenticated, Credentials } from './guards.ts';
+import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const SecretSchema = Schema.Struct({
   name: SecretNameSchema,
@@ -64,6 +64,14 @@ export const BundleSchema = Schema.Struct({
   ),
 }).annotate({ identifier: 'Bundle' });
 export type Bundle = typeof BundleSchema.Type;
+
+/** One version of one secret as sealed, for the owner's browser to open. */
+export const SealedVersionSchema = Schema.Struct({
+  version: VersionSchema,
+  keyVersion: Schema.Int,
+  ciphertext: CiphertextSchema,
+}).annotate({ identifier: 'SealedVersion' });
+export type SealedVersion = typeof SealedVersionSchema.Type;
 
 const projectParam = { projectId: Schema.String };
 const secretParams = { ...projectParam, name: SecretNameSchema };
@@ -141,6 +149,12 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
       success: Schema.Struct({ versions: Schema.Array(SecretVersionSchema) }),
       error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(OpenApi.annotations({ summary: 'A secret’s history' })),
+    HttpApiEndpoint.post('reveal', '/projects/:projectId/secrets/:name/reveal', {
+      params: secretParams,
+      payload: Schema.Struct({ version: VersionSchema }),
+      success: SealedVersionSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
   )
   .middleware(Authenticated)
   .middleware(Credentials)

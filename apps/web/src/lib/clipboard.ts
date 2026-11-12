@@ -16,3 +16,20 @@ export const useCopy = (text: string) => {
   };
   return [state, copy] as const;
 };
+
+/**
+ * Copies text that is still on its way. The clipboard is claimed in the click itself, so a browser
+ * that wants the user's gesture (Safari) still has it when the text arrives.
+ */
+export const copyWhenReady = async (text: Promise<string>): Promise<'copied' | 'failed'> => {
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/plain': text.then(value => new Blob([value], { type: 'text/plain' })),
+      }),
+    ]);
+    return 'copied';
+  } catch {
+    return 'failed';
+  }
+};

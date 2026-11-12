@@ -11,8 +11,10 @@ import {
   LinkSpentError,
   NoAccessError,
   NotFoundError,
+  OwnerRequiredError,
   type PasteRequest,
   type PasteTarget,
+  type SealedVersion,
   type Secret,
   type SecretVersion,
   UnauthorizedError,
@@ -123,6 +125,10 @@ export class Secrets extends Context.Service<
     readonly versions: (
       request: { readonly actor: ActorIdentity } & Slot,
     ) => Effect.Effect<ReadonlyArray<SecretVersion>, NotFoundError | NoAccessError>;
+    /** One version's ciphertext, for the owner's browser to open. Logged before it is answered. */
+    readonly reveal: (
+      request: { readonly actor: ActorIdentity; readonly version: number } & Slot,
+    ) => Effect.Effect<SealedVersion, NotFoundError | OwnerRequiredError>;
 
     readonly listPasteRequests: (
       actor: ActorIdentity,
@@ -202,6 +208,22 @@ export class Secrets extends Context.Service<
               JOIN secret_version v
                 ON v.project_id = s.project_id AND v.name = s.name AND v.version = s.current_version
               WHERE s.project_id = ${projectId} ORDER BY v.name`,
+      });
+
+      const sealedVersion = SqlSchema.findAll({
+        Request: Schema.Struct({
+          projectId: Schema.String,
+          name: Schema.String,
+          version: Schema.Finite,
+        }),
+        Result: Schema.Struct({
+          version: Schema.Finite,
+          keyVersion: Schema.Finite,
+          ciphertext: Schema.String,
+        }),
+        execute: ({ projectId, name, version }) =>
+          sql`SELECT version, key_version, ciphertext FROM secret_version
+              WHERE project_id = ${projectId} AND name = ${name} AND version = ${version}`,
       });
 
       const pasteRows = SqlSchema.findAll({
@@ -430,8 +452,8 @@ export class Secrets extends Context.Service<
             yield* access.project(actor, projectId),
             'read',
           );
-          // Values leave through an approved service account, never a browser session: the dashboard seals
-          // and never opens.
+          // A project's values load through an approved service account; the dashboard reveals
+          // one value at a time, through `reveal`.
           if (actor._tag !== 'ServiceAccount') {
             return yield* new NoAccessError({
               message: 'Only an approved service account loads a project’s values.',
@@ -495,6 +517,34 @@ export class Secrets extends Context.Service<
             });
           }
           return rows.map(({ isCurrent, ...row }) => ({ ...row, isCurrent: isCurrent !== 0 }));
+        }),
+
+        reveal: Effect.fn('Secrets.reveal')(function* ({ actor, projectId, name, version }) {
+          // A service account loads values through the bundle; this is the dashboard's, which
+          // only the owner opens.
+          if (actor._tag !== 'Owner') {
+            return yield* new OwnerRequiredError({
+              message:
+                'Only the owner reveals a value, in the dashboard. A service account loads values with `baymutt` through varlock.',
+            });
+          }
+          const { project } = yield* access.ownersProject(actor, projectId);
+          const [row] = yield* sealedVersion({ projectId, name, version }).pipe(Effect.orDie);
+          if (row === undefined) {
+            return yield* new NotFoundError({
+              message: `This project has no version ${version} of ${name}.`,
+            });
+          }
+          yield* (yield* audit.entry({
+            accountId: actor.accountId,
+            actor: actorOf(actor),
+            action: 'secret.reveal',
+            projectId,
+            projectName: project.name,
+            secretName: name,
+            version,
+          })).pipe(Effect.orDie);
+          return row;
         }),
 
         listPasteRequests: Effect.fn('Secrets.listPasteRequests')(function* (actor) {

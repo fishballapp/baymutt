@@ -1,9 +1,11 @@
 import { type Grant, type Project, type Secret, SecretNameSchema } from '@baymutt/api';
-import { useAtom, useAtomValue } from '@effect/atom-react';
+import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { CaretLeftIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from '@tanstack/react-router';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import * as Atom from 'effect/reactivity/Atom';
 import * as Schema from 'effect/Schema';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
 import {
   Code,
@@ -23,6 +25,7 @@ import {
 import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
 import { TextArea, TextField } from '../components/ui/field.tsx';
+import { copyWhenReady } from '../lib/clipboard.ts';
 import {
   archiveProjectAtom,
   grantsAtom,
@@ -30,6 +33,7 @@ import {
   projectAtom,
   removeGrantAtom,
   removeSecretAtom,
+  revealSecretAtom,
   rollbackSecretAtom,
   secretsAtom,
   versionsAtom,
@@ -40,8 +44,9 @@ import { failureMessage, latest } from '../lib/result.ts';
 
 const isSecretName = Schema.is(SecretNameSchema);
 
-const SEALED_NOTE =
-  'Sealed in this browser to the project’s key. baymutt cannot read it, and this page will not show it again.';
+const SEALED_NOTE = 'Sealed in this browser to the project’s key: baymutt cannot read it.';
+
+const OPEN_FAILED = 'Something went wrong on our side; try again.';
 
 /** Name and value in; a sealed version out. `name` fixed means replacing that secret. */
 const ValueForm = ({
@@ -140,6 +145,100 @@ const History = ({ projectId, name }: { readonly projectId: string; readonly nam
   );
 };
 
+/**
+ * The current value, masked. Reveal opens it in this browser and Copy copies it without showing
+ * it; either is logged. Nothing keeps it: Hide, leaving the page and locking the vault drop it.
+ */
+const SecretValue = ({
+  project,
+  name,
+  version,
+}: {
+  readonly project: Project;
+  readonly name: string;
+  readonly version: number;
+}) => {
+  const owner = useOwner();
+  // The version is part of the slot, so a replaced value never shows under the new version.
+  const slot = `${project.id}/${name}/${version}`;
+  const [shown, reveal] = useAtom(revealSecretAtom(`${slot}:show`));
+  const [copying, open] = useAtom(revealSecretAtom(`${slot}:copy`), { mode: 'promiseExit' });
+  // A plain setter for resets: in `promiseExit` mode a reset would wait on a result that never comes.
+  const forgetCopy = useAtomSet(revealSecretAtom(`${slot}:copy`));
+  const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
+  useEffect(
+    () => () => {
+      reveal(Atom.Reset);
+      forgetCopy(Atom.Reset);
+    },
+    [reveal, forgetCopy],
+  );
+  const value = AsyncResult.isSuccess(shown) ? shown.value : null;
+  const request = { owner, projectId: project.id, name, version };
+  const revealLabel = value === null ? 'Reveal' : 'Hide';
+
+  const copy = async () => {
+    setCopied('idle');
+    if (value !== null) {
+      setCopied(await copyWhenReady(Promise.resolve(value)));
+      return;
+    }
+    const opening = open(request);
+    const text = opening.then(exit =>
+      exit._tag === 'Success' ? exit.value : Promise.reject(exit.cause),
+    );
+    // The clipboard may refuse before the value arrives, and nothing else would hear this fail.
+    text.catch(() => undefined);
+    const outcome = await copyWhenReady(text);
+    // A failure stays, to say why; a copied value goes.
+    if ((await opening)._tag !== 'Success') return;
+    forgetCopy(Atom.Reset);
+    setCopied(outcome);
+  };
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+        <pre className="max-h-48 min-w-0 flex-1 basis-60 overflow-auto whitespace-pre-wrap rounded-control border border-line bg-sunken px-3 py-1 font-mono text-sm [overflow-wrap:anywhere]">
+          {value ?? (
+            <>
+              <span aria-hidden="true">••••••••••••</span>
+              <span className="sr-only">Value hidden</span>
+            </>
+          )}
+        </pre>
+        <div className="-mx-2.5 flex gap-0.5 sm:mx-0">
+          <Button
+            size="sm"
+            intent="subtle"
+            aria-pressed={value !== null}
+            disabled={shown.waiting}
+            onClick={() => (value === null ? reveal(request) : reveal(Atom.Reset))}
+          >
+            {shown.waiting ? 'Revealing…' : revealLabel}
+          </Button>
+          <Button size="sm" intent="subtle" disabled={copying.waiting} onClick={copy}>
+            {copied === 'copied' ? 'Copied' : 'Copy'}
+          </Button>
+        </div>
+      </div>
+      <p aria-live="polite" className="sr-only">
+        {copied === 'copied' ? `${name} copied` : ''}
+      </p>
+      {(failureMessage(shown, OPEN_FAILED) ?? failureMessage(copying, OPEN_FAILED)) && (
+        <Notice className="mt-2">
+          {failureMessage(shown, OPEN_FAILED) ?? failureMessage(copying, OPEN_FAILED)}
+        </Notice>
+      )}
+      {copied === 'failed' && (
+        <Notice className="mt-2">
+          This browser refused the clipboard. Reveal it to select it.
+        </Notice>
+      )}
+    </div>
+  );
+};
+
 const SecretRow = ({ project, secret }: { readonly project: Project; readonly secret: Secret }) => {
   const [panel, setPanel] = useState<'replace' | 'history' | null>(null);
   const [removing, remove] = useAtom(removeSecretAtom, { mode: 'promiseExit' });
@@ -209,6 +308,9 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
           )}
         </RowActions>
       </div>
+      {secret.currentVersion !== null && (
+        <SecretValue project={project} name={secret.name} version={secret.currentVersion} />
+      )}
       {panel !== null && (
         <div className="mt-3 border-line border-t pt-3">
           {panel === 'replace' ? (
@@ -229,7 +331,7 @@ const Secrets = ({ project }: { readonly project: Project }) => {
   return (
     <Section
       title="Secrets"
-      lede="Names, versions and sizes. No value is ever shown here: there is nothing to reveal."
+      lede="Each value is sealed to the project’s key and masked here. Reveal and Copy open it in this browser, and Activity records each time."
       action={
         !isAdding && (
           <Button intent="primary" onClick={() => setIsAdding(true)}>

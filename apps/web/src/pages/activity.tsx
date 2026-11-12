@@ -63,6 +63,11 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
       rolled {secret(event)} back in {project(event)}
     </>
   ),
+  'secret.reveal': event => (
+    <>
+      revealed or copied {secret(event)} in {project(event)}
+    </>
+  ),
   'grant.set': event => (
     <>
       set {grantDetail(event)} on {project(event)}

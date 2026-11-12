@@ -14,7 +14,7 @@ import { Audit } from './audit.ts';
 type Methods = ReturnType<typeof serviceAccounts> &
   Omit<ReturnType<typeof projects>, 'grantStatement'> &
   ReturnType<typeof accessRequests> &
-  Pick<ReturnType<typeof makeLookups>, 'needing'>;
+  Pick<ReturnType<typeof makeLookups>, 'needing' | 'ownersProject'>;
 
 export class Access extends Context.Service<Access, Methods>()(
   '@baymutt/worker-web/services/Access',
@@ -31,6 +31,7 @@ export class Access extends Context.Service<Access, Methods>()(
         ...projectMethods,
         ...accessRequests({ sql, audit, grantStatement }),
         needing: lookups.needing,
+        ownersProject: lookups.ownersProject,
       });
     }),
   );

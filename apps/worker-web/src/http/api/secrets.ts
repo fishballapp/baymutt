@@ -32,6 +32,9 @@ const SecretHandlers = HttpApiBuilder.group(
       versions: Effect.fn(function* ({ params }) {
         return { versions: yield* secrets.versions({ actor: yield* CurrentActor, ...params }) };
       }),
+      reveal: Effect.fn(function* ({ params, payload }) {
+        return yield* secrets.reveal({ actor: yield* CurrentActor, ...params, ...payload });
+      }),
     });
   }),
 );
