@@ -1,0 +1,71 @@
+---
+type Props = { machine: string; account: string; code: string };
+const { machine, account, code } = Astro.props;
+---
+
+<div class="pair">
+  <p class="title">Pair {machine}?</p>
+  <p class="lede">
+    A machine is asking to join <strong>{account}</strong>. It will be able to ask you for access; it
+    starts with none.
+  </p>
+  <div class="code-panel">
+    <p>This must match the code in the terminal</p>
+    <code class="code">{code}</code>
+  </div>
+  <div class="actions" aria-hidden="true">
+    <span class="btn primary">The codes match: pair it</span>
+    <span class="btn">Do not pair</span>
+  </div>
+</div>
+
+<style>
+  p {
+    margin: 0;
+  }
+
+  .title {
+    font-size: 1.25rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+
+  .lede {
+    margin-top: 0.25rem;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .lede strong {
+    color: var(--foreground);
+    font-weight: 500;
+  }
+
+  .code-panel {
+    margin-top: 1rem;
+    padding: 0.875rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-panel);
+    background: var(--surface);
+  }
+
+  .code-panel p {
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .code {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 1.75rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+</style>

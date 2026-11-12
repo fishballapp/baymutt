@@ -1,0 +1,273 @@
+---
+// Which machine can reach which project in the example account, and who filled each cell. Every
+// filled cell is one the store lets an agent fill without the owner; the empty one a machine asks
+// for is the one that waits for the owner.
+import { MAC_MINI, MACBOOK } from '../example.ts';
+import DecisionRow from './dashboard/DecisionRow.astro';
+import Screen from './dashboard/Screen.astro';
+
+type Cell =
+  | { kind: 'grant'; grant: string; by: string }
+  | { kind: 'none' }
+  | { kind: 'asks'; grant: string };
+
+const PROJECTS = ['app/dev', 'app/production'] as const;
+
+const ROWS: readonly { machine: string; origin: string; cells: readonly [Cell, Cell] }[] = [
+  {
+    machine: MACBOOK.name,
+    origin: 'paired by you',
+    cells: [
+      { kind: 'grant', grant: 'read + write', by: 'made the project' },
+      { kind: 'grant', grant: 'read + write', by: 'made the project' },
+    ],
+  },
+  {
+    machine: 'CI deploy',
+    origin: `made by ${MACBOOK.name}`,
+    cells: [{ kind: 'none' }, { kind: 'grant', grant: 'read', by: `handed on by ${MACBOOK.name}` }],
+  },
+  {
+    machine: MAC_MINI.name,
+    origin: 'paired by you',
+    cells: [{ kind: 'none' }, { kind: 'asks', grant: 'read' }],
+  },
+];
+---
+
+<figure class="board">
+  <div class="sheet">
+    <table>
+      <caption>
+        <span class="caption-row">
+          <span class="title">Who can reach what</span>
+          <span class="example">An example account</span>
+        </span>
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">Machine</th>
+          {PROJECTS.map(project => <th scope="col"><code>{project}</code></th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {
+          ROWS.map(({ machine, origin, cells }) => (
+            <tr>
+              <th scope="row">
+                <span class="machine">{machine}</span>
+                <span class="sub">{origin}</span>
+              </th>
+              {cells.map(cell => {
+                if (cell.kind === 'none') {
+                  return (
+                    <td class="none">
+                      <span aria-hidden="true">–</span>
+                      <span class="sr-only">no access</span>
+                    </td>
+                  );
+                }
+                if (cell.kind === 'asks') {
+                  return (
+                    <td class="asks">
+                      <span class="grant">asks to {cell.grant}</span>
+                      <span class="sub">waits for you</span>
+                    </td>
+                  );
+                }
+                return (
+                  <td>
+                    <span class="grant">{cell.grant}</span>
+                    <span class="sub">{cell.by}</span>
+                  </td>
+                );
+              })}
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+  <div class="request">
+    <Screen path="/requests" label="The request, as the dashboard shows it">
+      <DecisionRow
+        machine={MAC_MINI.name}
+        wants="read"
+        project="app/production"
+        reason="to run the checkout tests against live prices"
+      />
+    </Screen>
+  </div>
+  <figcaption>
+    An agent filled every other cell: MacBook made both projects, then made CI deploy and handed it
+    a read. Letting a machine read more is the one change that waits for you.
+  </figcaption>
+</figure>
+
+<style>
+  .board {
+    margin: 0;
+    display: grid;
+    container-type: inline-size;
+  }
+
+  .sheet {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-panel);
+    background: var(--surface);
+    overflow: hidden;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  caption {
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+  }
+
+  .caption-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+
+  .title {
+    font-size: 1rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+
+  .example {
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  th,
+  td {
+    padding: 0.875rem 1.25rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  thead th {
+    padding-block: 0.625rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.8125rem;
+    font-weight: 400;
+  }
+
+  thead th code {
+    color: var(--foreground);
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  tbody tr + tr {
+    border-top: 1px solid var(--line);
+  }
+
+  tbody th,
+  tbody td {
+    width: calc(100% / 3);
+    font-weight: 400;
+  }
+
+  td + td,
+  th + td {
+    border-left: 1px solid var(--line);
+  }
+
+  .machine,
+  .grant {
+    display: block;
+    font-weight: 500;
+  }
+
+  tbody th .machine {
+    font-weight: 650;
+  }
+
+  .sub {
+    display: block;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .none {
+    color: var(--muted);
+  }
+
+  /* The one cell the owner fills: marked in words, and outlined in the accent like focus. */
+  .asks {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+
+  .asks .grant {
+    color: var(--foreground);
+  }
+
+  .asks .sub {
+    color: var(--foreground);
+  }
+
+  /* The request hangs under its cell, joined to it by one rule. */
+  .request {
+    position: relative;
+    justify-self: end;
+    width: min(100%, 42rem);
+    padding-top: 1.75rem;
+  }
+
+  .request::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: calc(100cqi / 6);
+    height: 1.75rem;
+    border-left: 2px solid var(--accent);
+  }
+
+  figcaption {
+    max-width: 44rem;
+    margin-top: 1rem;
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  @media (width < 40rem) {
+    th,
+    td {
+      padding: 0.75rem 0.625rem;
+    }
+
+    caption {
+      padding: 0.875rem 0.75rem;
+    }
+
+    thead th code {
+      font-size: 0.75rem;
+    }
+
+    .sub {
+      font-size: 0.75rem;
+    }
+  }
+</style>

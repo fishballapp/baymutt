@@ -1,0 +1,49 @@
+{
+  "name": "@baymutt/web",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "baymutt's dashboard: the owner's side. A Vite/React SPA that holds the vault in memory, seals and wraps in the browser, and never shows a value.",
+  "exports": {
+    "./styles.css": "./src/styles/index.css"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run --passWithNoTests",
+    "check:effect": "effect-tsgo diagnostics --project tsconfig.app.json --format text",
+    "drive": "node harness/drive.ts"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@baymutt/api": "workspace:*",
+    "@baymutt/keys": "workspace:*",
+    "@better-auth/passkey": "catalog:",
+    "@effect/atom-react": "catalog:",
+    "@fontsource-variable/geist-mono": "catalog:",
+    "@fontsource-variable/schibsted-grotesk": "catalog:",
+    "@phosphor-icons/react": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "better-auth": "catalog:",
+    "class-variance-authority": "catalog:",
+    "cn": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:web",
+    "react-dom": "catalog:web",
+    "zustand": "catalog:"
+  },
+  "devDependencies": {
+    "@internal/vite-plugins": "workspace:*",
+    "@playwright/test": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@tanstack/router-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:web",
+    "@types/react-dom": "catalog:web",
+    "@vitejs/plugin-react": "catalog:",
+    "tailwindcss": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

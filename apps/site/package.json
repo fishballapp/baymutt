@@ -1,0 +1,31 @@
+{
+  "name": "@baymutt/site",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "baymutt's landing page, the one prerendered page at / of baymutt.fsh.ba. Astro 7 + Tailwind v4 on the dashboard's own tokens; the baymutt-web Worker serves it beside the dashboard.",
+  "scripts": {
+    "dev": "astro dev --port 4391",
+    "build": "astro build",
+    "check": "astro check",
+    "astro": "astro",
+    "images": "node scripts/build-images.ts"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "catalog:",
+    "@baymutt/web": "workspace:*",
+    "@fontsource-variable/geist-mono": "catalog:",
+    "@fontsource-variable/schibsted-grotesk": "catalog:",
+    "@internal/marketing": "workspace:*",
+    "@tailwindcss/vite": "catalog:",
+    "astro": "catalog:",
+    "tailwindcss": "catalog:"
+  },
+  "devDependencies": {
+    "@astrojs/check": "catalog:",
+    "@internal/html-screenshot": "workspace:*",
+    "sharp": "catalog:",
+    "typescript": "catalog:ts6"
+  }
+}

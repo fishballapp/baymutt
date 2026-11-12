@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/keys" },
+    { "path": "./packages/api" },
+    { "path": "./packages/varlock-plugin" },
+    { "path": "./apps/worker-web" },
+    { "path": "./apps/web" },
+    { "path": "./apps/site" },
+    { "path": "./apps/cli" },
+    { "path": "./internal/cookie-consent" },
+    { "path": "./internal/effect-api" },
+    { "path": "./internal/effect-worker" },
+    { "path": "./internal/email" },
+    { "path": "./internal/marketing" },
+    { "path": "./internal/vite-plugins" },
+    { "path": "./internal/zk-vault" },
+    { "path": "./internal/html-screenshot" }
+  ]
+}

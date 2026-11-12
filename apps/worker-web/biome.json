@@ -1,0 +1,17 @@
+{
+  "root": false,
+  "extends": "//",
+  "linter": {
+    "rules": {
+      "correctness": {
+        "useImportExtensions": "error"
+      },
+      "suspicious": {
+        "noConsole": "off"
+      }
+    }
+  },
+  "files": {
+    "includes": ["**", "!worker-configuration.d.ts"]
+  }
+}

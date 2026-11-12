@@ -1,0 +1,728 @@
+---
+import AccessBoard from '../components/AccessBoard.astro';
+import ActivityRows from '../components/dashboard/ActivityRows.astro';
+import PairingCode from '../components/dashboard/PairingCode.astro';
+import PastePage from '../components/dashboard/PastePage.astro';
+import Screen from '../components/dashboard/Screen.astro';
+import SecretRows from '../components/dashboard/SecretRows.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import Terminal from '../components/Terminal.astro';
+import {
+  ACCESS_REQUEST_COMMAND,
+  ACCOUNT,
+  MAC_MINI,
+  MACBOOK,
+  PAIR,
+  PROJECT,
+  REQUEST,
+  SCHEMA_FILE,
+  WRITE,
+} from '../example.ts';
+import Layout from '../layouts/Layout.astro';
+
+const softwareApplication = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'baymutt',
+  applicationCategory: 'DeveloperApplication',
+  url: 'https://baymutt.fsh.ba/',
+  description:
+    'A zero-knowledge secret store for people who run coding agents. Agents load and write secrets with no approval prompt; only the owner lets a machine read more.',
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', description: 'Free in beta' },
+  publisher: { '@type': 'Organization', name: 'Fishball Ltd', url: 'https://fishball.ltd' },
+};
+---
+
+<Layout
+  title="baymutt: secrets your coding agents use without asking"
+  description="A zero-knowledge secret store for coding agents. Agents load and write secrets with no approval prompt; only you let a machine read more. Free while in beta."
+  structuredData={softwareApplication}
+>
+  <div class="page">
+    <SiteHeader />
+  </div>
+
+  <main>
+    <section class="page hero" aria-labelledby="hero-title">
+      <h1 id="hero-title">Agents use secrets without asking you. Only you widen what they can read.</h1>
+      <div class="offer">
+        <p>
+          baymutt is a secret store for people who run coding agents. Agents load, write and
+          replace secrets with no approval prompt, and the store keeps every value sealed, so it
+          cannot read them either.
+        </p>
+        <div class="actions">
+          <a class="primary" href="/signup">Create an account</a>
+          <a class="secondary" href="/signin">Sign in</a>
+        </div>
+        <p class="beta">Free while baymutt is in beta.</p>
+      </div>
+      <div class="board" id="board">
+        <AccessBoard />
+      </div>
+    </section>
+
+    <section class="page ruled problem" aria-labelledby="problem-title">
+      <h2 id="problem-title">An approval you can’t judge protects nothing.</h2>
+      <div class="prose">
+        <p>
+          Give a few agents a password manager and it asks you to approve their loads: a Touch ID
+          prompt here, a dialog per terminal there, and none of them says which agent wants what,
+          or why. You approve them all, because the work stops until you do.
+        </p>
+        <p>
+          The other way out is pasting keys into the conversation, where they sit beside every web
+          page, package and issue comment the agent reads next.
+        </p>
+        <p class="turn">
+          baymutt takes the prompt out of using a secret and keeps you for the one decision that
+          matters: which machine can read which project.
+        </p>
+      </div>
+    </section>
+
+    <section class="bay" aria-labelledby="how-title" id="how">
+      <div class="page">
+        <header class="bay-head">
+          <h2 id="how-title">On the machine, nobody waits.</h2>
+          <p>
+            Agents work through the <code>baymutt</code> CLI and a varlock plugin. Every command
+            prints JSON on stdout, and none prints a value. You are needed to pair a machine, to
+            let one read more, and to paste a value only you can fetch.
+          </p>
+        </header>
+
+        <ol class="steps">
+          <li class="step">
+            <div class="step-text">
+              <h3>Pair a machine, once.</h3>
+              <p>
+                The machine makes its own key and prints a link. You open it, check that the code
+                matches the terminal’s, and pair it. It starts with no access.
+              </p>
+            </div>
+            <div class="step-visuals">
+              <Terminal machine={MAC_MINI.name} lines={PAIR} />
+              <Screen path="/pair" label="The pairing page, as the dashboard shows it">
+                <PairingCode machine={MAC_MINI.name} account={ACCOUNT.name} code={MAC_MINI.code} />
+              </Screen>
+            </div>
+          </li>
+
+          <li class="step">
+            <div class="step-text">
+              <h3>Load with no prompt.</h3>
+              <p>
+                Name the project in your <code>.env.schema</code>. varlock loads its values through
+                the plugin and opens them on the machine, with no prompt and no cache. The
+                machine’s key stays in the login keychain, or in <code>BAYMUTT_KEY</code> on CI.
+              </p>
+            </div>
+            <div class="step-visuals single">
+              <figure class="file">
+                <figcaption><code>.env.schema</code></figcaption>
+                <pre><code>{SCHEMA_FILE.map(line => (
+                  <span class:list={['line', { comment: line.startsWith('#') }]}>{line}</span>
+                ))}</code></pre>
+              </figure>
+            </div>
+          </li>
+
+          <li class="step">
+            <div class="step-text">
+              <h3>Write without you.</h3>
+              <p>
+                With a write grant, an agent sets, generates, deletes and rolls back values. Every
+                write is a new version and every delete is soft, so a wrong one rolls back. Writing
+                needs no key: a write grant can never read.
+              </p>
+            </div>
+            <div class="step-visuals">
+              <Terminal machine={MACBOOK.name} lines={WRITE} />
+              <Screen
+                path={`/projects/${PROJECT.id}`}
+                label="A project’s secrets, as the dashboard shows them"
+                isFlush
+              >
+                <SecretRows
+                  secrets={[
+                    { name: 'DATABASE_URL', size: '157 B', version: 2, by: 'MacBook, yesterday' },
+                    {
+                      name: 'SESSION_SECRET',
+                      size: '103 B',
+                      version: 4,
+                      by: 'MacBook, just now',
+                      isWritten: true,
+                    },
+                    { name: 'STRIPE_SECRET_KEY', size: '167 B', version: 1, by: 'Paste link, 2 days ago' },
+                  ]}
+                />
+              </Screen>
+            </div>
+          </li>
+
+          <li class="step">
+            <div class="step-text">
+              <h3>Ask you for what only you can fetch.</h3>
+              <p>
+                When a value lives in a vendor’s dashboard, the agent asks for it by name. The link
+                works once, for 15 minutes. You paste the value, on your phone if that’s where you
+                are, and your browser seals it before it is sent.
+              </p>
+            </div>
+            <div class="step-visuals">
+              <Terminal machine={MACBOOK.name} lines={REQUEST} />
+              <Screen path="/paste" label="The paste page, as the dashboard shows it">
+                <PastePage
+                  name="RESEND_API_KEY"
+                  machine={MACBOOK.name}
+                  project={PROJECT.name}
+                  reason="to send sign-in emails"
+                  where="Resend dashboard, API Keys"
+                />
+              </Screen>
+            </div>
+          </li>
+        </ol>
+
+        <p class="bay-foot">
+          To read a project it can’t, a machine runs <code>{ACCESS_REQUEST_COMMAND}</code>, and
+          the request waits for you, <a href="#board">as at the top of this page</a>.
+        </p>
+      </div>
+    </section>
+
+    <section class="page limits" aria-labelledby="limits-title" id="limits">
+      <div class="limits-head">
+        <h2 id="limits-title">baymutt cannot read what it stores.</h2>
+        <p>
+          Values are sealed on the machine or in your browser, to a project key the store never
+          holds. Writing needs only the project’s public key. Reading needs the project key wrapped
+          to that one machine, which only a holder of the key can make. So a machine cannot widen
+          its own access, and neither can the store.
+        </p>
+      </div>
+
+      <div class="ledger">
+        <div class="column">
+          <h3>The store cannot</h3>
+          <ul>
+            <li>Read a value, in any version.</li>
+            <li>
+              Read a project’s, the account’s or a machine’s private key, your data key or your
+              recovery key.
+            </li>
+            <li>Let a machine read a project.</li>
+            <li>Move a value to another name, version or project.</li>
+          </ul>
+        </div>
+        <div class="column">
+          <h3>The store can still</h3>
+          <ul>
+            <li>See names, sizes, versions, times, and who did what.</li>
+            <li>Withhold anything, or answer with an older version.</li>
+            <li>Put a value of its own in a slot: a sealed box does not say who sealed it.</li>
+            <li>
+              Serve a dashboard or paste page that leaks what is typed into it. The CLI and the
+              plugin run code the store does not serve.
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <ul class="fine">
+        <li>
+          Zero knowledge here is about reading, not integrity or availability. If the store is
+          unreachable, loads stop, locally and in CI.
+        </li>
+        <li>
+          Values are sealed with X25519 and AES-256-GCM, through WebCrypto. A passkey opens your
+          vault through its PRF output, a password through 650,000 rounds of PBKDF2. An email link
+          signs you in and never opens it.
+        </li>
+        <li>
+          Revoking a machine stops its next load. What it already read stays read: replace those
+          values at their vendors.
+        </li>
+      </ul>
+    </section>
+
+    <section class="page ruled owner" aria-labelledby="owner-title">
+      <div class="owner-text">
+        <h2 id="owner-title">You open it when an agent asks.</h2>
+        <ul class="duties">
+          <li>Pair a machine by comparing a code.</li>
+          <li>Approve or deny a request in one line, with the machine’s reason beside it.</li>
+          <li>Paste a value an agent asked for.</li>
+          <li>Grant, narrow and remove access. Revoke a machine, and every machine it made.</li>
+          <li>Read the log: who loaded, wrote or granted what.</li>
+          <li class="no-reveal">
+            There is no reveal. A value is a name, a size and a version, so a stolen session cannot
+            read one.
+          </li>
+        </ul>
+      </div>
+      <Screen path="/activity" label="The activity log, as the dashboard shows it" isFlush>
+        <ActivityRows
+          entries={[
+            {
+              who: MAC_MINI.name,
+              what: ['asked for access to ', { code: PROJECT.name }],
+              when: 'just now',
+            },
+            { who: 'Owner', what: [`paired the machine ${MAC_MINI.name}`], when: '3 minutes ago' },
+            {
+              who: 'Paste link',
+              what: [
+                'pasted ',
+                { code: 'STRIPE_SECRET_KEY' },
+                ' (v1) into ',
+                { code: PROJECT.name },
+              ],
+              when: '2 days ago',
+            },
+            {
+              who: MACBOOK.name,
+              what: ['asked for ', { code: 'STRIPE_SECRET_KEY' }, ' in ', { code: PROJECT.name }],
+              when: '2 days ago',
+            },
+            { who: 'CI deploy', what: ['loaded ', { code: PROJECT.name }], when: '2 days ago' },
+            { who: MACBOOK.name, what: ['made the machine CI deploy'], when: '3 days ago' },
+          ]}
+        />
+      </Screen>
+    </section>
+
+    <section class="page ruled close" aria-labelledby="close-title">
+      <h2 id="close-title">Free while baymutt is in beta.</h2>
+      <p>
+        Sign up with an email link, then a passkey or a password, and keep the recovery key it
+        shows you once. In beta an account holds up to 100 projects, 200 machines and 500 secrets a
+        project.
+      </p>
+      <div class="actions">
+        <a class="primary" href="/signup">Create an account</a>
+        <a class="secondary" href="/signin">Sign in</a>
+      </div>
+    </section>
+  </main>
+
+  <div class="page">
+    <SiteFooter />
+  </div>
+</Layout>
+
+<style>
+  .page {
+    --gutter: clamp(1.25rem, 4vw, 3rem);
+    width: 100%;
+    max-width: 76rem;
+    margin-inline: auto;
+    padding-inline: var(--gutter);
+  }
+
+  /* A hairline over a section, as wide as its content. */
+  .ruled {
+    background: linear-gradient(var(--line) 0 0) top center / calc(100% - 2 * var(--gutter)) 1px
+      no-repeat;
+  }
+
+  main a:not(.primary, .secondary) {
+    color: inherit;
+  }
+
+  h1,
+  h2,
+  h3 {
+    margin: 0;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  code {
+    font-size: 0.92em;
+  }
+
+  /* The offer: the headline holds the width, the case and the action sit at its foot. */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2rem;
+    padding-block: clamp(2rem, 6vw, 4.5rem) clamp(4rem, 9vw, 7rem);
+  }
+
+  h1 {
+    max-width: 20ch;
+    font-size: clamp(2.375rem, 1.1rem + 4.2vw, 4.75rem);
+    line-height: 1.02;
+    letter-spacing: -0.035em;
+  }
+
+  .offer {
+    display: grid;
+    gap: 1.25rem;
+    max-width: 34rem;
+    font-size: 1.0625rem;
+    color: var(--muted);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .primary,
+  .secondary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.875rem;
+    padding: 0 1.25rem;
+    border-radius: var(--radius-control);
+    font-size: 1rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition:
+      background-color 150ms ease-out,
+      border-color 150ms ease-out;
+  }
+
+  .primary {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+
+  .primary:hover {
+    background: color-mix(in oklch, var(--accent) 88%, var(--foreground));
+  }
+
+  .secondary {
+    border: 1px solid var(--line);
+    color: var(--foreground);
+  }
+
+  .secondary:hover {
+    border-color: var(--accent);
+  }
+
+  .beta {
+    color: var(--foreground);
+    font-size: 0.9375rem;
+    font-weight: 500;
+  }
+
+  .board {
+    margin-top: clamp(1rem, 3vw, 2.5rem);
+    scroll-margin-top: 1.5rem;
+  }
+
+  @media (width >= 64rem) {
+    .hero {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+      column-gap: 4rem;
+      align-items: end;
+    }
+
+    .offer {
+      padding-bottom: 0.5rem;
+    }
+
+    .board {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* One claim, held for a screen. */
+  .problem {
+    display: grid;
+    gap: 2rem;
+    padding-block: clamp(3rem, 8vw, 6rem) clamp(5rem, 11vw, 9rem);
+  }
+
+  h2 {
+    font-size: clamp(1.875rem, 1.2rem + 2.4vw, 3.25rem);
+    line-height: 1.06;
+    letter-spacing: -0.03em;
+  }
+
+  .problem h2 {
+    max-width: 16ch;
+  }
+
+  .prose {
+    display: grid;
+    gap: 1rem;
+    max-width: 38rem;
+    color: var(--muted);
+    font-size: 1.0625rem;
+  }
+
+  .turn {
+    margin-top: 0.5rem;
+    color: var(--foreground);
+    font-size: 1.25rem;
+    font-weight: 500;
+    line-height: 1.4;
+    letter-spacing: -0.01em;
+  }
+
+  @media (width >= 64rem) {
+    .problem {
+      grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+      column-gap: 4rem;
+    }
+  }
+
+  /* The bay: where the machines work. Water in both schemes. */
+  .bay {
+    padding-block: clamp(4rem, 9vw, 7rem);
+    border-block: 1px solid var(--bay-line);
+    background: var(--bay);
+    color: var(--fog);
+  }
+
+  .bay-head {
+    display: grid;
+    gap: 1.25rem;
+    max-width: 46rem;
+  }
+
+  .bay-head p,
+  .step-text p,
+  .bay-foot {
+    color: var(--fog-dim);
+  }
+
+  .bay-head p {
+    font-size: 1.0625rem;
+  }
+
+  .bay :focus-visible {
+    outline-color: var(--bay-accent);
+  }
+
+  .steps {
+    margin: clamp(3rem, 6vw, 4.5rem) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .step {
+    display: grid;
+    gap: 1.5rem;
+    padding-block: 2.5rem;
+    border-top: 1px solid var(--bay-line);
+  }
+
+  .step-text {
+    display: grid;
+    align-content: start;
+    gap: 0.5rem;
+    max-width: 40rem;
+  }
+
+  h3 {
+    font-size: 1.25rem;
+    letter-spacing: -0.02em;
+  }
+
+  .step-visuals {
+    display: grid;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  @media (width >= 64rem) {
+    .step {
+      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+      column-gap: 3rem;
+    }
+  }
+
+  @media (width >= 80rem) {
+    .step-visuals:not(.single) {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    }
+  }
+
+  .file {
+    margin: 0;
+    border: 1px solid var(--bay-line);
+    border-radius: var(--radius-panel);
+    background: var(--bay-terminal);
+  }
+
+  .file figcaption {
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--bay-line);
+    color: var(--fog-dim);
+    font-size: 0.8125rem;
+  }
+
+  .file pre {
+    margin: 0;
+    padding: 1rem;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .file .line {
+    display: block;
+  }
+
+  .file .comment {
+    color: var(--fog-dim);
+  }
+
+  .bay-foot {
+    padding-top: 2.5rem;
+    border-top: 1px solid var(--bay-line);
+  }
+
+  .bay-foot a {
+    text-decoration-color: var(--bay-accent);
+  }
+
+  /* What the store cannot do, and what it still can, side by side as a ledger. */
+  .limits {
+    display: grid;
+    gap: clamp(2.5rem, 5vw, 3.5rem);
+    padding-block: clamp(5rem, 11vw, 9rem);
+  }
+
+  .limits-head {
+    display: grid;
+    gap: 1.25rem;
+    max-width: 44rem;
+  }
+
+  .limits-head p {
+    color: var(--muted);
+    font-size: 1.0625rem;
+  }
+
+  .ledger {
+    display: grid;
+    border-top: 2px solid var(--foreground);
+  }
+
+  .column {
+    padding-block: 1.25rem;
+  }
+
+  .column h3 {
+    font-size: 1rem;
+  }
+
+  .column ul {
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .column li {
+    padding-block: 0.75rem;
+    border-top: 1px solid var(--line);
+  }
+
+  .column + .column {
+    border-top: 1px solid var(--line);
+  }
+
+  @media (width >= 48rem) {
+    .ledger {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .column + .column {
+      border-top: 0;
+      border-left: 1px solid var(--line);
+      padding-left: 2rem;
+    }
+
+    .column:first-child {
+      padding-right: 2rem;
+    }
+  }
+
+  .fine {
+    display: grid;
+    gap: 0.75rem;
+    max-width: 46rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--muted);
+    font-size: 0.9375rem;
+  }
+
+  /* The owner's side: what they do, beside the log of what everyone did. */
+  .owner {
+    display: grid;
+    gap: 2.5rem;
+    padding-block: clamp(4rem, 9vw, 7rem);
+    align-items: start;
+  }
+
+  .owner-text {
+    display: grid;
+    gap: 1.75rem;
+    align-content: start;
+  }
+
+  .owner h2 {
+    max-width: 14ch;
+  }
+
+  .duties {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .duties li {
+    padding-block: 0.75rem;
+    border-top: 1px solid var(--line);
+  }
+
+  .duties .no-reveal {
+    border-top: 2px solid var(--foreground);
+    font-weight: 500;
+  }
+
+  @media (width >= 64rem) {
+    .owner {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+      column-gap: 4rem;
+    }
+  }
+
+  /* The close: the offer once more, then the action. No pitch. */
+  .close {
+    display: grid;
+    gap: 1.25rem;
+    justify-items: start;
+    padding-block: clamp(4rem, 9vw, 7rem) clamp(4rem, 8vw, 6rem);
+  }
+
+  .close h2 {
+    max-width: 18ch;
+    font-size: clamp(2.25rem, 1.2rem + 3.6vw, 4.25rem);
+  }
+
+  .close p {
+    max-width: 40rem;
+    color: var(--muted);
+    font-size: 1.0625rem;
+  }
+
+  .close .actions {
+    margin-top: 0.75rem;
+  }
+</style>

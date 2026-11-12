@@ -1,0 +1,28 @@
+---
+// The dog tag, as apps/web/public/icon.svg draws it, in `mutt`.
+type Props = { size: number };
+const { size } = Astro.props;
+---
+
+<svg
+  class="mark"
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 32 32"
+  width={size}
+  height={size}
+  aria-hidden="true"
+  focusable="false"
+>
+  <path
+    fill="currentColor"
+    fill-rule="evenodd"
+    d="M10 3h12a5 5 0 0 1 5 5v13a8 8 0 0 1-8 8h-6a8 8 0 0 1-8-8V8a5 5 0 0 1 5-5Zm6 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"
+  ></path>
+</svg>
+
+<style>
+  .mark {
+    color: var(--mutt);
+    flex: none;
+  }
+</style>

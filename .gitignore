@@ -1,0 +1,15 @@
+node_modules
+*.tsbuildinfo
+dist
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+# Cloudflare Workers local state and dev secrets
+.wrangler/
+.dev.vars*
+
+# Astro's generated types
+.astro/
+tmp

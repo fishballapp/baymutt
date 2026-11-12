@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "baymutt-web",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "ef1db00eff7bafcb12e7acb5754d1377",
+  "dev": { "port": 8790, "inspector_port": 9240 },
+  // dist/ is the landing page (@baymutt/site) at / and the dashboard (@baymutt/web) with its
+  // index.html renamed _shell.html, put together by scripts/assemble-assets.ts. /api/* runs the
+  // Worker first; any other path that is not a file reaches the Worker too, which answers it with
+  // the shell through ASSETS (the dashboard's router owns those paths).
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "baymutt",
+      "database_id": "0883834c-cd8f-4526-803f-2bfcec7a8671",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Its domain, baymutt.fsh.ba, is not declared here: a route would make `wrangler dev` answer
+  // every local request as that host. `scripts/deploy-worker.ts` passes it at deploy (`--domains`).
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "vars": {
+    "MODE": "production",
+    // The forwardemail alias sign-in links are sent as. Its password is a Worker secret.
+    "MAIL_SENDER": "noreply@baymutt.fsh.ba"
+  }
+}

@@ -1,0 +1,118 @@
+@import "tailwindcss";
+@import "@fontsource-variable/schibsted-grotesk";
+@import "@fontsource-variable/geist-mono";
+
+/* Both schemes live in one `light-dark()`, so no `dark:` variant appears in markup. */
+:root {
+  color-scheme: light dark;
+  --background: light-dark(oklch(0.972 0.008 85), oklch(0.2 0.014 235));
+  --surface: light-dark(oklch(0.992 0.005 85), oklch(0.235 0.016 235));
+  --sunken: light-dark(oklch(0.948 0.01 85), oklch(0.17 0.013 235));
+  --foreground: light-dark(oklch(0.24 0.02 250), oklch(0.93 0.008 220));
+  --muted: light-dark(oklch(0.47 0.02 250), oklch(0.72 0.014 225));
+  --line: light-dark(oklch(0.87 0.012 85), oklch(0.33 0.018 235));
+  --accent: light-dark(oklch(0.47 0.085 205), oklch(0.8 0.095 195));
+  --accent-foreground: light-dark(oklch(0.985 0.005 85), oklch(0.2 0.02 220));
+  --accent-soft: light-dark(oklch(0.93 0.03 200), oklch(0.31 0.04 205));
+  --danger: light-dark(oklch(0.5 0.16 28), oklch(0.76 0.13 28));
+  --danger-soft: light-dark(oklch(0.94 0.03 28), oklch(0.3 0.06 28));
+  --warn: light-dark(oklch(0.5 0.11 70), oklch(0.82 0.12 80));
+  --warn-soft: light-dark(oklch(0.94 0.045 85), oklch(0.31 0.045 75));
+  --mutt: oklch(0.72 0.1 72);
+  /* Behind the dialog: darker than the page in both schemes. */
+  --scrim: light-dark(oklch(0.24 0.02 250 / 0.3), oklch(0.08 0.01 235 / 0.6));
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-mutt: var(--mutt);
+  --color-scrim: var(--scrim);
+  --color-transparent: transparent;
+
+  --font-sans: "Schibsted Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+
+  --animate-written: written 1.2s ease-out;
+  @keyframes written {
+    from {
+      background-color: var(--accent-soft);
+    }
+  }
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-size: 16px;
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    scrollbar-color: var(--line) transparent;
+  }
+  body {
+    font-size: var(--text-base);
+    line-height: 1.5;
+    min-height: 100dvh;
+    overflow-wrap: break-word;
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--foreground);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  h1,
+  h2,
+  h3 {
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  /* Schibsted Grotesk's tabular figures widen its colon and comma too, so only tables of bare
+     numbers take them; a time keeps its proportional figures. */
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+  input,
+  textarea {
+    caret-color: var(--accent);
+  }
+  a {
+    text-underline-offset: 3px;
+  }
+}
+
+/* Outside every layer, so it wins over the utilities that set a duration. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation: none;
+    transition: none;
+  }
+}

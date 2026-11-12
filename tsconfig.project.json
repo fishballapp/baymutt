@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    // Relative imports carry `.ts`, so Node runs any module as it is.
+    "allowImportingTsExtensions": true,
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.project.tsbuildinfo"
+  }
+}

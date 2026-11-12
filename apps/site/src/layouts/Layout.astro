@@ -1,0 +1,34 @@
+---
+import MarketingLayout from '@internal/marketing/Layout.astro';
+import '../styles/global.css';
+
+type Props = {
+  title: string;
+  description: string;
+  structuredData?: Record<string, unknown>;
+};
+
+const { title, description, structuredData } = Astro.props;
+---
+
+<MarketingLayout
+  title={title}
+  description={description}
+  ogSiteName="baymutt"
+  ogLocale="en_GB"
+  ogImage={{
+    path: '/og.png',
+    alt: 'baymutt: agents use secrets without asking you. Only you widen what they can read.',
+    width: 1200,
+    height: 630,
+  }}
+  themeColor={[
+    { media: '(prefers-color-scheme: light)', content: '#f8f5ee' },
+    { media: '(prefers-color-scheme: dark)', content: '#12181c' },
+  ]}
+  htmlLang="en"
+  fontHref={null}
+  structuredData={structuredData}
+>
+  <slot />
+</MarketingLayout>

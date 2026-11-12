@@ -1,0 +1,92 @@
+---
+import { jsonLines } from '../json.ts';
+import type { TerminalLine } from '../terminal.ts';
+
+type Props = {
+  /** Where it runs, such as "Mac mini". */
+  machine: string;
+  lines: readonly TerminalLine[];
+};
+
+const { machine, lines } = Astro.props;
+---
+
+<figure class="terminal">
+  <figcaption>{machine}</figcaption>
+  <pre><code>{lines.map(line => {
+    if (line.kind === 'command') {
+      return <span class="line command"><span class="prompt" aria-hidden="true">$ </span>{line.text}</span>;
+    }
+    if (line.kind === 'stderr') {
+      return <span class:list={['line', 'stderr', { clipped: line.isClipped }]}>{line.text}</span>;
+    }
+    return jsonLines(line.value).map(tokens => (
+      <span class="line">{tokens.map(token => <span class={token.kind}>{token.text}</span>)}</span>
+    ));
+  })}</code></pre>
+</figure>
+
+<style>
+  .terminal {
+    margin: 0;
+    border: 1px solid var(--bay-line);
+    border-radius: var(--radius-panel);
+    background: var(--bay-terminal);
+    color: var(--fog);
+    min-width: 0;
+  }
+
+  figcaption {
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--bay-line);
+    color: var(--fog-dim);
+    font-size: 0.8125rem;
+  }
+
+  pre {
+    margin: 0;
+    padding: 1rem;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .line {
+    display: block;
+  }
+
+  .line + .command {
+    margin-top: 1rem;
+  }
+
+  .prompt {
+    color: var(--bay-accent);
+    user-select: none;
+  }
+
+  .stderr {
+    color: var(--fog-dim);
+  }
+
+  /* The pairing link is a few hundred characters of percent-encoding: one line of it says enough. */
+  .clipped {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .key {
+    color: var(--fog-dim);
+  }
+
+  .number,
+  .literal {
+    color: var(--bay-accent);
+  }
+
+  ::selection {
+    background: var(--bay-line);
+    color: var(--fog);
+  }
+</style>

@@ -1,0 +1,61 @@
+---
+// Each entry as the Activity page writes it: who, then what, with the names a machine reads in mono
+// (a `{ code }` part).
+type Props = {
+  entries: readonly { who: string; what: readonly (string | { code: string })[]; when: string }[];
+};
+const { entries } = Astro.props;
+---
+
+<ol class="rows">
+  {
+    entries.map(({ who, what, when }) => (
+      <li class="row">
+        <p>
+          <strong>{who}</strong>{' '}
+          {what.map(part => (typeof part === 'string' ? part : <code>{part.code}</code>))}
+        </p>
+        <span class="when">{when}</span>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    background: var(--surface);
+  }
+
+  .row {
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.625rem 1rem;
+  }
+
+  .row + .row {
+    border-top: 1px solid var(--line);
+  }
+
+  p {
+    margin: 0;
+  }
+
+  strong {
+    font-weight: 500;
+  }
+
+  p :global(code) {
+    font-size: 0.8125rem;
+  }
+
+  .when {
+    flex: none;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+</style>

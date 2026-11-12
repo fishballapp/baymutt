@@ -1,0 +1,58 @@
+---
+// A piece of the dashboard, drawn as the dashboard draws it, under the path it lives at. Its
+// buttons are pictures of buttons: nothing on this page acts on an account. `isFlush` is for a
+// list, whose rows run to the edges as the dashboard's do.
+type Props = { path: string; label: string; isFlush?: boolean };
+const { path, label, isFlush = false } = Astro.props;
+---
+
+<figure class="screen" aria-label={label}>
+  <figcaption><span class="where">In your browser</span> <code>{path}</code></figcaption>
+  <div class:list={['body', { flush: isFlush }]}>
+    <slot />
+  </div>
+</figure>
+
+<style>
+  .screen {
+    margin: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-panel);
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 0.875rem;
+    min-width: 0;
+  }
+
+  figcaption {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+
+  .where {
+    flex: none;
+  }
+
+  figcaption code {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .body {
+    padding: 1rem;
+  }
+
+  .flush {
+    padding: 0;
+    border-radius: 0 0 var(--radius-panel) var(--radius-panel);
+    overflow: hidden;
+  }
+</style>

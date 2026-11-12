@@ -1,0 +1,49 @@
+{
+  "name": "@baymutt/cli",
+  "version": "0.1.0",
+  "license": "MIT",
+  "homepage": "https://baymutt.fsh.ba",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fishballapp/baymutt.git",
+    "directory": "apps/cli"
+  },
+  "type": "module",
+  "description": "The baymutt CLI: everything an agent does with the secret store. It seals and opens values on this machine, prints JSON, and has no command that prints a value.",
+  "bin": {
+    "baymutt": "./dist/bin.js"
+  },
+  "exports": {
+    "./bin": "./dist/bin.js",
+    "./load": "./src/load.ts"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "pnpm build",
+    "cli": "pnpm build && node dist/bin.js",
+    "test": "vitest run",
+    "check:effect": "effect-tsgo diagnostics --project tsconfig.src.json --format text"
+  },
+  "devDependencies": {
+    "@baymutt/api": "workspace:*",
+    "@baymutt/keys": "workspace:*",
+    "@baymutt/worker-web": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@internal/effect-api": "workspace:*",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "tsdown": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./bin": "./dist/bin.js"
+    }
+  }
+}

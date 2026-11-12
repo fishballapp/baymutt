@@ -1,0 +1,67 @@
+/* The dashboard's own stylesheet: its tokens, faces and base layer, so the landing and the app
+   are one world. */
+@import "@baymutt/web/styles.css";
+
+/* Tailwind v4 ignores node_modules. @internal/marketing's Layout.astro sets the body classes
+   (bg-background, font-sans, text-foreground, antialiased); without this @source those utilities
+   are dropped from the built CSS and the body ships unstyled. */
+@source "../../node_modules/@internal/marketing/src";
+
+/* The landing's own: the bay, where the machines work, and a display scale the dashboard never
+   needs. The bay is water in both schemes: deep ink under paper in light, a step below the page
+   in dark. Its text pairs are at least 4.5:1 on it and on a terminal. */
+:root {
+  --bay: light-dark(oklch(0.27 0.036 228), oklch(0.165 0.013 235));
+  --bay-terminal: light-dark(oklch(0.22 0.03 230), oklch(0.215 0.016 235));
+  --bay-line: light-dark(oklch(0.38 0.036 226), oklch(0.31 0.018 235));
+  --fog: oklch(0.94 0.008 220);
+  --fog-dim: oklch(0.77 0.018 222);
+  --bay-accent: oklch(0.82 0.095 195);
+}
+
+@theme inline {
+  --color-bay: var(--bay);
+  --color-fog: var(--fog);
+  --color-fog-dim: var(--fog-dim);
+}
+
+@layer base {
+  html {
+    scroll-padding-top: 1.5rem;
+  }
+  body {
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+  code,
+  pre,
+  kbd {
+    font-family: var(--font-mono);
+  }
+}
+
+/* A picture of one of the dashboard's buttons, inside a drawing of the dashboard. It is a span:
+   nothing on this page acts on an account. */
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.3125rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    color: var(--foreground);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  /* The depicted primary action, quieter than the page's own. */
+  .btn.primary {
+    border-color: transparent;
+    background: var(--accent-soft);
+  }
+  .btn.danger {
+    color: var(--danger);
+  }
+}

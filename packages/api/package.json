@@ -1,0 +1,18 @@
+{
+  "name": "@baymutt/api",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "The baymutt API as one Effect HttpApi definition: the Worker implements it; the dashboard, the CLI and the varlock plugin derive their clients from it. No server dependencies.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check:effect": "effect-tsgo diagnostics --project tsconfig.json --format text"
+  },
+  "dependencies": {
+    "@internal/effect-api": "workspace:*",
+    "effect": "catalog:"
+  }
+}

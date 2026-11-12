@@ -1,0 +1,100 @@
+name: CD
+
+# Every push to main runs every gate (ci.yml), then deploys baymutt.fsh.ba and publishes whatever
+# package versions npm does not have yet. This is the only path to production, so what is live is
+# always a commit on this branch.
+#
+# Keep this filename: npm trusted publishing validates it for all three packages.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: Gates
+    uses: ./.github/workflows/ci.yml
+
+  # D1 migrations, then the Worker with the landing page and the dashboard. The deploy's secrets are
+  # in baymutt itself: BAYMUTT_KEY, a secret of the `production` environment that only main can
+  # deploy to, is a machine that reads the one project they are in (apps/worker-web/.env.schema).
+  deploy:
+    name: Deploy baymutt.fsh.ba
+    needs: gates
+    runs-on: ubuntu-latest
+    environment: production
+    # A hung wrangler call would otherwise hold the deploy group for the 360m default.
+    timeout-minutes: 15
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    env:
+      BAYMUTT_KEY: ${{ secrets.BAYMUTT_KEY }}
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # First, so the Worker never ships ahead of its schema.
+      - name: Apply D1 migrations
+        run: pnpm -F @baymutt/worker-web run db:migrate:remote
+      - name: Build the landing page and the dashboard, then deploy the Worker
+        run: pnpm -F @baymutt/worker-web run deploy
+
+  # No token: npm trusted publishing over the workflow's OIDC identity, configured per package on
+  # npmjs.com. Every other package is private and never publishes.
+  publish:
+    name: Publish to npm
+    needs: gates
+    # GitHub-hosted on purpose: npm trusted publishing does not work on self-hosted runners.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    # Two releases pushed close together must not race `pnpm publish`'s read-then-write.
+    concurrency:
+      group: publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - id: version
+        # `baymutt` is @baymutt/cli under its short name, so the two release in lockstep; the
+        # dist-tag comes from that one version.
+        run: |
+          CLI=$(node -p "require('./apps/cli/package.json').version")
+          SHORT=$(node -p "require('./packages/baymutt/package.json').version")
+          if [ "$CLI" != "$SHORT" ]; then
+            echo "@baymutt/cli is $CLI and baymutt is $SHORT: bump them together" >&2; exit 1
+          fi
+          TAG=$(echo "$CLI" | grep -oE 'alpha|beta|rc' || true)
+          echo "version=$CLI" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG:-latest}" >> "$GITHUB_OUTPUT"
+      # A recursive publish skips the private packages and any version npm already has, and
+      # publishes @baymutt/cli before the `baymutt` that depends on it. Each bundled package builds
+      # its dist/ in `prepack`.
+      - run: pnpm -r publish --tag ${{ steps.version.outputs.tag }}
+      # A new version can take minutes to show on the registry, so ask for this exact one for up to
+      # ten minutes.
+      - name: Check npm has the CLI under both names
+        run: |
+          for name in @baymutt/cli baymutt; do
+            for _ in $(seq 1 40); do
+              [ "$(npm view "$name@${{ steps.version.outputs.version }}" version)" = "${{ steps.version.outputs.version }}" ] && continue 2
+              sleep 15
+            done
+            echo "npm does not have $name@${{ steps.version.outputs.version }}" >&2; exit 1
+          done

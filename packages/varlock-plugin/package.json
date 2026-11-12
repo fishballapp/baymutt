@@ -1,0 +1,37 @@
+{
+  "name": "@baymutt/varlock-plugin",
+  "version": "0.1.0",
+  "license": "MIT",
+  "homepage": "https://baymutt.fsh.ba",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fishballapp/baymutt.git",
+    "directory": "packages/varlock-plugin"
+  },
+  "type": "module",
+  "description": "Loads a baymutt project's values into varlock: one request, opened on this machine with its machine key. No cache, because there is no rate limit to save and varlock's disk cache is what asks for Touch ID.",
+  "exports": {
+    "./plugin": "./dist/plugin.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "varlock": "catalog:"
+  },
+  "devDependencies": {
+    "@baymutt/cli": "workspace:*",
+    "@types/node": "catalog:",
+    "tsdown": "catalog:",
+    "varlock": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

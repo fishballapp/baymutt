@@ -1,0 +1,42 @@
+---
+import Mark from './Mark.astro';
+---
+
+<footer class="foot">
+  <p class="maker">
+    <Mark size={18} />
+    <span>
+      baymutt is made by <a href="https://fishball.ltd">Fishball Ltd</a>.
+    </span>
+  </p>
+  <p class="name">
+    The name is <span lang="yue-Hant">秘密</span>, <i>bei mat</i>: Cantonese for secret.
+  </p>
+</footer>
+
+<style>
+  .foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.75rem 2rem;
+    padding-block: 2rem 2.5rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  .maker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  a {
+    color: var(--foreground);
+  }
+</style>
