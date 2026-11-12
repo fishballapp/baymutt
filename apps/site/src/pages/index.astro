@@ -9,7 +9,6 @@ import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import Terminal from '../components/Terminal.astro';
 import {
-  ACCESS_REQUEST_COMMAND,
   ACCOUNT,
   MAC_MINI,
   MACBOOK,
@@ -17,6 +16,7 @@ import {
   PROJECT,
   REQUEST,
   SCHEMA_FILE,
+  SERVICE_ACCOUNT_COMMAND,
   WRITE,
 } from '../example.ts';
 import Layout from '../layouts/Layout.astro';
@@ -28,7 +28,7 @@ const softwareApplication = {
   applicationCategory: 'DeveloperApplication',
   url: 'https://baymutt.fsh.ba/',
   description:
-    'A zero-knowledge secret store for people who run coding agents. Agents load and write secrets with no approval prompt; only the owner lets a service account read more.',
+    'A zero-knowledge secret store for people who run coding agents. Agents load and write secrets with no approval prompt, and the store cannot read any of them.',
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', description: 'Free in beta' },
   publisher: { '@type': 'Organization', name: 'Fishball Ltd', url: 'https://fishball.ltd' },
 };
@@ -36,7 +36,7 @@ const softwareApplication = {
 
 <Layout
   title="baymutt: secrets your coding agents use without asking"
-  description="A zero-knowledge secret store for coding agents. Agents load and write secrets with no approval prompt; only you let a service account read more. Free while in beta."
+  description="A zero-knowledge secret store for coding agents. Agents load and write secrets with no approval prompt, and the store cannot read any of them. Free while in beta."
   structuredData={softwareApplication}
 >
   <div class="page">
@@ -45,12 +45,12 @@ const softwareApplication = {
 
   <main>
     <section class="page hero" aria-labelledby="hero-title">
-      <h1 id="hero-title">Agents use secrets without asking you. Only you widen what they can read.</h1>
+      <h1 id="hero-title">Agents use secrets without asking you. The store can’t read a single one.</h1>
       <div class="offer">
         <p>
-          baymutt is a secret store for people who run coding agents. Agents load, write and
-          replace secrets with no approval prompt, and the store keeps every value sealed, so it
-          cannot read them either.
+          baymutt is a secret store for people who run coding agents. Approve a login once and
+          your agents load, write and replace secrets as you would, with no prompt. Every value
+          stays sealed, so the store cannot read them.
         </p>
         <div class="actions">
           <a class="primary" href="/signup">Create an account</a>
@@ -77,7 +77,7 @@ const softwareApplication = {
         </p>
         <p class="turn">
           baymutt takes the prompt out of using a secret and keeps you for the one decision that
-          matters: which service account can read which project.
+          matters: which computers log in as you.
         </p>
       </div>
     </section>
@@ -88,8 +88,8 @@ const softwareApplication = {
           <h2 id="how-title">In the terminal, nobody waits.</h2>
           <p>
             Agents work through the <code>baymutt</code> CLI and a varlock plugin. Every command
-            prints JSON on stdout, and none prints a value. You are needed to approve a service account, to
-            let one read more, and to paste a value only you can fetch.
+            prints JSON on stdout, and none prints a value. You are needed to approve a login, and
+            to paste a value only you can fetch.
           </p>
         </header>
 
@@ -98,9 +98,9 @@ const softwareApplication = {
             <div class="step-text">
               <h3>Log in, once.</h3>
               <p>
-                Install the CLI from npm and run <code>baymutt login</code>. It makes the service account’s
-                own key and prints a link. You open it, check that the code matches the terminal’s,
-                and approve it. It starts with no access.
+                Install the CLI from npm and run <code>baymutt login</code>. It makes the login’s own
+                key and prints a link. You open it, check that the code matches the terminal’s, and
+                approve it. From then on it reads and writes every project, as you can.
               </p>
             </div>
             <div class="step-visuals">
@@ -117,7 +117,7 @@ const softwareApplication = {
               <p>
                 Name the project in your <code>.env.schema</code>. varlock loads its values through
                 the plugin and opens them on the computer that runs it, with no prompt and no cache. The
-                service account key stays in the login keychain, or in <code>BAYMUTT_KEY</code> on CI.
+                login’s key stays in the keychain, or the plugin reads a key from <code>BAYMUTT_KEY</code>.
               </p>
             </div>
             <div class="step-visuals single">
@@ -134,9 +134,9 @@ const softwareApplication = {
             <div class="step-text">
               <h3>Write without you.</h3>
               <p>
-                With a write grant, an agent sets, generates, deletes and rolls back values. Every
-                write is a new version and every delete is soft, so a wrong one rolls back. Writing
-                needs no key: a write grant can never read.
+                An agent sets, generates, deletes and rolls back values. Every write is a new
+                version and every delete is soft, so a wrong one rolls back. Writing needs no key,
+                so a service account given write alone can never read.
               </p>
             </div>
             <div class="step-visuals">
@@ -188,8 +188,9 @@ const softwareApplication = {
         </ol>
 
         <p class="bay-foot">
-          To read a project it can’t, a service account runs <code>{ACCESS_REQUEST_COMMAND}</code>, and
-          the request waits for you, <a href="#board">as at the top of this page</a>.
+          A login can make a service account that reaches only what it names and cannot widen
+          it:{' '}<code>{SERVICE_ACCOUNT_COMMAND}</code>. Its key goes to the command after{' '}
+          <code>--</code>{' '}and is never printed.
         </p>
       </div>
     </section>
@@ -200,8 +201,9 @@ const softwareApplication = {
         <p>
           Values are sealed on the computer running the CLI or in your browser, to a project key the store never
           holds. Writing needs only the project’s public key. Reading needs the project key wrapped
-          to that one service account, which only a holder of the key can make. So a service account cannot widen
-          its own access, and neither can the store.
+          to that one reader, which only a holder of the key can make: your browser wraps every
+          project to each login you approve, and a login hands a narrower service account only what
+          it holds. So a service account cannot widen its own access, and neither can the store.
         </p>
       </div>
 
@@ -243,8 +245,8 @@ const softwareApplication = {
           signs you in and never opens it.
         </li>
         <li>
-          Revoking a service account stops its next load. What it already read stays read: replace those
-          values at their vendors.
+          Revoking a login or a service account, or letting it expire, stops its next load. What it
+          already read stays read: replace those values at their vendors.
         </li>
       </ul>
     </section>
@@ -253,10 +255,10 @@ const softwareApplication = {
       <div class="owner-text">
         <h2 id="owner-title">You open it when an agent asks.</h2>
         <ul class="duties">
-          <li>Approve a service account by comparing a code.</li>
-          <li>Approve or deny a request in one line, with the service account’s reason beside it.</li>
+          <li>Approve a login by comparing a code, and choose when it expires.</li>
           <li>Paste a value an agent asked for.</li>
-          <li>Grant, narrow and remove access. Revoke a service account, and every service account it made.</li>
+          <li>See every login and service account, what each is for and when it expires.</li>
+          <li>Revoke one, and every service account it made.</li>
           <li>Read the log: who loaded, wrote or granted what.</li>
           <li class="no-reveal">
             There is no reveal. A value is a name, a size and a version, so a stolen session cannot
@@ -267,12 +269,7 @@ const softwareApplication = {
       <Screen path="/activity" label="The activity log, as the dashboard shows it" isFlush>
         <ActivityRows
           entries={[
-            {
-              who: MAC_MINI.name,
-              what: ['asked for access to ', { code: PROJECT.name }],
-              when: 'just now',
-            },
-            { who: 'Owner', what: [`approved the service account ${MAC_MINI.name}`], when: '3 minutes ago' },
+            { who: 'Owner', what: [`approved the CLI login ${MAC_MINI.name}`], when: 'just now' },
             {
               who: 'Paste link',
               what: [

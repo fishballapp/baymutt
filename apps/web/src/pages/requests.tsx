@@ -141,8 +141,9 @@ export const RequestsPage = () => {
       {isEmpty && (
         <Empty title="Nothing is waiting on you">
           <p>
-            A service account asks for access with <Code>baymutt access request</Code>, and for a
-            value only you can fetch with <Code>baymutt request</Code>. Both land here.
+            An agent asks for a value only you can fetch with <Code>baymutt request</Code>, and a
+            service account a login made asks for more access with{' '}
+            <Code>baymutt access request</Code>. Both land here.
           </p>
         </Empty>
       )}

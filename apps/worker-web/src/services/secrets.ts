@@ -99,7 +99,7 @@ export class Secrets extends Context.Service<
     readonly list: (request: {
       readonly actor: ActorIdentity;
       readonly projectId: string;
-    }) => Effect.Effect<ReadonlyArray<Secret>, NotFoundError>;
+    }) => Effect.Effect<ReadonlyArray<Secret>, NotFoundError | NoAccessError>;
     /** Every current value's ciphertext and the caller's wrap of the project key. Logged. */
     readonly bundle: (request: {
       readonly actor: ActorIdentity;
@@ -122,7 +122,7 @@ export class Secrets extends Context.Service<
     ) => Effect.Effect<Secret, NotFoundError | NoAccessError>;
     readonly versions: (
       request: { readonly actor: ActorIdentity } & Slot,
-    ) => Effect.Effect<ReadonlyArray<SecretVersion>, NotFoundError>;
+    ) => Effect.Effect<ReadonlyArray<SecretVersion>, NotFoundError | NoAccessError>;
 
     readonly listPasteRequests: (
       actor: ActorIdentity,

@@ -1,11 +1,20 @@
 // Server state as atoms derived from the API definition, and the writes that change it. A write
 // that needs the vault takes the owner in its argument: the open vault is never module state an
 // atom reads behind a component's back.
-import type { AccessRequest, Grant, PairingRequest, Project } from '@baymutt/api';
+import type {
+  AccessRequest,
+  Grant,
+  LoginGrant,
+  PairingRequest,
+  Project,
+  ServiceAccount,
+} from '@baymutt/api';
 import {
   approvePairing,
   createProjectKey,
+  endorsedReader,
   grantToServiceAccount,
+  grantToTrustedReader,
   openOwnedProject,
   publicKeyFingerprint,
   sealValue,
@@ -98,6 +107,15 @@ export const grantsAtom = Atom.family((id: string) =>
   ),
 );
 
+/** A login: made by `baymutt login` and approved here, so it has no parent. It holds every project. */
+export const isLogin = (serviceAccount: Pick<ServiceAccount, 'parentId'>): boolean =>
+  serviceAccount.parentId === null;
+
+const listLogins = ApiClient.use(client => client.credentials.list()).pipe(
+  Effect.map(({ credentials }) => credentials.filter(isLogin)),
+);
+
+/** A new project, its key made here and wrapped to the account and, in the same request, to every login. */
 export const createProjectAtom = ApiClient.runtime.fn(
   ({ owner, name }: { readonly owner: Owner; readonly name: string }) =>
     Effect.gen(function* () {
@@ -106,14 +124,19 @@ export const createProjectAtom = ApiClient.runtime.fn(
         alphabet: 'base64url',
         omitPadding: true,
       });
+      // Only a key the vault endorsed: the store cannot add a login of its own here.
+      const listed = yield* listLogins;
+      const logins = yield* keys(() =>
+        Promise.all(listed.map(login => endorsedReader(owner, login))),
+      );
       const { publicKey, grants } = yield* keys(() =>
         createProjectKey({
           voucherKey: owner.accountKey,
           binding: { accountId: owner.accountId, projectId: id, keyVersion: 1 },
-          readers: [{ id: owner.accountId, publicKey: accountPublicKey }],
+          readers: [{ id: owner.accountId, publicKey: accountPublicKey }, ...logins],
         }),
       );
-      const [own] = grants;
+      const [own, ...forLogins] = grants;
       if (own === undefined) return yield* Effect.die('a project key came with no grant');
       return yield* ApiClient.use(client =>
         client.projects.create({
@@ -125,11 +148,17 @@ export const createProjectAtom = ApiClient.runtime.fn(
             ownerProof: own.proof,
             creatorWrap: null,
             creatorProof: null,
+            loginGrants: logins.flatMap((login, index) => {
+              const grant = forLogins[index];
+              return grant === undefined
+                ? []
+                : [{ credentialId: login.id, readWrap: grant.wrap, keyProof: grant.proof }];
+            }),
           },
         }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['projects'] },
+  { reactivityKeys: ['projects', 'serviceAccounts', 'grants'] },
 );
 
 export const archiveProjectAtom = ApiClient.runtime.fn(
@@ -217,16 +246,113 @@ export const serviceAccountsAtom = ApiClient.query('credentials', 'list', {
   reactivityKeys: ['serviceAccounts', 'grants'],
 }).pipe(Atom.mapResult(({ credentials }) => credentials));
 
-/** Approves a pairing link: the vault vouches for the service account's key and tells it which account key to trust. */
-export const pairAtom = ApiClient.runtime.fn(
-  ({ owner, request }: { readonly owner: Owner; readonly request: PairingRequest }) =>
+/**
+ * Approves a pairing link: the vault vouches for the login's key, tells it which account key to
+ * trust, and wraps every project to it. One request, so the store has it approved with all of
+ * them or not at all. Its key is trusted because the owner just compared its code. One per
+ * link, so a second link opened in the same tab starts unanswered.
+ */
+export const pairAtom = Atom.family((_credentialId: string) =>
+  ApiClient.runtime.fn(
+    ({
+      owner,
+      request,
+      expiresAt,
+    }: {
+      readonly owner: Owner;
+      readonly request: PairingRequest;
+      /** The owner's choice, which may differ from what the terminal asked for. */
+      readonly expiresAt: number | null;
+    }) =>
+      Effect.gen(function* () {
+        const { pairingSecret, expiresAt: _asked, ...serviceAccount } = request;
+        const reader = { id: serviceAccount.id, publicKey: serviceAccount.publicKey };
+        const { projects } = yield* ApiClient.use(client => client.projects.list());
+        const grants = yield* Effect.forEach(
+          projects,
+          project => loginGrant(owner, project.id, reader),
+          { concurrency: 6 },
+        );
+        const sealed = yield* keys(() =>
+          approvePairing(owner, { ...serviceAccount, pairingSecret }),
+        );
+        return yield* ApiClient.use(client =>
+          client.credentials.pair({
+            payload: {
+              ...serviceAccount,
+              ...sealed,
+              ...(expiresAt === null ? {} : { expiresAt }),
+              grants,
+            },
+          }),
+        );
+      }).pipe(faultsAsDefects),
+    { reactivityKeys: ['serviceAccounts', 'grants', 'audit'] },
+  ),
+);
+
+/** Read and write on one project for a login whose key the owner trusts. */
+const loginGrant = Effect.fnUntraced(function* (
+  owner: Owner,
+  projectId: string,
+  reader: { readonly id: string; readonly publicKey: string },
+) {
+  const { owned, keyVersion } = yield* ownedProject(owner, projectId);
+  const { keyProof, readWrap } = yield* keys(() =>
+    grantToTrustedReader(owner, owned, reader, { canRead: true }),
+  );
+  if (readWrap === null) return yield* Effect.die('a read grant came without its wrap');
+  return { projectId, keyVersion, keyProof, readWrap } satisfies LoginGrant;
+});
+
+/**
+ * Grants each login every project it lacks: the ones a service account made since, which only
+ * the owner's vault can wrap to another login. Runs whenever the vault is open; what fails is
+ * tried again next time.
+ */
+export const topUpLoginsAtom = ApiClient.runtime.fn(
+  (owner: Owner) =>
     Effect.gen(function* () {
-      const { pairingSecret, ...serviceAccount } = request;
-      const sealed = yield* keys(() => approvePairing(owner, { ...serviceAccount, pairingSecret }));
-      return yield* ApiClient.use(client =>
-        client.credentials.pair({ payload: { ...serviceAccount, ...sealed } }),
+      const [{ credentials }, { projects }] = yield* Effect.all(
+        [
+          ApiClient.use(client => client.credentials.list()),
+          ApiClient.use(client => client.projects.list()),
+        ],
+        { concurrency: 2 },
       );
+      const missing = credentials.filter(isLogin).flatMap(login =>
+        projects
+          .filter(project => {
+            const held = login.grants.find(grant => grant.projectId === project.id);
+            return !(held?.canRead && held.canWrite);
+          })
+          .map(project => ({ login, project })),
+      );
+      yield* Effect.forEach(
+        missing,
+        ({ login, project }) =>
+          Effect.gen(function* () {
+            const reader = yield* keys(() => endorsedReader(owner, login));
+            const { projectId, ...grant } = yield* loginGrant(owner, project.id, reader);
+            yield* ApiClient.use(client =>
+              client.projects.setGrant({
+                params: { id: projectId, credentialId: login.id },
+                payload: { canWrite: true, ...grant },
+              }),
+            );
+          }),
+        { concurrency: 4 },
+      );
+      return missing.length;
     }).pipe(faultsAsDefects),
+  { reactivityKeys: ['serviceAccounts', 'grants', 'requests', 'audit'] },
+);
+
+export const setExpiryAtom = ApiClient.runtime.fn(
+  ({ id, expiresAt }: { readonly id: string; readonly expiresAt: number | null }) =>
+    ApiClient.use(client =>
+      client.credentials.setExpiry({ params: { id }, payload: { expiresAt } }),
+    ).pipe(faultsAsDefects),
   { reactivityKeys: ['serviceAccounts', 'audit'] },
 );
 
@@ -260,32 +386,6 @@ const grantFor = Effect.fnUntraced(function* (
   );
   return { ...grant, keyVersion };
 });
-
-export const setGrantAtom = ApiClient.runtime.fn(
-  ({
-    owner,
-    project,
-    reader,
-    canRead,
-    canWrite,
-  }: {
-    readonly owner: Owner;
-    readonly project: Project;
-    readonly reader: Reader;
-    readonly canRead: boolean;
-    readonly canWrite: boolean;
-  }) =>
-    Effect.gen(function* () {
-      const wrap = yield* grantFor(owner, project.id, reader, canRead);
-      return yield* ApiClient.use(client =>
-        client.projects.setGrant({
-          params: { id: project.id, credentialId: reader.credentialId },
-          payload: { canWrite, ...wrap },
-        }),
-      );
-    }).pipe(faultsAsDefects),
-  { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
-);
 
 export const removeGrantAtom = ApiClient.runtime.fn(
   (params: { readonly id: string; readonly credentialId: string }) =>

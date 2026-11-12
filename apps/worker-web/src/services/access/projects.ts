@@ -36,7 +36,7 @@ const ownerOnly = (actor: ActorIdentity, what: string) =>
 export const projects = ({
   sql,
   audit,
-  lookups: { projectsOf, projectFor, serviceAccountIn, underLimit },
+  lookups: { projectsOf, projectFor, ownersProject, serviceAccountIn, underLimit },
 }: {
   readonly sql: D1Client.D1Client;
   readonly audit: Audit['Service'];
@@ -136,8 +136,28 @@ export const projects = ({
         readonly ownerProof: string;
         readonly creatorWrap: string | null;
         readonly creatorProof: string | null;
+        readonly loginGrants?: ReadonlyArray<{
+          readonly credentialId: string;
+          readonly readWrap: string;
+          readonly keyProof: string;
+        }>;
       };
     }) {
+      const loginGrants = project.loginGrants ?? [];
+      // The owner's vault vouches for a login's key and for no other, so a project made by a
+      // scoped service account is one the owner could never open or hand to a login.
+      if (actor._tag === 'ServiceAccount' && actor.parentId !== null) {
+        return yield* new OwnerRequiredError({
+          message:
+            'A service account a login made cannot create a project. The owner or a login creates it and hands this service account access.',
+        });
+      }
+      if (actor._tag === 'ServiceAccount' && loginGrants.length > 0) {
+        return yield* new OwnerRequiredError({
+          message:
+            'Only the owner’s vault vouches for a login’s key, so only the owner hands a new project to the logins. The dashboard does it once the owner opens it.',
+        });
+      }
       if (
         actor._tag === 'ServiceAccount' &&
         (project.creatorWrap === null || project.creatorProof === null)
@@ -172,6 +192,18 @@ export const projects = ({
                     WHERE ${made}`,
               ]
             : []),
+          // Each login the owner wrapped the key to, if it is still a live login of this account.
+          ...loginGrants.map(
+            grant =>
+              sql`INSERT INTO project_grant
+                    (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
+                     key_version, created_at)
+                  SELECT ${project.id}, id, account_id, 1, ${grant.readWrap}, ${grant.keyProof}, 1,
+                    ${now}
+                  FROM credential
+                  WHERE id = ${grant.credentialId} AND account_id = ${actor.accountId}
+                    AND parent_id IS NULL AND revoked_at IS NULL AND ${made}`,
+          ),
           yield* audit.entry(
             {
               accountId: actor.accountId,
@@ -200,7 +232,7 @@ export const projects = ({
       readonly id: string;
     }) {
       yield* ownerOnly(actor, 'archives a project');
-      const { project } = yield* projectFor(actor, id);
+      const { project } = yield* ownersProject(actor, id);
       const now = yield* Clock.currentTimeMillis;
       yield* sql
         .batch([
@@ -229,7 +261,7 @@ export const projects = ({
       readonly id: string;
     }) {
       yield* ownerOnly(actor, 'reads the owner’s wrap');
-      const { wrap, ownerProof, project } = yield* projectFor(actor, id);
+      const { wrap, ownerProof, project } = yield* ownersProject(actor, id);
       if (wrap === null) return yield* Effect.die(`project ${id} has no owner wrap`);
       // The creator's key as the store holds it, revoked or not: the owner's vault decides whether
       // it is one it endorsed.
@@ -276,7 +308,7 @@ export const projects = ({
       readonly keyVersion: number;
     }) {
       yield* ownerOnly(actor, 'grants access');
-      const { project } = yield* projectFor(actor, id);
+      const { project } = yield* ownersProject(actor, id);
       const serviceAccount = yield* serviceAccountIn(actor.accountId, credentialId);
       if (!canWrite && readWrap === null) {
         return yield* new NotFoundError({
@@ -296,6 +328,14 @@ export const projects = ({
             keyVersion,
             now,
           }),
+          // A grant of both settles anything the service account asked for on this project.
+          ...(readWrap !== null && canWrite
+            ? [
+                sql`UPDATE access_request SET status = 'approved', resolved_at = ${now}
+                    WHERE project_id = ${id} AND credential_id = ${credentialId}
+                      AND status = 'pending'`,
+              ]
+            : []),
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
@@ -321,7 +361,7 @@ export const projects = ({
       readonly credentialId: string;
     }) {
       yield* ownerOnly(actor, 'removes access');
-      const { project } = yield* projectFor(actor, id);
+      const { project } = yield* ownersProject(actor, id);
       const serviceAccount = yield* serviceAccountIn(actor.accountId, credentialId);
       // A service account made by this one holds a copy of the same access, so it loses it too.
       const [removed] = yield* sql

@@ -21,12 +21,12 @@ SESSION_SECRET=
 
 Then `varlock run -- <command>`.
 
-- `key` is the service account key where the environment holds one, as a CI job does. Left unset or empty,
+- `key` is a service account key the environment holds. Left unset or empty,
   the plugin reads the key `baymutt login` stored on this computer.
 - `url` is optional, for a baymutt that is not `https://baymutt.fsh.ba`:
   `@initBaymutt(key=$BAYMUTT_KEY, url="http://localhost:5183")`.
-- A service account needs a read grant on the project. Make a CI job's service account with
-  `baymutt service-accounts create --read app/production -- gh secret set BAYMUTT_KEY -R owner/repo`.
+- It needs a read grant on the project. A login holds one on every project; a service account
+  `baymutt service-accounts create --read <project>` made holds one on the projects it names.
 
 The CLI that logs in service accounts and manages secrets is
 [`baymutt`](https://www.npmjs.com/package/baymutt).

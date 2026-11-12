@@ -8,17 +8,22 @@ import { ServiceAccount } from './service-account.ts';
 
 /** A project by its name (or id), among those this service account holds a grant on. */
 export const resolveProject = Effect.fn('projects.resolve')(function* (name: string) {
-  const { api } = yield* ServiceAccount;
+  const { api, key } = yield* ServiceAccount;
   const { projects } = yield* api.projects.list();
   const found = projects.find(project => project.name === name || project.id === name);
   if (found === undefined) {
     return yield* usage(
-      `No project named ${name} is granted to this service account. See what is with \`baymutt projects\`, ask for it with \`baymutt access request ${name} --read --reason "…"\`, or create it with \`baymutt projects create ${name}\`.`,
+      isLogin(key)
+        ? `This account has no project named ${name}. See what it has with \`baymutt projects\`, or create it with \`baymutt projects create ${name}\`.`
+        : `No project named ${name} is granted to this service account. See what is with \`baymutt projects\`, or ask for it with \`baymutt access request ${name} --read --reason "…"\`.`,
       'notFound',
     );
   }
   return found;
 });
+
+/** A login: made by `baymutt login`, so its key names no maker. It is meant to hold every project. */
+const isLogin = (key: { readonly issuerPublicKey: string | null }) => key.issuerPublicKey === null;
 
 /**
  * The project's public key, as someone this service account trusts vouched for it: the owner who granted
@@ -34,6 +39,14 @@ export const trustedKey = Effect.fn('projects.trustedKey')(function* (project: P
     projectId: project.id,
     keyVersion: project.keyVersion,
   };
+  // A login is listed every project; one with no grant yet was made by another service account,
+  // and only the owner's browser can wrap it to this login.
+  if (project.keyProof === null && isLogin(serviceAccount.key)) {
+    return yield* usage(
+      `This login has full access, but ${project.name} was made by another service account and is not wrapped to it yet: only the owner's browser can do that. Ask the owner to open the baymutt dashboard once; it grants every project a login lacks.`,
+      'noAccess',
+    );
+  }
   if (project.keyProof === null) {
     return yield* usage(
       `The store answered ${project.name} with no proof of its public key. Nothing was used.`,

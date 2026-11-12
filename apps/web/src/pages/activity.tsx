@@ -32,9 +32,19 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
   'password.set': () => 'set a new password',
   'password.remove': () => 'removed the password',
   'recovery.rotate': () => 'made a new recovery key',
-  'credential.pair': ({ detail }) => <>approved the service account {detail}</>,
+  'credential.pair': ({ detail }) => <>approved the CLI login {detail}</>,
   'credential.create': ({ detail }) => <>made the service account {detail}</>,
   'credential.revoke': ({ detail }) => <>revoked the service account {detail}</>,
+  'credential.expiry': ({ detail }) => {
+    const split = detail?.lastIndexOf(': ') ?? -1;
+    if (detail === null || split === -1) return <>changed when {detail} expires</>;
+    const when = detail.slice(split + 2);
+    return (
+      <>
+        set {detail.slice(0, split)} to {when === 'never' ? 'never expire' : `expire on ${when}`}
+      </>
+    );
+  },
   'project.create': event => <>created {project(event)}</>,
   'project.archive': event => <>archived {project(event)}</>,
   'project.load': event => <>loaded {project(event)}</>,

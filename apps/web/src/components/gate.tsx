@@ -1,13 +1,22 @@
-import { useAtomSet, useAtomValue } from '@effect/atom-react';
+import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { cn } from 'cn';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
-import { createContext, type ReactNode, use, useState } from 'react';
-import { accessRequestsAtom, pasteRequestsAtom, resumeAtom, signOutAtom } from '../lib/data.ts';
+import { createContext, type ReactNode, use, useEffect, useState } from 'react';
+import {
+  accessRequestsAtom,
+  isLogin,
+  pasteRequestsAtom,
+  projectsAtom,
+  resumeAtom,
+  serviceAccountsAtom,
+  signOutAtom,
+  topUpLoginsAtom,
+} from '../lib/data.ts';
 import { type Owner, useOwnerStore } from '../lib/owner.ts';
-import { latest } from '../lib/result.ts';
+import { failureMessage, latest } from '../lib/result.ts';
 import { Entry, Standalone } from '../pages/entry.tsx';
-import { Wordmark } from './parts.tsx';
+import { Notice, Wordmark } from './parts.tsx';
 import { RecoveryKey } from './recovery-key.tsx';
 import { Button } from './ui/button.tsx';
 
@@ -76,6 +85,42 @@ const PendingCount = () => {
   );
 };
 
+/**
+ * Keeps every login holding every project. A project a service account made reaches the other
+ * logins only through the owner's vault, so whenever it is open and a login lacks one, this grants
+ * it. Keyed on what is missing: a grant that fails is not retried until the lists change.
+ */
+const LoginTopUp = () => {
+  const owner = useOwner();
+  const [toppingUp, topUp] = useAtom(topUpLoginsAtom);
+  const serviceAccounts = latest(useAtomValue(serviceAccountsAtom));
+  const projects = latest(useAtomValue(projectsAtom));
+  const missing =
+    serviceAccounts === null || projects === null
+      ? ''
+      : serviceAccounts
+          .filter(isLogin)
+          .flatMap(login =>
+            projects
+              .filter(project => {
+                const held = login.grants.find(grant => grant.projectId === project.id);
+                return !(held?.canRead && held.canWrite);
+              })
+              .map(project => `${login.id}/${project.id}`),
+          )
+          .join(' ');
+  useEffect(() => {
+    if (missing !== '') topUp(owner);
+  }, [missing, owner, topUp]);
+  const failure = failureMessage(toppingUp);
+  return failure === null ? null : (
+    <Notice className="mb-6">
+      Could not give every login the projects it lacks: {failure} It is tried again when you next
+      open the dashboard.
+    </Notice>
+  );
+};
+
 const navItem = (isCurrent: boolean) =>
   cn(
     'relative flex h-9 items-center justify-center gap-2 rounded-control px-2 text-sm font-medium text-muted transition-colors duration-150 ease-out hover:bg-sunken hover:text-foreground md:justify-start md:px-2.5 md:text-base',
@@ -137,6 +182,7 @@ export const Shell = () => {
       </aside>
       <main className="min-w-0 px-5 pt-7 pb-16 md:px-10 md:pt-10 lg:px-14">
         <div className="max-w-[60rem]">
+          <LoginTopUp />
           <Outlet />
         </div>
       </main>

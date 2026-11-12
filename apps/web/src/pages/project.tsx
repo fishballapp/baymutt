@@ -22,17 +22,16 @@ import {
 } from '../components/parts.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
-import { SelectField, TextArea, TextField } from '../components/ui/field.tsx';
+import { TextArea, TextField } from '../components/ui/field.tsx';
 import {
   archiveProjectAtom,
   grantsAtom,
+  isLogin,
   projectAtom,
   removeGrantAtom,
   removeSecretAtom,
   rollbackSecretAtom,
   secretsAtom,
-  serviceAccountsAtom,
-  setGrantAtom,
   versionsAtom,
   writeSecretAtom,
 } from '../lib/data.ts';
@@ -274,24 +273,7 @@ const Secrets = ({ project }: { readonly project: Project }) => {
 };
 
 const GrantRow = ({ project, grant }: { readonly project: Project; readonly grant: Grant }) => {
-  const owner = useOwner();
   const [removing, remove] = useAtom(removeGrantAtom);
-  const [setting, set] = useAtom(setGrantAtom);
-  const isOwnerPaired = grant.endorsement !== null;
-  const change = (next: { canRead: boolean; canWrite: boolean }) =>
-    set({ owner, project, reader: grant, ...next });
-  const isBusy = removing.waiting || setting.waiting;
-  // Only changes that leave it some access: taking the last one away is Remove.
-  const readChange = (() => {
-    if (!grant.canRead) return 'Let it read';
-    if (grant.canWrite) return 'Stop reading';
-    return null;
-  })();
-  const writeChange = (() => {
-    if (!grant.canWrite) return 'Let it write';
-    if (grant.canRead) return 'Stop writing';
-    return null;
-  })();
   return (
     <Row>
       <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
@@ -299,141 +281,27 @@ const GrantRow = ({ project, grant }: { readonly project: Project; readonly gran
           <p className="font-medium">{grant.credentialName}</p>
           <p className="mt-0.5 text-sm text-muted">
             can {grantWords(grant)}
-            {!isOwnerPaired && ' · made by another service account, which handed this on'}
+            {isLogin(grant)
+              ? ' · a CLI login, which holds every project'
+              : ' · made by a login, which handed this on'}
           </p>
         </div>
-        <RowActions>
-          {isOwnerPaired && readChange && (
+        {/* A login holds every project: revoking it, under Service accounts, is the way to end that. */}
+        {!isLogin(grant) && (
+          <RowActions>
             <Button
               size="sm"
-              intent="subtle"
-              disabled={isBusy}
-              onClick={() => change({ canRead: !grant.canRead, canWrite: grant.canWrite })}
+              intent="subtleDanger"
+              disabled={removing.waiting}
+              onClick={() => remove({ id: project.id, credentialId: grant.credentialId })}
             >
-              {readChange}
+              {removing.waiting ? 'Removing…' : 'Remove'}
             </Button>
-          )}
-          {isOwnerPaired && writeChange && (
-            <Button
-              size="sm"
-              intent="subtle"
-              disabled={isBusy}
-              onClick={() => change({ canRead: grant.canRead, canWrite: !grant.canWrite })}
-            >
-              {writeChange}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            intent="subtleDanger"
-            disabled={isBusy}
-            onClick={() => remove({ id: project.id, credentialId: grant.credentialId })}
-          >
-            {removing.waiting ? 'Removing…' : 'Remove'}
-          </Button>
-        </RowActions>
+          </RowActions>
+        )}
       </div>
-      {(failureMessage(removing) ?? failureMessage(setting)) && (
-        <Notice className="mt-2">{failureMessage(removing) ?? failureMessage(setting)}</Notice>
-      )}
+      {failureMessage(removing) && <Notice className="mt-2">{failureMessage(removing)}</Notice>}
     </Row>
-  );
-};
-
-const NewGrant = ({
-  project,
-  held,
-}: {
-  readonly project: Project;
-  readonly held: ReadonlyArray<Grant>;
-}) => {
-  const owner = useOwner();
-  const serviceAccounts = latest(useAtomValue(serviceAccountsAtom)) ?? [];
-  const [granting, grant] = useAtom(setGrantAtom, { mode: 'promiseExit' });
-  const [serviceAccountId, setServiceAccountId] = useState('');
-  const [canRead, setCanRead] = useState(true);
-  const [canWrite, setCanWrite] = useState(false);
-  // Only a service account the owner paired: the vault vouches for its key, so the project key can be wrapped to it.
-  const candidates = serviceAccounts.filter(
-    serviceAccount =>
-      serviceAccount.endorsement !== null &&
-      !held.some(grant => grant.credentialId === serviceAccount.id),
-  );
-  const serviceAccount = candidates.find(({ id }) => id === serviceAccountId);
-  // With no service account approved at all, the empty list above already says how to log one in.
-  if (candidates.length === 0) {
-    return held.length === 0 ? null : (
-      <p className="mt-3 text-sm text-muted">
-        Every service account you approved has access here. Log in another with{' '}
-        <Code>baymutt login</Code>.
-      </p>
-    );
-  }
-  return (
-    <form
-      className="mt-4 flex flex-wrap items-end gap-x-4 gap-y-3"
-      onSubmit={async event => {
-        event.preventDefault();
-        if (serviceAccount === undefined) return;
-        const exit = await grant({
-          owner,
-          project,
-          reader: {
-            credentialId: serviceAccount.id,
-            credentialPublicKey: serviceAccount.publicKey,
-            endorsement: serviceAccount.endorsement,
-          },
-          canRead,
-          canWrite,
-        });
-        if (exit._tag === 'Success') setServiceAccountId('');
-      }}
-    >
-      <div className="w-full sm:w-64">
-        <SelectField
-          label="Give a service account access"
-          value={serviceAccountId}
-          onChange={event => setServiceAccountId(event.target.value)}
-        >
-          <option value="">Choose a service account</option>
-          {candidates.map(({ id, name }) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </SelectField>
-      </div>
-      <fieldset className="flex h-9 items-center gap-4">
-        <legend className="sr-only">What it may do</legend>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={canRead}
-            onChange={event => setCanRead(event.target.checked)}
-            className="size-4 accent-accent"
-          />
-          Read
-        </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={canWrite}
-            onChange={event => setCanWrite(event.target.checked)}
-            className="size-4 accent-accent"
-          />
-          Write
-        </label>
-      </fieldset>
-      <Button
-        type="submit"
-        disabled={serviceAccount === undefined || (!canRead && !canWrite) || granting.waiting}
-      >
-        {granting.waiting ? 'Granting…' : `Grant ${grantWords({ canRead, canWrite })}`}
-      </Button>
-      {failureMessage(granting) && (
-        <Notice className="basis-full">{failureMessage(granting)}</Notice>
-      )}
-    </form>
   );
 };
 
@@ -442,29 +310,23 @@ const Access = ({ project }: { readonly project: Project }) => {
   return (
     <Section
       title="Who can reach it"
-      lede="You can always read and write. A service account that reads keeps what it read: taking access away stops the next load, not the last one."
+      lede="You and every CLI login can read and write it. A service account a login made reaches it only if its maker handed it on. One that reads keeps what it read: taking access away stops the next load, not the last one."
     >
-      {grants === null ? (
-        <Skeleton rows={2} />
-      ) : (
-        <>
-          {grants.length === 0 ? (
-            <Empty title="No service account has access">
-              <p>
-                Log in a service account with <Code>baymutt login</Code>, then grant it here, or let
-                it ask. What it asks appears under Requests:
-              </p>
-              <CommandLine>{`baymutt access request ${project.name} --read --reason "…"`}</CommandLine>
-            </Empty>
-          ) : (
-            <Rows>
-              {grants.map(grant => (
-                <GrantRow key={grant.credentialId} project={project} grant={grant} />
-              ))}
-            </Rows>
-          )}
-          <NewGrant project={project} held={grants} />
-        </>
+      {grants === null && <Skeleton rows={2} />}
+      {grants?.length === 0 && (
+        <Empty title="Only you, so far">
+          <p>
+            Run <Code>baymutt login</Code> and approve it here: a login reads and writes every
+            project.
+          </p>
+        </Empty>
+      )}
+      {grants !== null && grants.length > 0 && (
+        <Rows>
+          {grants.map(grant => (
+            <GrantRow key={grant.credentialId} project={project} grant={grant} />
+          ))}
+        </Rows>
       )}
     </Section>
   );

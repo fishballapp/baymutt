@@ -14,6 +14,7 @@ import * as Option from 'effect/Option';
 import * as ChildProcess from 'effect/process/ChildProcess';
 import * as ChildProcessSpawner from 'effect/process/ChildProcessSpawner';
 import * as Stream from 'effect/Stream';
+import { aboutFlags, aboutPayload } from '../about.ts';
 import { crypto_, report, usage } from '../errors.ts';
 import { print } from '../output.ts';
 import { openProject, resolveProject, trustedKey } from '../projects.ts';
@@ -51,7 +52,7 @@ const requestCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Ask the owner for access to a project. A service account cannot give itself any; the owner approves in the dashboard',
+    'Ask the owner for access to a project, from a service account `service-accounts create` made: it cannot give itself any, and the owner approves in the dashboard. A login holds every project already and has nothing to ask for',
   ),
 );
 
@@ -110,7 +111,7 @@ const createServiceAccountCommand = Command.make(
   'create',
   {
     name: Flag.String('name').pipe(
-      Flag.withDescription('What the service account is, such as "CI: app deploy"'),
+      Flag.withDescription('Its name, up to 60 characters, such as "deploy"'),
       Flag.withSchema(LabelSchema),
     ),
     read: Flag.String('read').pipe(
@@ -131,8 +132,16 @@ const createServiceAccountCommand = Command.make(
       ),
       Argument.variadic({ min: 1 }),
     ),
+    ...aboutFlags,
   },
-  Effect.fn('service-accounts.create')(function* ({ name, read, write, command }) {
+  Effect.fn('service-accounts.create')(function* ({
+    name,
+    read,
+    write,
+    command,
+    description,
+    expires,
+  }) {
     const serviceAccount = yield* ServiceAccount;
     const names = [...new Set([...read, ...write])];
     if (names.length === 0) return yield* usage('Give it at least one --read or --write project.');
@@ -168,8 +177,10 @@ const createServiceAccountCommand = Command.make(
       );
       return { projectId: project.id, canWrite, readWrap, keyProof };
     });
+    const about = yield* aboutPayload({ description, expires });
     const created = yield* serviceAccount.api.credentials.create({
       payload: {
+        ...about,
         id: made.credentialId,
         name,
         publicKey: made.publicKey,
@@ -192,7 +203,7 @@ const createServiceAccountCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Make a service account that holds part of this one’s access, for a CI job or another agent. Its key goes to the command after `--`, on stdin, and is never printed',
+    'Make a service account that holds only the projects named here, with the access given. It cannot widen its own access, and makes no others. Its key goes to the command after `--`, on stdin, and is never printed',
   ),
 );
 
@@ -201,22 +212,17 @@ const revokeCommand = Command.make(
   {
     id: Argument.String('id').pipe(
       Argument.withDescription(
-        'The service account’s id (see `baymutt service-accounts`). Omit to revoke this service account itself',
+        'The service account’s id (see `baymutt service-accounts`). To revoke this computer’s own login and forget its key, use `baymutt logout`',
       ),
-      Argument.optional,
     ),
   },
   Effect.fn('service-accounts.revoke')(function* ({ id }) {
-    const { api, key } = yield* ServiceAccount;
-    yield* print(
-      yield* api.credentials.revoke({
-        params: { id: Option.getOrElse(id, () => key.credentialId) },
-      }),
-    );
+    const { api } = yield* ServiceAccount;
+    yield* print(yield* api.credentials.revoke({ params: { id } }));
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke this service account or one it made, with every service account that one made. What it already read stays read: replace those values at their vendors',
+    'Revoke a service account this one made, or this one itself by its id, with every service account it made. What it already read stays read: replace those values at their vendors',
   ),
 );
 

@@ -64,7 +64,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
       OpenApi.annotations({
         summary: 'List projects',
         description:
-          'The owner sees every project; a service account sees those it holds a grant on.',
+          'The owner sees every project. A login sees every project too, and `keyProof` is null on one the owner’s dashboard has not wrapped to it yet; any other service account sees those it holds a grant on.',
       }),
     ),
     HttpApiEndpoint.post('create', '/projects', {
@@ -79,6 +79,16 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
         /** The private key wrapped to the service account creating it, and its proof to itself. Null when the owner creates it. */
         creatorWrap: Schema.NullOr(WrapSchema),
         creatorProof: Schema.NullOr(KeyProofSchema),
+        /** Owner only: read and write for each login, the key wrapped and vouched for by the owner's vault. */
+        loginGrants: Schema.optionalKey(
+          Schema.Array(
+            Schema.Struct({
+              credentialId: Schema.String,
+              readWrap: WrapSchema,
+              keyProof: KeyProofSchema,
+            }),
+          ),
+        ),
       }),
       success: ProjectSchema.pipe(HttpApiSchema.status(201)),
       error: [coded(AlreadyExistsError), coded(OwnerRequiredError), coded(LimitReachedError)],
@@ -91,7 +101,7 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
     HttpApiEndpoint.get('get', '/projects/:id', {
       params: idParam,
       success: ProjectSchema,
-      error: [coded(NotFoundError)],
+      error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(OpenApi.annotations({ summary: 'Get a project' })),
     HttpApiEndpoint.delete('archive', '/projects/:id', {
       params: idParam,

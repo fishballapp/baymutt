@@ -1,36 +1,22 @@
 ---
-// Which service account can reach which project in the example account, and who filled each cell. Every
-// filled cell is one the store lets an agent fill without the owner; the empty one a service account asks
-// for is the one that waits for the owner.
+// Which service account can reach which project in the example account, and who filled each cell.
+// A CLI login holds every project, as the owner does; a service account a login made holds what
+// its maker handed it, and the empty cell is one it cannot fill itself.
 import { MAC_MINI, MACBOOK } from '../example.ts';
-import DecisionRow from './dashboard/DecisionRow.astro';
-import Screen from './dashboard/Screen.astro';
 
-type Cell =
-  | { kind: 'grant'; grant: string; by: string }
-  | { kind: 'none' }
-  | { kind: 'asks'; grant: string };
+type Cell = { kind: 'grant'; grant: string; by: string } | { kind: 'none' };
 
 const PROJECTS = ['app/dev', 'app/production'] as const;
 
+const EVERY = { kind: 'grant', grant: 'read + write', by: 'every project' } as const;
+
 const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [Cell, Cell] }[] = [
-  {
-    serviceAccount: MACBOOK.name,
-    origin: 'approved by you',
-    cells: [
-      { kind: 'grant', grant: 'read + write', by: 'made the project' },
-      { kind: 'grant', grant: 'read + write', by: 'made the project' },
-    ],
-  },
+  { serviceAccount: MACBOOK.name, origin: 'CLI login you approved', cells: [EVERY, EVERY] },
+  { serviceAccount: MAC_MINI.name, origin: 'CLI login you approved', cells: [EVERY, EVERY] },
   {
     serviceAccount: 'CI deploy',
     origin: `made by ${MACBOOK.name}`,
     cells: [{ kind: 'none' }, { kind: 'grant', grant: 'read', by: `handed on by ${MACBOOK.name}` }],
-  },
-  {
-    serviceAccount: MAC_MINI.name,
-    origin: 'approved by you',
-    cells: [{ kind: 'none' }, { kind: 'asks', grant: 'read' }],
   },
 ];
 ---
@@ -58,49 +44,30 @@ const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [
                 <span class="service-account">{serviceAccount}</span>
                 <span class="sub">{origin}</span>
               </th>
-              {cells.map(cell => {
-                if (cell.kind === 'none') {
-                  return (
-                    <td class="none">
-                      <span aria-hidden="true">–</span>
-                      <span class="sr-only">no access</span>
-                    </td>
-                  );
-                }
-                if (cell.kind === 'asks') {
-                  return (
-                    <td class="asks">
-                      <span class="grant">asks to {cell.grant}</span>
-                      <span class="sub">waits for you</span>
-                    </td>
-                  );
-                }
-                return (
+              {cells.map(cell =>
+                cell.kind === 'none' ? (
+                  <td class="none">
+                    <span aria-hidden="true">–</span>
+                    <span class="sr-only">no access</span>
+                    <span class="sub">cannot give itself any</span>
+                  </td>
+                ) : (
                   <td>
                     <span class="grant">{cell.grant}</span>
                     <span class="sub">{cell.by}</span>
                   </td>
-                );
-              })}
+                ),
+              )}
             </tr>
           ))
         }
       </tbody>
     </table>
   </div>
-  <div class="request">
-    <Screen path="/requests" label="The request, as the dashboard shows it">
-      <DecisionRow
-        serviceAccount={MAC_MINI.name}
-        wants="read"
-        project="app/production"
-        reason="to run the checkout tests against live prices"
-      />
-    </Screen>
-  </div>
   <figcaption>
-    An agent filled every other cell: MacBook made both projects, then made CI deploy and handed it
-    a read. Letting a service account read more is the one change that waits for you.
+    A login you approve reads and writes every project, as you can, and so do the agents that use
+    it. MacBook made CI deploy and handed it one read: that is all it can reach,
+    and it cannot widen it.
   </figcaption>
 </figure>
 
@@ -203,37 +170,6 @@ const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [
 
   .none {
     color: var(--muted);
-  }
-
-  /* The one cell the owner fills: marked in words, and outlined in the accent like focus. */
-  .asks {
-    background: var(--accent-soft);
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-
-  .asks .grant {
-    color: var(--foreground);
-  }
-
-  .asks .sub {
-    color: var(--foreground);
-  }
-
-  /* The request hangs under its cell, joined to it by one rule. */
-  .request {
-    position: relative;
-    justify-self: end;
-    width: min(100%, 42rem);
-    padding-top: 1.75rem;
-  }
-
-  .request::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: calc(100cqi / 6);
-    height: 1.75rem;
-    border-left: 2px solid var(--accent);
   }
 
   figcaption {

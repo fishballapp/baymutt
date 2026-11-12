@@ -13,12 +13,15 @@ const child = async (
     readWrap: string | null;
     keyProof: string;
   }>,
+  name = 'ci',
+  about: { readonly description?: string; readonly expiresAt?: number } = {},
 ) => {
   const id = crypto.randomUUID();
   const secret = keyLike('c');
   const answer = await call(w, 'POST', '/credentials', parent.headers, {
+    ...about,
     id,
-    name: 'ci',
+    name,
     publicKey: keyLike('k'),
     bearerHash: await tokenHash(secret),
     grants,
@@ -27,9 +30,9 @@ const child = async (
 };
 
 describe('a service account', () => {
-  it('is recognised by its bearer once paired, and starts with no access', async () => {
+  it('is recognised by its bearer once paired, and as a login sees every project', async () => {
     const { w, pair, project, accountId } = await storeWorld();
-    await project('app/production');
+    const projectId = await project('app/production');
     const serviceAccount = await pair('laptop');
 
     expect(await call(w, 'GET', '/me', serviceAccount.headers)).toEqual({
@@ -46,9 +49,11 @@ describe('a service account', () => {
         },
       },
     });
-    expect(await call(w, 'GET', '/projects', serviceAccount.headers)).toEqual({
+    // Approved without the owner's wraps (as a pre-0.3.0 dashboard did): it sees the project and
+    // holds nothing on it until the dashboard tops it up.
+    expect(await call(w, 'GET', '/projects', serviceAccount.headers)).toMatchObject({
       status: 200,
-      body: { projects: [] },
+      body: { projects: [{ id: projectId, canRead: false, canWrite: false, keyProof: null }] },
     });
   });
 
@@ -93,16 +98,17 @@ describe('a service account', () => {
     ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
   });
 
-  it('sees a project only once granted, and only the owner grants', async () => {
+  it('holds a project only once granted, and only the owner grants', async () => {
     const world = await storeWorld();
     const { w, pair, project, grant } = world;
     const projectId = await project('app/production');
     const serviceAccount = await pair();
     const other = await pair();
 
+    // A login is listed the project, and holds nothing on it until the owner's browser grants it.
     expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
-      status: 404,
-      body: { code: 'NotFoundError' },
+      status: 403,
+      body: { code: 'NoAccessError' },
     });
     expect(
       await call(
@@ -135,7 +141,7 @@ describe('a service account', () => {
       }),
     ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
     expect(await call(w, 'GET', `/projects/${projectId}`, other.headers)).toMatchObject({
-      status: 404,
+      status: 403,
     });
   });
 
@@ -219,7 +225,7 @@ describe('a narrower service account', () => {
           { projectId: unseen, canWrite: true, readWrap: null, keyProof: sealedLike('proof') },
         ])
       ).answer,
-    ).toMatchObject({ status: 404 });
+    ).toMatchObject({ status: 403, body: { code: 'NoAccessError', need: 'write' } });
 
     const ci = await child(world, parent, [
       {
@@ -280,7 +286,10 @@ describe('a narrower service account', () => {
 
     await ok(w, 'DELETE', `/projects/${projectId}/grants/${parent.id}`, owner);
 
-    for (const serviceAccount of [parent, ci, second]) {
+    expect(await call(w, 'GET', '/projects', parent.headers)).toMatchObject({
+      body: { projects: [{ id: projectId, canRead: false, canWrite: false }] },
+    });
+    for (const serviceAccount of [ci, second]) {
       expect(await call(w, 'GET', '/projects', serviceAccount.headers)).toMatchObject({
         body: { projects: [] },
       });
@@ -393,7 +402,7 @@ describe('an access request', () => {
     const world = await storeWorld();
     const { w, owner, pair, project } = world;
     const projectId = await project('app/production');
-    const serviceAccount = await pair('laptop');
+    const serviceAccount = await child(world, await pair('laptop'), [], 'ci');
 
     const { id, answer } = await ask(world, serviceAccount.headers, {
       projectName: 'app/production',
@@ -408,8 +417,8 @@ describe('an access request', () => {
           {
             id,
             projectId,
-            credentialName: 'laptop',
-            endorsement: sealedLike('endorsement'),
+            credentialName: 'ci',
+            endorsement: null,
             wantsRead: true,
             wantsWrite: true,
             reason: 'to deploy the worker',
@@ -453,7 +462,7 @@ describe('an access request', () => {
     const world = await storeWorld();
     const { w, owner, pair, project } = world;
     const projectId = await project('app/production');
-    const serviceAccount = await pair();
+    const serviceAccount = await child(world, await pair(), []);
 
     expect(
       (await ask(world, serviceAccount.headers, { projectName: 'app/missing', wantsRead: true }))

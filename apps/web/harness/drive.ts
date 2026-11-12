@@ -12,7 +12,7 @@
  * `apps/web/tmp/drive/`. Every value here is made up for the run.
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,9 +178,19 @@ const main = async (browser: Browser) => {
     !(await page.content()).includes('made-up-line-two'),
   );
 
-  // --- log in a service account ------------------------------------------------------------------------
+  // --- log in: approving gives every project -------------------------------------------------
   const laptop = serviceAccount('laptop');
-  const pending = laptop.cli(['login', '--name', 'Jason’s MacBook', '--wait', '0']);
+  const pending = laptop.cli([
+    'login',
+    '--name',
+    'Work laptop',
+    '--description',
+    'Coding agents on the work laptop',
+    '--expires',
+    '90d',
+    '--wait',
+    '0',
+  ]);
   check('`baymutt login` prints a link and a code', pending.json?.status === 'pending');
   const signedOut = await browser.newContext({ viewport: DESKTOP });
   const signedOutPage = await signedOut.newPage();
@@ -194,36 +204,32 @@ const main = async (browser: Browser) => {
   await page.goto(pending.json.url);
   await page.getByText(pending.json.code).waitFor();
   check('the approval page shows the terminal’s code', true);
+  check(
+    'the approval page shows the terminal’s description and the expiry it asked for',
+    (await page.getByText('Coding agents on the work laptop').count()) === 1 &&
+      (await page.getByLabel('Expires').inputValue()) === 'kept',
+  );
+  check(
+    'the approval page says a login reads and writes every project',
+    (await page.getByText(/read and write every project/).count()) === 1,
+  );
   await shoot(page, '07-approve');
+  await shootPhone(page, '07b-approve-phone');
   await page.getByRole('button', { name: 'The codes match: approve it' }).click();
   await page.getByRole('heading', { name: /is approved/ }).waitFor();
   check(
     '`baymutt login` finishes once approved',
     laptop.cli(['login', '--wait', '0']).json?.status === 'loggedIn',
   );
-
-  // --- the service account asks; the owner approves; the service account loads and writes ---------------------
   check(
-    'a new service account sees no project',
-    laptop.cli(['projects', 'list']).json?.projects.length === 0,
+    'a login approved after a project was made reads and writes it',
+    laptop
+      .cli(['projects', 'list'])
+      .json?.projects.some(
+        (project: { name: string; canRead: boolean; canWrite: boolean }) =>
+          project.name === 'app/production' && project.canRead && project.canWrite,
+      ) === true,
   );
-  const asked = laptop.cli([
-    'access',
-    'request',
-    'app/production',
-    '--read',
-    '--write',
-    '--reason',
-    'to deploy the worker',
-  ]);
-  check('the service account asks for access', asked.json?.status === 'pending');
-  await page.goto(`${WEB}/requests`);
-  await page.getByRole('button', { name: 'Approve read + write' }).waitFor();
-  await shoot(page, '08-requests');
-  await shootPhone(page, '08b-requests-phone');
-  await page.getByRole('button', { name: 'Approve read + write' }).click();
-  await page.getByText('Nothing is waiting on you').waitFor();
-  await shoot(page, '08c-requests-empty');
 
   const set = laptop.cli(['set', 'app/production', 'API_KEY'], 'value-from-the-cli\n');
   check(
@@ -284,6 +290,39 @@ const main = async (browser: Browser) => {
     laptop.cli(['secrets', 'app/production']).json?.secrets.length === 4,
   );
 
+  // --- a second login; a project one login makes reaches the other through the dashboard ------
+  const server = serviceAccount('server');
+  const serverPending = server.cli(['login', '--name', 'Build server', '--wait', '0']);
+  await page.goto(serverPending.json.url);
+  await page.getByText(serverPending.json.code).waitFor();
+  await page.getByRole('button', { name: 'The codes match: approve it' }).click();
+  await page.getByRole('heading', { name: /is approved/ }).waitFor();
+  server.cli(['login', '--wait', '0']);
+  laptop.cli(['projects', 'create', 'app/staging']);
+  laptop.cli(['set', 'app/staging', 'API_KEY'], 'staging-value');
+  const waiting = server.cli(['secrets', 'app/staging']);
+  check(
+    'another login waits for the dashboard on a project a login made, and is told so',
+    waiting.status === 4 && waiting.stderr.includes('open the baymutt dashboard'),
+  );
+  await page.goto(`${WEB}/projects`);
+  await page.getByRole('link', { name: /app\/staging/ }).waitFor();
+  let toppedUp = false;
+  for (let attempt = 0; attempt < 20 && !toppedUp; attempt++) {
+    toppedUp = server.cli(['secrets', 'app/staging']).status === 0;
+    if (!toppedUp) await page.waitForTimeout(250);
+  }
+  check('opening the dashboard grants it to every login', toppedUp);
+
+  await page.getByLabel('New project').fill('app/preview');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('link', { name: /app\/preview/ }).waitFor();
+  check(
+    'a project made in the dashboard reaches every login at once',
+    laptop.cli(['secrets', 'app/preview']).status === 0 &&
+      server.cli(['secrets', 'app/preview']).status === 0,
+  );
+
   // --- a narrower service account for CI --------------------------------------------------------------
   const ciKey = join(laptop.home, 'ci-key');
   const created = laptop.cli([
@@ -291,6 +330,10 @@ const main = async (browser: Browser) => {
     'create',
     '--name',
     'CI deploy',
+    '--description',
+    'Deploys app/production from CI',
+    '--expires',
+    '30d',
     '--read',
     'app/production',
     '--',
@@ -299,9 +342,18 @@ const main = async (browser: Browser) => {
     `cat > ${ciKey}`,
   ]);
   check(
-    'the service account makes a read-only one for CI',
-    created.json?.grants?.[0]?.canWrite === false,
+    'the login makes a read-only one for CI, with a description and an expiry',
+    created.json?.grants?.[0]?.canWrite === false &&
+      created.json?.description === 'Deploys app/production from CI' &&
+      typeof created.json?.expiresAt === 'number',
   );
+  const ci = serviceAccount('ci');
+  const ciEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(ciKey, 'utf8') };
+  const ciAsked = spawnSync('node', [cliBin, 'secrets', 'app/staging'], {
+    env: ciEnv,
+    encoding: 'utf8',
+  });
+  check('the CI service account reaches nothing it was not handed', ciAsked.status === 5);
 
   // --- the dashboard after all that -----------------------------------------------------------
   await page.goto(`${WEB}/projects`);
@@ -317,8 +369,28 @@ const main = async (browser: Browser) => {
   await shootPhone(page, '10d-projects-phone');
   await page.goto(`${WEB}/service-accounts`);
   await page.getByText('CI deploy').waitFor();
+  check(
+    'the list tells a CLI login from a service account, and shows descriptions and expiry',
+    (await page.getByRole('img', { name: 'CLI login' }).count()) === 2 &&
+      (await page.getByRole('img', { name: 'Service account' }).count()) === 1 &&
+      (await page.getByText('Deploys app/production from CI').count()) === 1 &&
+      (await page.getByText(/expires in \d+ days/).count()) === 2,
+  );
   await shoot(page, '11-service-accounts');
   await shootPhone(page, '11b-service-accounts-phone');
+  await page.getByRole('button', { name: 'Expiry' }).last().click();
+  await page.getByLabel('Expires').selectOption('never');
+  await page.getByRole('alertdialog').waitFor();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(shots, '11c-expiry.png') });
+  await page.getByRole('button', { name: 'Save expiry' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'hidden' });
+  await page.getByText(/expires in 30 days/).waitFor({ state: 'detached' });
+  check(
+    'the owner changes when a service account expires',
+    (await page.getByText(/expires in \d+ days/).count()) === 1,
+  );
+  await shoot(page, '11d-service-accounts-after-expiry');
   await page.goto(`${WEB}/activity`);
   await page.getByText('pasted').waitFor();
   await shoot(page, '12-activity');
@@ -333,14 +405,21 @@ const main = async (browser: Browser) => {
   await page.getByRole('heading', { name: 'Passkeys' }).waitFor();
   check('a reload leaves the vault open', await keepsVaultOpen(page));
 
-  // Revoking the laptop takes the CI service account with it.
+  // Logging the laptop out takes the CI service account with it.
+  const loggedOut = laptop.cli(['logout']);
+  check(
+    '`baymutt logout` revokes the login and what it made',
+    loggedOut.json?.status === 'loggedOut' && loggedOut.json?.revoked.length === 2,
+  );
+  check('a logged-out computer is not logged in', laptop.cli(['projects', 'list']).status === 3);
   await page.goto(`${WEB}/service-accounts`);
+  await page.getByText('Build server').waitFor();
   await page.getByRole('button', { name: 'Revoke' }).first().click();
   await shoot(page, '14-revoke');
   await page.getByRole('button', { name: 'Revoke service account' }).click();
   await page.getByText('No service accounts yet').waitFor();
   await shoot(page, '14b-service-accounts-empty');
-  check('a revoked service account is refused', laptop.cli(['projects', 'list']).status === 3);
+  check('a revoked service account is refused', server.cli(['projects', 'list']).status === 3);
 
   // --- dark, and a phone ----------------------------------------------------------------------
   // The same page: the virtual authenticator belongs to its target.
@@ -429,7 +508,7 @@ const main = async (browser: Browser) => {
   check('the old recovery key no longer works', true);
   await spent.close();
 
-  for (const directory of [laptop.home, schemaDir])
+  for (const directory of [laptop.home, server.home, ci.home, schemaDir])
     rmSync(directory, { recursive: true, force: true });
   console.log(`\nAll checks passed. Screens: ${shots}`);
 };

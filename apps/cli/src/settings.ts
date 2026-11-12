@@ -20,7 +20,12 @@ const StateSchema = Schema.Struct({
   ),
   /** A pairing the owner has not approved yet. Its secret seals the browser's answer. */
   pendingPairing: Schema.optionalKey(
-    Schema.Struct({ pairingSecret: Schema.String, name: Schema.String }),
+    Schema.Struct({
+      pairingSecret: Schema.String,
+      name: Schema.String,
+      description: Schema.optionalKey(Schema.String),
+      expiresAt: Schema.optionalKey(Schema.Finite),
+    }),
   ),
 });
 export type State = typeof StateSchema.Type;
@@ -83,4 +88,14 @@ export const updateState = Effect.fn('settings.updateState')(function* (
   );
   yield* fs.makeDirectory(path.dirname(stateFile), { recursive: true });
   yield* fs.writeFileString(stateFile, `${text}\n`, { mode: 0o600 });
+});
+
+/** Forgets what this computer remembers about the store: the account it logged in to, or a login under way. */
+export const removeState = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const { stateFile } = yield* Settings;
+  yield* fs.remove(stateFile).pipe(
+    Effect.catchReason('PlatformError', 'NotFound', () => Effect.void),
+    Effect.orDie,
+  );
 });

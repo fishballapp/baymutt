@@ -5,6 +5,11 @@ import * as Schema from 'effect/Schema';
 /** Epoch milliseconds. */
 export const TimestampSchema = Schema.Int.annotate({ description: 'Epoch milliseconds.' });
 
+/** When a service account stops working, as a client may ask for it: a time a date can hold. */
+export const ExpirySchema = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 253_402_300_799_999 }),
+).annotate({ description: 'Epoch milliseconds, no later than the year 9999.' });
+
 export const IdSchema = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
 ).annotate({ description: 'A UUID the client makes.' });
@@ -24,12 +29,19 @@ export const LabelSchema = Schema.String.check(Schema.isPattern(/^\S(.{0,58}\S)?
   description: 'A name of 1 to 60 characters, with no space at either end.',
 });
 
+/** What a service account is for, in its maker's words. Stored as written: the store can read it, like a name. */
+export const DescriptionSchema = Schema.String.check(
+  Schema.isPattern(/^\S(.{0,138}\S)?$/u),
+).annotate({
+  description:
+    'What it is for, 1 to 140 characters with no space at either end. Stored readable, like the name: never a secret.',
+});
+
 export const ProjectNameSchema = Schema.String.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/u),
   Schema.isMaxLength(120),
 ).annotate({
-  description:
-    'Lower-case segments joined by `/`, such as `app/production`. Dev and production are separate projects.',
+  description: 'Lower-case segments joined by `/`, such as `app/production`.',
 });
 
 export const SecretNameSchema = Schema.String.check(

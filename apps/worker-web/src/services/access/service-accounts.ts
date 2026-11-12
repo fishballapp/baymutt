@@ -2,6 +2,7 @@
 import {
   type ActorIdentity,
   AlreadyExistsError,
+  type LoginGrant,
   type Me,
   NoAccessError,
   NotFoundError,
@@ -29,7 +30,13 @@ type NewServiceAccount = {
   readonly name: string;
   readonly publicKey: string;
   readonly bearerHash: string;
+  readonly description?: string | undefined;
+  readonly expiresAt?: number | undefined;
 };
+
+/** The day a time falls on, in UTC, for a message or the log: `2026-12-01`. */
+// biome-ignore lint/plugin/no-date: this Worker has no Temporal (the runtime gains one at compatibility date 2026-12-01), and one day string is not worth bundling the polyfill.
+const dayOf = (at: number) => new Date(at).toISOString().slice(0, 10);
 
 /** Not a secret comparison (both are hashes of 256 random bits), but equal time costs nothing. */
 const isSameHash = (one: string, other: string): boolean =>
@@ -51,19 +58,26 @@ export const serviceAccounts = ({
 }) => {
   const byBearer = SqlSchema.findOneOption({
     Request: Schema.String,
-    Result: Schema.Struct({ ...ServiceAccountRowSchema.fields, bearerHash: Schema.String }),
+    Result: Schema.Struct({
+      ...ServiceAccountRowSchema.fields,
+      bearerHash: Schema.String,
+      parentExpiresAt: Schema.NullOr(Schema.Finite),
+    }),
+    // A revoked parent revokes its children with it; an expired one stops them too.
     execute: id =>
-      sql`SELECT id, account_id, name, public_key, bearer_hash, parent_id, endorsement, welcome,
-            created_at, last_used_at
-          FROM credential WHERE id = ${id} AND revoked_at IS NULL`,
+      sql`SELECT c.id, c.account_id, c.name, c.public_key, c.bearer_hash, c.parent_id,
+            c.description, c.endorsement, c.welcome, c.created_at, c.last_used_at, c.expires_at,
+            p.expires_at AS parent_expires_at
+          FROM credential c LEFT JOIN credential p ON p.id = c.parent_id
+          WHERE c.id = ${id} AND c.revoked_at IS NULL`,
   });
 
   const visible = SqlSchema.findAll({
     Request: Schema.Struct({ accountId: Schema.String, self: Schema.NullOr(Schema.String) }),
     Result: ServiceAccountRowSchema,
     execute: ({ accountId, self }) =>
-      sql`SELECT id, account_id, name, public_key, parent_id, endorsement, welcome, created_at,
-            last_used_at
+      sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
+            created_at, last_used_at, expires_at
           FROM credential
           WHERE account_id = ${accountId} AND revoked_at IS NULL
             AND (${self} IS NULL OR id = ${self} OR parent_id = ${self})
@@ -110,6 +124,8 @@ export const serviceAccounts = ({
         name: row.name,
         publicKey: row.publicKey,
         parentId: row.parentId,
+        description: row.description,
+        expiresAt: row.expiresAt,
         // Only the owner's vault can read an endorsement, and only the owner acts on one.
         endorsement: actor._tag === 'Owner' ? row.endorsement : null,
         createdAt: row.createdAt,
@@ -146,9 +162,11 @@ export const serviceAccounts = ({
       readonly welcome?: string | null;
     }) =>
       sql`INSERT OR IGNORE INTO credential
-          (id, account_id, name, public_key, bearer_hash, parent_id, endorsement, welcome, created_at)
+          (id, account_id, name, public_key, bearer_hash, parent_id, description, endorsement,
+           welcome, created_at, expires_at)
         VALUES (${serviceAccount.id}, ${accountId}, ${serviceAccount.name}, ${serviceAccount.publicKey},
-          ${serviceAccount.bearerHash}, ${parentId}, ${endorsement}, ${welcome}, ${now})
+          ${serviceAccount.bearerHash}, ${parentId}, ${serviceAccount.description ?? null},
+          ${endorsement}, ${welcome}, ${now}, ${serviceAccount.expiresAt ?? null})
         RETURNING id`;
 
   /** Whether this request's insert is the row: an id that was taken leaves another's bearer there. */
@@ -166,7 +184,7 @@ export const serviceAccounts = ({
     authenticate: Effect.fn('Access.authenticate')(function* (bearer: Redacted.Redacted<string>) {
       const refused = new UnauthorizedError({
         message:
-          'This service account key is not approved, or was revoked. Log in with `baymutt login`, or check BAYMUTT_KEY.',
+          'This service account key is not approved, or was revoked. Log in with `baymutt login`, after `baymutt logout` if this computer was logged in before, or check BAYMUTT_KEY.',
       });
       const parsed = yield* Effect.promise(() => parseBearer(Redacted.value(bearer)));
       if (parsed === null) return yield* refused;
@@ -174,8 +192,18 @@ export const serviceAccounts = ({
       if (Option.isNone(found) || !isSameHash(found.value.bearerHash, parsed.bearerHash)) {
         return yield* refused;
       }
-      const { id, accountId, name, parentId } = found.value;
+      const { id, accountId, name, parentId, expiresAt, parentExpiresAt } = found.value;
       const now = yield* Clock.currentTimeMillis;
+      if (expiresAt !== null && expiresAt <= now) {
+        return yield* new UnauthorizedError({
+          message: `This service account expired on ${dayOf(expiresAt)}. The owner can extend it under Service accounts in the dashboard; otherwise make a new one.`,
+        });
+      }
+      if (parentExpiresAt !== null && parentExpiresAt <= now) {
+        return yield* new UnauthorizedError({
+          message: `The login that made this service account expired on ${dayOf(parentExpiresAt)}, so this one stopped with it. The owner can extend that login in the dashboard.`,
+        });
+      }
       // Coarse on purpose: one write a minute per service account, not one a request.
       yield* sql`UPDATE credential SET last_used_at = ${now}
           WHERE id = ${id}
@@ -213,11 +241,14 @@ export const serviceAccounts = ({
       serviceAccount,
       endorsement,
       welcome,
+      grants,
     }: {
       readonly actor: ActorIdentity;
       readonly serviceAccount: NewServiceAccount;
       readonly endorsement: string;
       readonly welcome: string;
+      /** Read and write on each project, wrapped by the owner's vault: a login holds every one. */
+      readonly grants: ReadonlyArray<LoginGrant>;
     }) {
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
@@ -228,9 +259,22 @@ export const serviceAccounts = ({
       yield* underLimit(actor.accountId, 'serviceAccounts');
       const now = yield* Clock.currentTimeMillis;
       const made = madeBy(serviceAccount, now);
+      // One batch: approved and holding its projects, or neither. A grant names a live project of
+      // this account or is dropped; one made meanwhile is the dashboard's top-up to add.
       const [inserted] = yield* sql
         .batch([
           insert(actor.accountId, serviceAccount, now)({ endorsement, welcome }),
+          ...grants.map(
+            grant =>
+              sql`INSERT INTO project_grant
+                    (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
+                     key_version, created_at)
+                  SELECT id, ${serviceAccount.id}, account_id, 1, ${grant.readWrap},
+                    ${grant.keyProof}, ${grant.keyVersion}, ${now}
+                  FROM project
+                  WHERE id = ${grant.projectId} AND account_id = ${actor.accountId}
+                    AND archived_at IS NULL AND ${made}`,
+          ),
           yield* audit.entry(
             {
               accountId: actor.accountId,
@@ -319,6 +363,37 @@ export const serviceAccounts = ({
         .pipe(Effect.orDie);
       if ((inserted ?? []).length === 0) return yield* taken;
       return yield* one(actor, serviceAccount.id);
+    }),
+
+    setExpiry: Effect.fn('Access.setExpiry')(function* ({
+      actor,
+      id,
+      expiresAt,
+    }: {
+      readonly actor: ActorIdentity;
+      readonly id: string;
+      readonly expiresAt: number | null;
+    }) {
+      // Not even its own: an agent that could extend itself would outlive what the owner chose.
+      if (actor._tag !== 'Owner') {
+        return yield* new OwnerRequiredError({
+          message: 'Only the owner changes when a service account expires, from the dashboard.',
+        });
+      }
+      const target = yield* serviceAccountIn(actor.accountId, id);
+      yield* sql
+        .batch([
+          sql`UPDATE credential SET expires_at = ${expiresAt}
+              WHERE id = ${id} AND account_id = ${actor.accountId} AND revoked_at IS NULL`,
+          yield* audit.entry({
+            accountId: actor.accountId,
+            actor: actorOf(actor),
+            action: 'credential.expiry',
+            detail: `${target.name}: ${expiresAt === null ? 'never' : dayOf(expiresAt)}`,
+          }),
+        ])
+        .pipe(Effect.orDie);
+      return yield* one(actor, id);
     }),
 
     revoke: Effect.fn('Access.revoke')(function* ({

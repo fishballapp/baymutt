@@ -6,12 +6,14 @@ The `baymutt` command: everything a service account or a coding agent does with
 
 ```sh
 npm install -g @baymutt/cli
-baymutt login --name "MacBook"     # prints a link; the account's owner opens it and approves
-baymutt access request app/production --read --reason "to deploy the worker"
+baymutt login                     # prints a link; the account's owner opens it and approves
 baymutt secrets app/production    # names, versions and sizes; never a value
+baymutt logout                    # revokes this login and forgets its key
 ```
 
 - Values are sealed and opened on this computer. The store holds only ciphertext.
+- A login reads and writes every project of the account. `service-accounts create` makes a
+  scoped one, which holds only the projects it names and cannot widen them. Both take `--description` (never a secret: it is stored readable) and `--expires 12h|90d`.
 - Every command prints JSON on stdout. A failure is one JSON line on stderr that says what to do
   next, with a stable exit code: 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict,
   7 unreachable, 8 integrity, 9 check differs.

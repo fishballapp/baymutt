@@ -9,6 +9,8 @@ import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
 import { AlreadyExistsError, LimitReachedError, NoAccessError, NotFoundError } from './errors.ts';
 import {
+  DescriptionSchema,
+  ExpirySchema,
   HashSchema,
   IdSchema,
   KeyProofSchema,
@@ -31,8 +33,14 @@ export const ServiceAccountSchema = Schema.Struct({
   id: Schema.String,
   name: LabelSchema,
   publicKey: PublicKeySchema,
-  /** The service account that made this one; null for a service account the owner paired. */
+  /**
+   * The service account that made this one. Null for a login: one `baymutt login` made and the
+   * owner approved, which holds read and write on every project of the account.
+   */
   parentId: Schema.NullOr(Schema.String),
+  description: Schema.NullOr(DescriptionSchema),
+  /** When it stops working; null for never. An expired one is listed until it is revoked. */
+  expiresAt: Schema.NullOr(TimestampSchema),
   /** The owner's vault vouching for `publicKey`. Only a service account the owner paired has one, and only the owner can read it. */
   endorsement: Schema.NullOr(SealedSchema),
   createdAt: TimestampSchema,
@@ -48,9 +56,27 @@ const newCredential = {
   bearerHash: HashSchema,
 };
 
+/** What its maker may say about a new service account. Both optional, so older clients still send a valid request. */
+const aboutNewCredential = {
+  description: Schema.optionalKey(DescriptionSchema),
+  /** When it stops working. Omitted: never. */
+  expiresAt: Schema.optionalKey(ExpirySchema),
+};
+
+/** Read and write on one project for a login, as the owner's vault wraps and vouches for it. */
+export const LoginGrantSchema = Schema.Struct({
+  projectId: Schema.String,
+  readWrap: WrapSchema,
+  keyProof: KeyProofSchema,
+  keyVersion: Schema.Int,
+}).annotate({ identifier: 'LoginGrant' });
+export type LoginGrant = typeof LoginGrantSchema.Type;
+
 /** What the pairing link carries in its fragment, from the service account to the owner's browser. */
 export const PairingRequestSchema = Schema.Struct({
   ...newCredential,
+  /** What the terminal says it is for. A claim, shown as one; links from CLIs before 0.3.0 have none. */
+  ...aboutNewCredential,
   /** Seals the browser's answer, so the store cannot write one. */
   pairingSecret: HashSchema,
 }).annotate({ identifier: 'PairingRequest' });
@@ -89,8 +115,11 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
     HttpApiEndpoint.post('pair', '/credentials/pair', {
       payload: Schema.Struct({
         ...newCredential,
+        ...aboutNewCredential,
         endorsement: SealedSchema,
         welcome: SealedSchema,
+        /** Read and write on every project, written in the same batch as the approval. */
+        grants: Schema.optionalKey(Schema.Array(LoginGrantSchema)),
       }),
       success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [coded(OwnerRequiredError), coded(AlreadyExistsError), coded(LimitReachedError)],
@@ -98,12 +127,13 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Approve a service account',
         description:
-          'The owner’s approval of the link `baymutt login` prints. The service account starts with no access.',
+          'The owner’s approval of the link `baymutt login` prints. A login holds read and write on every project: the owner’s browser wraps each project key to it in the same request, and to every project made later.',
       }),
     ),
     HttpApiEndpoint.post('create', '/credentials', {
       payload: Schema.Struct({
         ...newCredential,
+        ...aboutNewCredential,
         grants: Schema.Array(
           Schema.Struct({
             projectId: Schema.String,
@@ -127,7 +157,19 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Make a narrower service account',
         description:
-          'A service account hands part of its own access to a new one, such as a CI job. It cannot grant what it does not hold, and a service account made this way can make no others.',
+          'A service account hands part of its own access to a new one. It cannot grant what it does not hold, and a service account made this way can make no others.',
+      }),
+    ),
+    HttpApiEndpoint.put('setExpiry', '/credentials/:id/expiry', {
+      params: { id: Schema.String },
+      payload: Schema.Struct({ expiresAt: Schema.NullOr(ExpirySchema) }),
+      success: ServiceAccountSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(
+      OpenApi.annotations({
+        summary: 'Set when a service account expires',
+        description:
+          'Owner only. Null for never; a later time revives one that has expired. Expiring, like revoking, does not take back what it already read.',
       }),
     ),
     HttpApiEndpoint.delete('revoke', '/credentials/:id', {

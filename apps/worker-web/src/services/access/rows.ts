@@ -20,10 +20,12 @@ export const ServiceAccountRowSchema = Schema.Struct({
   name: Schema.String,
   publicKey: Schema.String,
   parentId: Schema.NullOr(Schema.String),
+  description: Schema.NullOr(Schema.String),
   endorsement: Schema.NullOr(Schema.String),
   welcome: Schema.NullOr(Schema.String),
   createdAt: Schema.Finite,
   lastUsedAt: Schema.NullOr(Schema.Finite),
+  expiresAt: Schema.NullOr(Schema.Finite),
 });
 export type ServiceAccountRow = typeof ServiceAccountRowSchema.Type;
 
@@ -52,21 +54,34 @@ export type ProjectAccess = {
   /** The project key wrapped to the caller, and the reader id the wrap is bound to. */
   readonly wrap: string | null;
   readonly readerId: string;
+  /** The caller is a login, which is meant to hold every project: one it lacks waits on the owner's dashboard. */
+  readonly readerIsLogin: boolean;
 };
+
+/** A login: made by `baymutt login` and approved by the owner, so it has no parent. It holds every project. */
+export const isLogin = (actor: ActorIdentity): boolean =>
+  actor._tag === 'ServiceAccount' && actor.parentId === null;
+
+/** What a login is told when the owner's dashboard has not wrapped a project to it yet. */
+const awaitingDashboard = (projectName: string) =>
+  `This login has full access, but ${projectName} was made by another service account and is not wrapped to this login yet: only the owner's browser can do that. Ask the owner to open the baymutt dashboard once; it grants every project a login lacks.`;
 
 export const lookups = (sql: D1Client.D1Client) => {
   /**
    * Live projects of an account with the caller's grant joined on. `credentialId` null is the
-   * owner, who sees every project; a service account sees only those it holds a grant on.
+   * owner, who sees every project; a login sees every project too (one it lacks a grant on is
+   * waiting for the owner's dashboard); any other service account sees only those it holds a
+   * grant on.
    */
   const projectRows = SqlSchema.findAll({
     Request: Schema.Struct({
       accountId: Schema.String,
       credentialId: Schema.NullOr(Schema.String),
+      seesAll: Schema.Boolean,
       projectId: Schema.NullOr(Schema.String),
     }),
     Result: ProjectRowSchema,
-    execute: ({ accountId, credentialId, projectId }) =>
+    execute: ({ accountId, credentialId, seesAll, projectId }) =>
       sql`SELECT p.id, p.account_id, p.name, p.public_key, p.key_version, p.owner_wrap,
             p.owner_proof, p.created_by, p.created_at, g.can_write, g.read_wrap, g.key_proof,
             (SELECT COUNT(*) FROM secret s
@@ -75,7 +90,7 @@ export const lookups = (sql: D1Client.D1Client) => {
           LEFT JOIN project_grant g ON g.project_id = p.id AND g.credential_id = ${credentialId}
           WHERE p.account_id = ${accountId} AND p.archived_at IS NULL
             AND (${projectId} IS NULL OR p.id = ${projectId})
-            AND (${credentialId} IS NULL OR g.credential_id IS NOT NULL)
+            AND (${seesAll ? 1 : 0} = 1 OR g.credential_id IS NOT NULL)
           ORDER BY p.name`,
   });
 
@@ -98,6 +113,7 @@ export const lookups = (sql: D1Client.D1Client) => {
       ownerProof: row.ownerProof,
       wrap: isOwner ? row.ownerWrap : row.readWrap,
       readerId: isOwner ? actor.accountId : actor.credentialId,
+      readerIsLogin: isLogin(actor),
     };
   };
 
@@ -105,25 +121,40 @@ export const lookups = (sql: D1Client.D1Client) => {
     projectRows({
       accountId: actor.accountId,
       credentialId: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
+      seesAll: actor._tag === 'Owner' || isLogin(actor),
       projectId,
     }).pipe(
       Effect.orDie,
       Effect.map(rows => rows.map(row => toAccess(actor, row))),
     );
 
-  /** A project the caller can see. One it holds no grant on reads as not found: its name is not the caller's to learn. */
+  /**
+   * A project the caller holds a grant on, or the owner. One a scoped service account holds no
+   * grant on reads as not found: its name is not the caller's to learn. A login is listed every
+   * project, and is refused one it holds nothing on yet: listed is not granted.
+   */
   const projectFor = Effect.fnUntraced(function* (actor: ActorIdentity, projectId: string) {
     const [access] = yield* projectsOf(actor, projectId);
+    if (access?.readerIsLogin && !access.project.canRead && !access.project.canWrite) {
+      return yield* new NoAccessError({
+        need: 'read',
+        message: awaitingDashboard(access.project.name),
+      });
+    }
     if (access === undefined) {
       return yield* new NotFoundError({
         message:
-          actor._tag === 'Owner'
+          actor._tag === 'Owner' || isLogin(actor)
             ? 'No project has this id.'
             : 'No project with this id is granted to this service account. List what it holds with `baymutt projects`, or ask for one with `baymutt access request`.',
       });
     }
     return access;
   });
+
+  /** A project for a caller already checked to be the owner, who holds every project: never a refusal for access. */
+  const ownersProject = (actor: ActorIdentity, projectId: string) =>
+    projectFor(actor, projectId).pipe(Effect.catchTag('NoAccessError', Effect.die));
 
   const needing = (access: ProjectAccess, need: 'read' | 'write') => {
     const holds = need === 'read' ? access.project.canRead : access.project.canWrite;
@@ -132,7 +163,9 @@ export const lookups = (sql: D1Client.D1Client) => {
       : Effect.fail(
           new NoAccessError({
             need,
-            message: `This service account has no ${need} access to ${access.project.name}. Ask the owner: \`baymutt access request ${access.project.name} --${need} --reason "…"\`.`,
+            message: access.readerIsLogin
+              ? awaitingDashboard(access.project.name)
+              : `This service account has no ${need} access to ${access.project.name}. Ask the owner: \`baymutt access request ${access.project.name} --${need} --reason "…"\`.`,
           }),
         );
   };
@@ -141,8 +174,8 @@ export const lookups = (sql: D1Client.D1Client) => {
     Request: Schema.Struct({ accountId: Schema.String, id: Schema.String }),
     Result: ServiceAccountRowSchema,
     execute: ({ accountId, id }) =>
-      sql`SELECT id, account_id, name, public_key, parent_id, endorsement, welcome, created_at,
-            last_used_at
+      sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
+            created_at, last_used_at, expires_at
           FROM credential
           WHERE id = ${id} AND account_id = ${accountId} AND revoked_at IS NULL`,
   });
@@ -178,7 +211,7 @@ export const lookups = (sql: D1Client.D1Client) => {
     }
   });
 
-  return { projectsOf, projectFor, needing, serviceAccountIn, underLimit };
+  return { projectsOf, projectFor, ownersProject, needing, serviceAccountIn, underLimit };
 };
 
 export type Lookups = ReturnType<typeof lookups>;

@@ -9,6 +9,7 @@ import {
   generateProjectKey,
   generateRecoveryKey,
   grantToServiceAccount,
+  grantToTrustedReader,
   type OwnerKeys,
   openAccountKey,
   openOwnedProject,
@@ -32,6 +33,7 @@ import * as Layer from 'effect/Layer';
 import * as Schema from 'effect/Schema';
 import * as Stdio from 'effect/Stdio';
 import * as Stream from 'effect/Stream';
+import * as TestClock from 'effect/testing/TestClock';
 import * as TestConsole from 'effect/testing/TestConsole';
 import { CliLayer, cli } from './app.ts';
 import { Reported } from './errors.ts';
@@ -178,50 +180,56 @@ const makeOwner = async (world: TestWorld) => {
     return { ...project, owned, opened: await openOwnedProject(keys, owned) };
   };
 
+  const allProjects = async () =>
+    (await api<{ projects: ProjectRow[] }>('GET', '/projects')).projects;
+
+  type Listed = {
+    id: string;
+    publicKey: string;
+    parentId: string | null;
+    endorsement: string | null;
+    grants: { projectId: string; canRead: boolean; canWrite: boolean }[];
+  };
+
   return {
     accountId,
     api,
-    /** Approves the link `baymutt login` printed, as the pairing page does. */
+    /** Approves the link `baymutt login` printed, as the pairing page does: with every project wrapped to it. */
     approve: async (url: string) => {
       const request: PairingRequest = Schema.decodeUnknownSync(
         Schema.fromJsonString(PairingRequestSchema),
       )(decodeURIComponent(new URL(url).hash.slice(1)));
       const { pairingSecret, ...serviceAccount } = request;
+      const reader = { id: serviceAccount.id, publicKey: serviceAccount.publicKey };
+      const grants = await Promise.all(
+        (await allProjects()).map(async ({ name }) => {
+          const { id, owned, keyVersion } = await projectByName(name);
+          const grant = await grantToTrustedReader(keys, owned, reader, { canRead: true });
+          return { projectId: id, keyVersion, keyProof: grant.keyProof, readWrap: grant.readWrap };
+        }),
+      );
       await api('POST', '/credentials/pair', {
         ...serviceAccount,
         ...(await approvePairing(keys, { ...serviceAccount, pairingSecret })),
+        grants,
       });
       return serviceAccount.id;
     },
-    /** Approves every pending access request, wrapping the project key to the service account that asked. */
-    approveAccess: async () => {
-      const { requests } = await api<{
-        requests: {
-          id: string;
-          projectName: string;
-          credentialId: string;
-          credentialPublicKey: string;
-          endorsement: string | null;
-          wantsRead: boolean;
-          wantsWrite: boolean;
-        }[];
-      }>('GET', '/access-requests');
-      for (const request of requests) {
-        const project = await projectByName(request.projectName);
-        await api('POST', `/access-requests/${request.id}/approve`, {
-          canWrite: request.wantsWrite,
-          keyVersion: project.keyVersion,
-          ...(await grantToServiceAccount(
-            keys,
-            project.owned,
-            {
-              id: request.credentialId,
-              publicKey: request.credentialPublicKey,
-              endorsement: request.endorsement,
-            },
-            { canRead: request.wantsRead },
-          )),
-        });
+    /** What the dashboard does whenever the vault is open: grants each login every project it lacks. */
+    topUp: async () => {
+      const { credentials } = await api<{ credentials: Listed[] }>('GET', '/credentials');
+      const projects = await allProjects();
+      for (const login of credentials.filter(({ parentId }) => parentId === null)) {
+        for (const { id, name } of projects) {
+          const held = login.grants.find(grant => grant.projectId === id);
+          if (held?.canRead && held.canWrite) continue;
+          const project = await projectByName(name);
+          await api('PUT', `/projects/${id}/grants/${login.id}`, {
+            canWrite: true,
+            keyVersion: project.keyVersion,
+            ...(await grantToServiceAccount(keys, project.owned, login, { canRead: true })),
+          });
+        }
       }
     },
     projectByName,
@@ -267,7 +275,7 @@ layer(NodeServices.layer)(it => {
               account: { id: owner.accountId, name: 'Jason' },
             },
           });
-          // A new service account holds nothing.
+          // An account with no projects yet: nothing to hold.
           expect((yield* run(world, laptop, ['projects', 'list'])).json).toEqual({ projects: [] });
         }),
     );
@@ -419,60 +427,81 @@ layer(NodeServices.layer)(it => {
   });
 
   describe('access', () => {
-    it.effect(
-      'is asked for, and a read works once the owner wraps the project key to this service account',
-      () =>
-        Effect.gen(function* () {
-          const { world, owner, laptop } = yield* paired;
-          yield* run(world, laptop, ['projects', 'create', 'app/production']);
-          yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'the value');
-          const agent = yield* seat;
-          const pending = yield* run(world, agent, ['login', '--name', 'agent', '--wait', '0']);
-          yield* Effect.promise(() => owner.approve(pending.json.url));
-          yield* run(world, agent, ['login', '--wait', '0']);
-
-          expect((yield* run(world, agent, ['secrets', 'app/production'])).exitCode).toBe(5);
-          const asked = yield* run(world, agent, [
-            'access',
-            'request',
-            'app/production',
-            '--read',
-            '--reason',
-            'to deploy',
-          ]);
-          expect(asked.json).toMatchObject({
-            status: 'pending',
-            wantsRead: true,
-            wantsWrite: false,
-          });
-
-          yield* Effect.promise(() => owner.approveAccess());
-
-          expect(yield* load(world, agent, 'app/production')).toEqual({ API_KEY: 'the value' });
-          // Read was all it asked for.
-          const write = yield* run(world, agent, ['set', 'app/production', 'API_KEY'], 'changed');
-          expect(write.exitCode).toBe(4);
-          expect(JSON.parse(write.stderr).error).toMatchObject({ code: 'NoAccessError' });
-        }),
-    );
-
-    it.effect('to write alone seals values this service account can never load', () =>
+    it.effect('is every project for a login approved after they were made', () =>
       Effect.gen(function* () {
         const { world, owner, laptop } = yield* paired;
-        yield* run(world, laptop, ['projects', 'create', 'app/production']);
-        const writer = yield* seat;
-        const pending = yield* run(world, writer, ['login', '--name', 'writer', '--wait', '0']);
+        for (const name of ['app/production', 'app/staging', 'app/development']) {
+          yield* run(world, laptop, ['projects', 'create', name]);
+          yield* run(world, laptop, ['set', name, 'API_KEY'], `for ${name}`);
+        }
+        const agent = yield* seat;
+        const pending = yield* run(world, agent, ['login', '--name', 'agent', '--wait', '0']);
         yield* Effect.promise(() => owner.approve(pending.json.url));
-        yield* run(world, writer, ['login', '--wait', '0']);
-        yield* run(world, writer, [
+        yield* run(world, agent, ['login', '--wait', '0']);
+
+        for (const name of ['app/production', 'app/staging', 'app/development']) {
+          expect(yield* load(world, agent, name)).toEqual({ API_KEY: `for ${name}` });
+        }
+        expect(
+          (yield* run(world, agent, ['set', 'app/production', 'API_KEY'], 'changed')).exitCode,
+        ).toBe(0);
+      }),
+    );
+
+    it.effect('waits for the owner’s dashboard on a project another login made, and says so', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop } = yield* paired;
+        const agent = yield* seat;
+        const pending = yield* run(world, agent, ['login', '--name', 'agent', '--wait', '0']);
+        yield* Effect.promise(() => owner.approve(pending.json.url));
+        yield* run(world, agent, ['login', '--wait', '0']);
+        // Made after the agent's approval, by another login: no browser has wrapped it to the agent.
+        yield* run(world, laptop, ['projects', 'create', 'app/production']);
+        yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'the value');
+
+        const waiting = yield* run(world, agent, ['secrets', 'app/production']);
+        expect(waiting.exitCode).toBe(4);
+        expect(JSON.parse(waiting.stderr).error.message).toContain(
+          'Ask the owner to open the baymutt dashboard once',
+        );
+        const asked = yield* run(world, agent, [
           'access',
           'request',
           'app/production',
-          '--write',
+          '--read',
           '--reason',
-          'rotation',
+          'to deploy',
         ]);
-        yield* Effect.promise(() => owner.approveAccess());
+        expect(asked.exitCode).toBe(4);
+
+        yield* Effect.promise(() => owner.topUp());
+
+        expect(yield* load(world, agent, 'app/production')).toEqual({ API_KEY: 'the value' });
+      }),
+    );
+
+    it.effect('to write alone seals values a service account can never load', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, laptop } = yield* paired;
+        yield* run(world, laptop, ['projects', 'create', 'app/production']);
+        const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
+        yield* run(world, laptop, [
+          'service-accounts',
+          'create',
+          '--name',
+          'writer',
+          '--write',
+          'app/production',
+          '--',
+          'sh',
+          '-c',
+          `cat > ${keyFile}`,
+        ]);
+        const writer: Seat = {
+          configHome: yield* fs.makeTempDirectoryScoped(),
+          env: { BAYMUTT_KEY: yield* fs.readFileString(keyFile) },
+        };
 
         expect(
           (yield* run(world, writer, ['set', 'app/production', 'API_KEY'], 'written blind')).json,
@@ -687,6 +716,156 @@ layer(NodeServices.layer)(it => {
           (yield* run(world, laptop, ['service-accounts', 'list'])).json.credentials,
         ).toHaveLength(1);
       }),
+    );
+  });
+
+  describe('logging in and out', () => {
+    it.effect(
+      'carries a description and an expiry in the link, and names a login after this computer',
+      () =>
+        Effect.gen(function* () {
+          // `--expires` counts from the Clock, which a test starts at 0.
+          yield* TestClock.setTime(Date.now());
+          const world = testWorld();
+          const owner = yield* Effect.promise(() => makeOwner(world));
+          const laptop = yield* seat;
+          const pending = yield* run(world, laptop, [
+            'login',
+            '--description',
+            'Agents on the work laptop',
+            '--expires',
+            '90d',
+            '--wait',
+            '0',
+          ]);
+          const fragment = JSON.parse(decodeURIComponent(new URL(pending.json.url).hash.slice(1)));
+          expect(fragment).toMatchObject({
+            name: expect.stringMatching(/^CLI on \S/),
+            description: 'Agents on the work laptop',
+            expiresAt: expect.any(Number),
+          });
+          yield* Effect.promise(() => owner.approve(pending.json.url));
+
+          const { credentials } = yield* Effect.promise(() =>
+            owner.api<{ credentials: { description: string; expiresAt: number }[] }>(
+              'GET',
+              '/credentials',
+            ),
+          );
+          expect(credentials).toMatchObject([{ description: 'Agents on the work laptop' }]);
+          const days = ((credentials[0]?.expiresAt ?? 0) - Date.now()) / (24 * 3600 * 1000);
+          expect(Math.round(days)).toBe(90);
+          expect(
+            (yield* run(world, yield* seat, ['login', '--expires', 'soon', '--wait', '0']))
+              .exitCode,
+          ).toBe(2);
+        }),
+    );
+
+    it.effect('reads a link from a CLI before 0.3.0, which carries no description or expiry', () =>
+      Effect.sync(() => {
+        const decoded = Schema.decodeUnknownSync(Schema.fromJsonString(PairingRequestSchema))(
+          JSON.stringify({
+            id: crypto.randomUUID(),
+            name: 'service account 1a2b3c4d',
+            publicKey: 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo',
+            bearerHash: 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo',
+            pairingSecret: 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo',
+          }),
+        );
+        expect(decoded).not.toHaveProperty('description');
+        expect(decoded).not.toHaveProperty('expiresAt');
+      }),
+    );
+
+    it.effect('logout revokes this login and what it made, and forgets its key', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, owner, laptop, serviceAccountId } = yield* paired;
+        yield* run(world, laptop, ['projects', 'create', 'app/production']);
+        const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
+        yield* run(world, laptop, [
+          'service-accounts',
+          'create',
+          '--name',
+          'ci',
+          '--write',
+          'app/production',
+          '--',
+          'sh',
+          '-c',
+          `cat > ${keyFile}`,
+        ]);
+        const ci: Seat = {
+          configHome: yield* fs.makeTempDirectoryScoped(),
+          env: { BAYMUTT_KEY: yield* fs.readFileString(keyFile) },
+        };
+
+        const refused = yield* run(world, ci, ['logout']);
+        expect(refused.exitCode).toBe(2);
+        expect(JSON.parse(refused.stderr).error.message).toContain('BAYMUTT_KEY');
+
+        const out = yield* run(world, laptop, ['logout']);
+        expect(out).toMatchObject({ exitCode: 0, json: { status: 'loggedOut' } });
+        expect(out.json.revoked).toHaveLength(2);
+        expect((yield* run(world, laptop, ['whoami'])).exitCode).toBe(3);
+        expect((yield* run(world, ci, ['whoami'])).exitCode).toBe(3);
+        const { credentials } = yield* Effect.promise(() =>
+          owner.api<{ credentials: unknown[] }>('GET', '/credentials'),
+        );
+        expect(credentials).toEqual([]);
+
+        // Logging in again starts over, with a new key.
+        const again = yield* run(world, laptop, ['login', '--wait', '0']);
+        expect(again.json).toMatchObject({ status: 'pending' });
+        expect(again.json.serviceAccountId).not.toBe(serviceAccountId);
+      }),
+    );
+
+    it.effect(
+      'a service account made with an expiry stops when it passes, with its own error',
+      () =>
+        Effect.gen(function* () {
+          // `--expires` counts from the Clock, which a test starts at 0.
+          yield* TestClock.setTime(Date.now());
+          const fs = yield* FileSystem.FileSystem;
+          const { world, laptop } = yield* paired;
+          yield* run(world, laptop, ['projects', 'create', 'app/production']);
+          const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
+          const created = yield* run(world, laptop, [
+            'service-accounts',
+            'create',
+            '--name',
+            'ci',
+            '--description',
+            'Deploys app/production',
+            '--expires',
+            '12h',
+            '--read',
+            'app/production',
+            '--',
+            'sh',
+            '-c',
+            `cat > ${keyFile}`,
+          ]);
+          expect(created.json).toMatchObject({
+            description: 'Deploys app/production',
+            expiresAt: expect.any(Number),
+          });
+          const ci: Seat = {
+            configHome: yield* fs.makeTempDirectoryScoped(),
+            env: { BAYMUTT_KEY: yield* fs.readFileString(keyFile) },
+          };
+          expect((yield* run(world, ci, ['whoami'])).exitCode).toBe(0);
+
+          world.sqlite.exec(
+            `UPDATE credential SET expires_at = ${Date.now() - 1} WHERE name = 'ci'`,
+          );
+
+          const expired = yield* run(world, ci, ['whoami']);
+          expect(expired.exitCode).toBe(3);
+          expect(JSON.parse(expired.stderr).error.message).toContain('expired');
+        }),
     );
   });
 

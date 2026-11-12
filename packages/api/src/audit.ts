@@ -17,6 +17,7 @@ export const AUDIT_ACTIONS = [
   'credential.pair',
   'credential.create',
   'credential.revoke',
+  'credential.expiry',
   'project.create',
   'project.archive',
   'project.load',

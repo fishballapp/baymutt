@@ -42,7 +42,7 @@ const NewProject = () => {
         label="New project"
         isCode
         placeholder="app/production"
-        hint="Lower-case segments joined by /. Dev and production are separate projects, so a service account granted one cannot reach the other."
+        hint="Lower-case segments joined by /."
         error={
           name !== '' && !isValid
             ? 'Use lower-case letters, digits, dots and dashes, in segments joined by /.'
@@ -67,7 +67,7 @@ export const ProjectsPage = () => {
     <>
       <PageHeader
         title="Projects"
-        lede="A project is the unit of access: a service account is granted read, write or both on one."
+        lede="A project is the unit of access. Every CLI login reads and writes each one; a service account a login made holds only the ones it was handed."
       />
       <NewProject />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}

@@ -26,7 +26,7 @@ type ExitKind = keyof typeof EXIT_CODES;
 /** The command was used wrongly, or this computer is not logged in for it. */
 export class UsageError extends Schema.TaggedError<UsageError>()('UsageError', {
   message: Schema.String,
-  kind: Schema.Literals(['usage', 'notLoggedIn', 'notFound', 'integrity', 'differs']),
+  kind: Schema.Literals(['usage', 'notLoggedIn', 'noAccess', 'notFound', 'integrity', 'differs']),
 }) {}
 
 export const usage = (message: string, kind: UsageError['kind'] = 'usage') =>

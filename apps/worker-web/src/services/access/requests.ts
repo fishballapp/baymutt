@@ -126,6 +126,12 @@ export const accessRequests = ({
             'The owner grants access directly; a request is how a service account asks for it.',
         });
       }
+      if (actor.parentId === null) {
+        return yield* new OwnerRequiredError({
+          message:
+            'A login holds read and write on every project already, so it has nothing to ask for. A project another service account made reaches it once the owner opens the baymutt dashboard.',
+        });
+      }
       if (!request.wantsRead && !request.wantsWrite) {
         return yield* new NotFoundError({ message: 'Ask for read, write or both.' });
       }

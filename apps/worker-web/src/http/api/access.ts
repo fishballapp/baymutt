@@ -18,12 +18,15 @@ const CredentialsHandlers = HttpApiBuilder.group(
       list: Effect.fn(function* () {
         return { credentials: yield* access.listServiceAccounts(yield* CurrentActor) };
       }),
-      pair: Effect.fn(function* ({ payload: { endorsement, welcome, ...serviceAccount } }) {
+      pair: Effect.fn(function* ({
+        payload: { endorsement, welcome, grants = [], ...serviceAccount },
+      }) {
         return yield* access.pair({
           actor: yield* CurrentActor,
           serviceAccount,
           endorsement,
           welcome,
+          grants,
         });
       }),
       create: Effect.fn(function* ({ payload: { grants, ...serviceAccount } }) {
@@ -31,6 +34,13 @@ const CredentialsHandlers = HttpApiBuilder.group(
           actor: yield* CurrentActor,
           serviceAccount,
           grants,
+        });
+      }),
+      setExpiry: Effect.fn(function* ({ params, payload }) {
+        return yield* access.setExpiry({
+          actor: yield* CurrentActor,
+          id: params.id,
+          expiresAt: payload.expiresAt,
         });
       }),
       revoke: Effect.fn(function* ({ params }) {

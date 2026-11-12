@@ -93,4 +93,4 @@ export const REQUEST: readonly TerminalLine[] = [
   { kind: 'stdout', value: { id: PASTE_ID, status: 'answered' } },
 ];
 
-export const ACCESS_REQUEST_COMMAND = `baymutt access request ${PROJECT.name} --read --reason "to deploy the worker"`;
+export const SERVICE_ACCOUNT_COMMAND = `baymutt service-accounts create --name "CI deploy" --read ${PROJECT.name} -- gh secret set BAYMUTT_KEY`;

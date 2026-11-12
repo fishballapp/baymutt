@@ -67,8 +67,22 @@ export const storeWorld = async (userId = 'user-1') => {
     201,
   );
 
-  /** A service account the owner paired. It starts with no access. */
-  const pair = async (name = `service-account-${++serviceAccountCount}`) => {
+  /**
+   * A login the owner approved. `projects` are the ones the owner's browser wrapped to it in the
+   * approval; with none given it holds nothing yet, as one approved before logins held every
+   * project.
+   */
+  const pair = async (
+    name = `service-account-${++serviceAccountCount}`,
+    {
+      projects = [],
+      ...about
+    }: {
+      readonly projects?: ReadonlyArray<string>;
+      readonly description?: string;
+      readonly expiresAt?: number;
+    } = {},
+  ) => {
     const id = crypto.randomUUID();
     const secret = keyLike(String(serviceAccountCount % 10));
     await ok(
@@ -77,19 +91,31 @@ export const storeWorld = async (userId = 'user-1') => {
       '/credentials/pair',
       owner,
       {
+        ...about,
         id,
         name,
         publicKey: keyLike('m'),
         bearerHash: await tokenHash(secret),
         endorsement: sealedLike('endorsement'),
         welcome: sealedLike('welcome'),
+        ...(projects.length === 0
+          ? {}
+          : {
+              grants: projects.map(projectId => ({
+                projectId,
+                readWrap: sealedLike('login-wrap'),
+                keyProof: sealedLike('key-proof'),
+                keyVersion: 1,
+              })),
+            }),
       },
       201,
     );
     return { id, name, headers: { authorization: `Bearer baymutt_${id}_${secret}` } };
   };
 
-  const project = async (name: string, headers = owner) => {
+  /** A project; the owner wraps it to each of `logins` in the same request, as the dashboard does. */
+  const project = async (name: string, headers = owner, logins: ReadonlyArray<string> = []) => {
     const id = crypto.randomUUID();
     await ok(
       w,
@@ -104,6 +130,15 @@ export const storeWorld = async (userId = 'user-1') => {
         ownerProof: sealedLike('owner-proof'),
         creatorWrap: headers === owner ? null : sealedLike('creator-wrap'),
         creatorProof: headers === owner ? null : sealedLike('creator-proof'),
+        ...(logins.length === 0
+          ? {}
+          : {
+              loginGrants: logins.map(credentialId => ({
+                credentialId,
+                readWrap: sealedLike('login-wrap'),
+                keyProof: sealedLike('key-proof'),
+              })),
+            }),
       },
       201,
     );

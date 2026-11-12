@@ -226,28 +226,22 @@ export const openOwnedProject = async (
   return { publicKey, encoded, key };
 };
 
-/**
- * A grant for a service account: the owner's proof of the project's public key, and for a read the
- * project key wrapped to it. Refused unless the vault endorsed that service account's key, so the store
- * cannot name a key of its own as the service account's.
- */
-export const grantToServiceAccount = async (
-  owner: OwnerKeys,
-  project: OwnedProject,
+/** A service account's key as the vault endorsed it. Refused when the vault did not, so the store cannot name a key of its own as the service account's. */
+export const endorsedReader = async (
+  { vault }: OwnerKeys,
   serviceAccount: {
     readonly id: string;
     readonly publicKey: string;
     readonly endorsement: string | null;
   },
-  { canRead }: { readonly canRead: boolean },
-): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> => {
+): Promise<{ readonly id: string; readonly publicKey: string }> => {
   if (serviceAccount.endorsement === null) {
     throw new VaultError(
       'unreadable',
       'this service account was not approved by the owner, so nothing vouches for its key',
     );
   }
-  const endorsed = await endorsedPublicKey(owner.vault, {
+  const endorsed = await endorsedPublicKey(vault, {
     credentialId: serviceAccount.id,
     endorsement: serviceAccount.endorsement,
   });
@@ -257,9 +251,23 @@ export const grantToServiceAccount = async (
       'the store shows a key for this service account that the owner did not approve',
     );
   }
+  return { id: serviceAccount.id, publicKey: endorsed };
+};
+
+/**
+ * A grant for a reader whose key the owner already trusts: the owner's proof of the project's
+ * public key, and for a read the project key wrapped to it. The reader's key must come from
+ * `endorsedReader`, or from the pairing link the owner is approving after comparing its code;
+ * never from the store as it stands.
+ */
+export const grantToTrustedReader = async (
+  owner: OwnerKeys,
+  project: OwnedProject,
+  reader: { readonly id: string; readonly publicKey: string },
+  { canRead }: { readonly canRead: boolean },
+): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> => {
   const { ownerWrap: _, ownerProof: __, creator: ___, ...binding } = project;
   const opened = await openOwnedProject(owner, project);
-  const reader = { id: serviceAccount.id, publicKey: endorsed };
   return {
     keyProof: await vouchForProjectKey({
       voucherKey: owner.accountKey,
@@ -270,10 +278,23 @@ export const grantToServiceAccount = async (
     readWrap: canRead
       ? await wrapProjectKey({
           projectPrivateKey: opened.encoded,
-          readerPublicKey: endorsed,
-          readerId: serviceAccount.id,
+          readerPublicKey: reader.publicKey,
+          readerId: reader.id,
           binding,
         })
       : null,
   };
 };
+
+/** A grant for a service account the vault endorsed. */
+export const grantToServiceAccount = async (
+  owner: OwnerKeys,
+  project: OwnedProject,
+  serviceAccount: {
+    readonly id: string;
+    readonly publicKey: string;
+    readonly endorsement: string | null;
+  },
+  options: { readonly canRead: boolean },
+): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> =>
+  grantToTrustedReader(owner, project, await endorsedReader(owner, serviceAccount), options);

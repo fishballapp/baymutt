@@ -29,9 +29,7 @@ const createCommand = Command.make(
   'create',
   {
     name: Argument.String('name').pipe(
-      Argument.withDescription(
-        'Lower-case segments joined by /. Dev and production are separate projects: app/production',
-      ),
+      Argument.withDescription('Lower-case segments joined by /, such as app/production'),
       Argument.withSchema(ProjectNameSchema),
     ),
   },

@@ -65,3 +65,20 @@ export const bytes = (count: number): string =>
 /** "1 secret", "4 secrets". */
 export const counted = (count: number, one: string, many = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/** "never expires", "expires in 12 days", "expires in 5 hours", "expired". */
+export const expiryWords = (expiresAt: number | null, nowMs: number): string => {
+  if (expiresAt === null) return 'never expires';
+  const left = expiresAt - nowMs;
+  if (left <= 0) return 'expired';
+  if (left < DAY_MS) {
+    return `expires in ${counted(Math.max(1, Math.round(left / 3600_000)), 'hour')}`;
+  }
+  return `expires in ${counted(Math.round(left / DAY_MS), 'day')}`;
+};
+
+/** "Dec 1, 2026", for a day the owner picks or reads. */
+export const exactDay = (atMs: number): string =>
+  Temporal.Instant.fromEpochMilliseconds(atMs).toLocaleString('en', { dateStyle: 'medium' });

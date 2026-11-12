@@ -28,6 +28,8 @@ type Store = {
   readonly write: (
     token: Redacted.Redacted<string>,
   ) => Effect.Effect<void, ReturnType<typeof usage>>;
+  /** Forgets the key. Nothing kept is not a failure. */
+  readonly remove: Effect.Effect<void, ReturnType<typeof usage>>;
 };
 
 const security = Effect.fnUntraced(
@@ -72,6 +74,11 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
                 'BAYMUTT_KEY is set, so this service account’s key comes from the environment. Unset it to log in.',
               ),
             ),
+          remove: Effect.fail(
+            usage(
+              'BAYMUTT_KEY is set, so this key belongs to the environment, not to this computer. Revoke it with `baymutt service-accounts revoke <id>` or in the dashboard, and remove it from where it is kept.',
+            ),
+          ),
         });
       }
 
@@ -110,6 +117,18 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
                       usage('The login keychain refused the service account key. Is it unlocked?'),
                     ),
             ),
+          // Exit 44 is "no such item": already gone.
+          remove: Effect.flatMap(
+            run(['delete-generic-password', '-a', ACCOUNT, '-s', keychainService]),
+            ({ exitCode }) =>
+              exitCode === 0 || exitCode === 44
+                ? Effect.void
+                : Effect.fail(
+                    usage(
+                      'The login keychain refused to delete the service account key. Is it unlocked?',
+                    ),
+                  ),
+          ),
         });
       }
 
@@ -125,6 +144,10 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
             yield* fs.makeDirectory(path.dirname(file), { recursive: true });
             yield* fs.writeFileString(file, `${Redacted.value(token)}\n`, { mode: 0o600 });
           }).pipe(Effect.orDie),
+        remove: fs.remove(file).pipe(
+          Effect.catchReason('PlatformError', 'NotFound', () => Effect.void),
+          Effect.orDie,
+        ),
       });
     }),
   );

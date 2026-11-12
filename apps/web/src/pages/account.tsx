@@ -36,7 +36,7 @@ const Passkeys = () => {
   return (
     <Section
       title="Passkeys"
-      lede="Each one signs in and opens the vault with one prompt. Add one per device or password manager."
+      lede="Each one signs in and opens the vault with one prompt."
       action={
         <Button disabled={adding.waiting} onClick={() => add(owner)}>
           {adding.waiting ? 'Waiting for your passkey…' : 'Add a passkey'}
