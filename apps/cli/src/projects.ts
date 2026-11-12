@@ -15,7 +15,7 @@ export const resolveProject = Effect.fn('projects.resolve')(function* (name: str
     return yield* usage(
       isLogin(key)
         ? `This account has no project named ${name}. See what it has with \`baymutt projects\`, or create it with \`baymutt projects create ${name}\`.`
-        : `No project named ${name} is granted to this service account. See what is with \`baymutt projects\`, or ask for it with \`baymutt access request ${name} --read --reason "…"\`.`,
+        : `No project named ${name} is granted to this service account. See what is with \`baymutt projects\`. The login that made it, or the owner, can hand it one.`,
       'notFound',
     );
   }
@@ -27,7 +27,8 @@ const isLogin = (key: { readonly issuerPublicKey: string | null }) => key.issuer
 
 /**
  * The project's public key, as someone this service account trusts vouched for it: the owner who granted
- * it, the service account that made this one, or this service account itself when it created the project. Every
+ * it (whose key a scoped one learns from its maker), the login that made this one, or this service
+ * account itself when it created the project. Every
  * value is sealed to this key and every wrap is checked against it. The key the store lists
  * beside the project is only compared with it.
  */
@@ -54,14 +55,24 @@ export const trustedKey = Effect.fn('projects.trustedKey')(function* (project: P
     );
   }
   const proof = project.keyProof;
-  const publicKey = yield* crypto_(() =>
-    vouchedProjectKey({
-      proof,
-      readerKey: serviceAccount.key.privateKey,
-      readerId: serviceAccount.key.credentialId,
-      vouchers: serviceAccount.vouchers,
-      binding,
-    }),
+  const vouchedBy = (vouchers: ReadonlyArray<string>) =>
+    crypto_(() =>
+      vouchedProjectKey({
+        proof,
+        readerKey: serviceAccount.key.privateKey,
+        readerId: serviceAccount.key.credentialId,
+        vouchers,
+        binding,
+      }),
+    );
+  // The owner's proof, for a project the owner handed this one: its maker vouched for the
+  // account's key.
+  const publicKey = yield* vouchedBy(serviceAccount.vouchers).pipe(
+    Effect.catchTag('IntegrityError', error =>
+      Effect.flatMap(serviceAccount.vouchedAccount, account =>
+        account === null ? Effect.fail(error) : vouchedBy([account]),
+      ),
+    ),
   );
   if (publicKey !== project.publicKey) {
     return yield* usage(

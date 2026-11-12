@@ -34,6 +34,7 @@ import {
   vouchForProjectKey,
   wrapProjectKey,
 } from './project.ts';
+import { vouchedServiceAccountKey } from './vouchers.ts';
 
 const scheme = zkVault({ namespace: 'baymutt' });
 
@@ -298,3 +299,33 @@ export const grantToServiceAccount = async (
   options: { readonly canRead: boolean },
 ): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> =>
   grantToTrustedReader(owner, project, await endorsedReader(owner, serviceAccount), options);
+
+/**
+ * A scoped service account's key, as the login that made it vouched for it to the owner. The
+ * owner trusts that login through the vault's endorsement, so the store can name neither a key of
+ * its own for the service account nor a maker of its own.
+ */
+export const vouchedScopedReader = async (
+  owner: OwnerKeys,
+  {
+    serviceAccount,
+    maker,
+  }: {
+    readonly serviceAccount: {
+      readonly id: string;
+      readonly publicKey: string;
+      readonly keyVoucher: string | null;
+    };
+    readonly maker: {
+      readonly id: string;
+      readonly publicKey: string;
+      readonly endorsement: string | null;
+    };
+  },
+): Promise<{ readonly id: string; readonly publicKey: string }> =>
+  vouchedServiceAccountKey({
+    readerKey: owner.accountKey,
+    makerPublicKey: (await endorsedReader(owner, maker)).publicKey,
+    accountId: owner.accountId,
+    serviceAccount,
+  });

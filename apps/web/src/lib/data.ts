@@ -1,27 +1,21 @@
 // Server state as atoms derived from the API definition, and the writes that change it. A write
 // that needs the vault takes the owner in its argument: the open vault is never module state an
 // atom reads behind a component's back.
-import type {
-  AccessRequest,
-  Grant,
-  LoginGrant,
-  PairingRequest,
-  Project,
-  ServiceAccount,
-} from '@baymutt/api';
+import type { LoginGrant, PairingRequest, Project, ServiceAccount } from '@baymutt/api';
 import {
   approvePairing,
   createProjectKey,
   endorsedReader,
-  grantToServiceAccount,
   grantToTrustedReader,
   openOwnedProject,
   openValue,
   publicKeyFingerprint,
   sealValue,
+  vouchedScopedReader,
 } from '@baymutt/keys';
 import * as Effect from 'effect/Effect';
 import * as Atom from 'effect/reactivity/Atom';
+import * as Reactivity from 'effect/reactivity/Reactivity';
 import { ApiClient, faultsAsDefects } from './api.ts';
 import {
   addPasskey,
@@ -403,30 +397,88 @@ export const revokeServiceAccountAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['serviceAccounts', 'grants', 'requests', 'audit'] },
 );
 
-type Reader = Pick<Grant, 'credentialId' | 'credentialPublicKey' | 'endorsement'>;
+/** What a scoped service account is to hold on one project; neither read nor write takes it away. */
+export type AccessChange = {
+  readonly projectId: string;
+  readonly canRead: boolean;
+  readonly canWrite: boolean;
+};
 
-/** A grant for a service account the vault vouches for: the proof of the project's key, and the wrap when it may read. */
-const grantFor = Effect.fnUntraced(function* (
-  owner: Owner,
-  projectId: string,
-  reader: Reader,
-  canRead: boolean,
-) {
-  const { owned, keyVersion } = yield* ownedProject(owner, projectId);
-  const grant = yield* keys(() =>
-    grantToServiceAccount(
-      owner,
-      owned,
-      {
-        id: reader.credentialId,
-        publicKey: reader.credentialPublicKey,
-        endorsement: reader.endorsement,
-      },
-      { canRead },
+/** Whether the login that made it vouched for its key, so a read or a project it gains can be wrapped to it. */
+export const isVouched = (serviceAccount: Pick<ServiceAccount, 'keyVoucher'>): boolean =>
+  serviceAccount.keyVoucher !== null;
+
+/**
+ * Changes a scoped service account's access, keeping its key. A read or a project it gains is
+ * wrapped and vouched for to the key its maker vouched for to the account, which the vault trusts
+ * through its endorsement of that login: never to the key the store lists.
+ */
+export const changeAccessAtom = ApiClient.runtime.fn(
+  ({
+    owner,
+    serviceAccount,
+    maker,
+    changes,
+  }: {
+    readonly owner: Owner;
+    readonly serviceAccount: ServiceAccount;
+    readonly maker: ServiceAccount;
+    readonly changes: ReadonlyArray<AccessChange>;
+  }) =>
+    Effect.gen(function* () {
+      const gains = (change: AccessChange) => {
+        const held = serviceAccount.grants.find(grant => grant.projectId === change.projectId);
+        const removes = !change.canRead && !change.canWrite;
+        return {
+          project: !removes && held === undefined,
+          read: change.canRead && !held?.canRead,
+        };
+      };
+      const needsKey = changes.some(change => gains(change).project || gains(change).read);
+      const reader = needsKey
+        ? yield* keys(
+            () => vouchedScopedReader(owner, { serviceAccount, maker }),
+            'Nothing vouches for this service account’s key, so it cannot be given a read or a project. Nothing was changed.',
+          )
+        : null;
+      // Every wrap and proof is made before the first request, so a vault failure changes nothing.
+      const prepared = yield* Effect.forEach(changes, change =>
+        Effect.gen(function* () {
+          const gained = gains(change);
+          if (reader === null || !(gained.project || gained.read)) return { change, sealed: null };
+          const { owned } = yield* ownedProject(owner, change.projectId);
+          const sealed = yield* keys(() =>
+            grantToTrustedReader(owner, owned, reader, { canRead: gained.read }),
+          );
+          return { change, sealed };
+        }),
+      );
+      for (const { change, sealed } of prepared) {
+        const { projectId, canRead, canWrite } = change;
+        const params = { id: serviceAccount.id, projectId };
+        if (!canRead && !canWrite) {
+          yield* ApiClient.use(client => client.credentials.removeAccess({ params }));
+          continue;
+        }
+        yield* ApiClient.use(client =>
+          client.credentials.setAccess({
+            params,
+            payload: {
+              canRead,
+              canWrite,
+              ...(sealed !== null && gains(change).project ? { keyProof: sealed.keyProof } : {}),
+              ...(sealed?.readWrap ? { readWrap: sealed.readWrap } : {}),
+            },
+          }),
+        );
+      }
+    }).pipe(
+      // Changes are sent one by one, so a failure part-way leaves the earlier ones made: show them.
+      Effect.onError(() => Reactivity.invalidate(['serviceAccounts', 'grants', 'audit'])),
+      faultsAsDefects,
     ),
-  );
-  return { ...grant, keyVersion };
-});
+  { reactivityKeys: ['serviceAccounts', 'grants', 'audit'] },
+);
 
 export const removeGrantAtom = ApiClient.runtime.fn(
   (params: { readonly id: string; readonly credentialId: string }) =>
@@ -436,46 +488,9 @@ export const removeGrantAtom = ApiClient.runtime.fn(
 
 // --- requests ----------------------------------------------------------------------------------
 
-export const accessRequestsAtom = ApiClient.query('accessRequests', 'list', {
-  reactivityKeys: ['requests'],
-}).pipe(Atom.mapResult(({ requests }) => requests));
-
 export const pasteRequestsAtom = ApiClient.query('pasteRequests', 'list', {
   reactivityKeys: ['requests'],
 }).pipe(Atom.mapResult(({ requests }) => requests));
-
-/** One per request, so answering one never interrupts another. */
-export const approveAccessAtom = Atom.family((id: string) =>
-  ApiClient.runtime.fn(
-    ({
-      owner,
-      request,
-      project,
-    }: {
-      readonly owner: Owner;
-      readonly request: AccessRequest;
-      readonly project: Project;
-    }) =>
-      Effect.gen(function* () {
-        const wrap = yield* grantFor(owner, project.id, request, request.wantsRead);
-        return yield* ApiClient.use(client =>
-          client.accessRequests.approve({
-            params: { id },
-            payload: { canWrite: request.wantsWrite, ...wrap },
-          }),
-        );
-      }).pipe(faultsAsDefects),
-    { reactivityKeys: ['requests', 'grants', 'serviceAccounts', 'audit'] },
-  ),
-);
-
-export const denyAccessAtom = Atom.family((id: string) =>
-  ApiClient.runtime.fn(
-    () =>
-      ApiClient.use(client => client.accessRequests.deny({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['requests', 'audit'] },
-  ),
-);
 
 export const cancelPasteAtom = Atom.family((id: string) =>
   ApiClient.runtime.fn(

@@ -18,6 +18,7 @@ import {
   sealValue,
   tokenHash,
   vaultProof,
+  vouchedScopedReader,
   wrapProjectKey,
 } from '@baymutt/keys';
 import { ORIGIN, send, type TestWorld, testWorld } from '@baymutt/worker-web/testing';
@@ -188,6 +189,7 @@ const makeOwner = async (world: TestWorld) => {
     publicKey: string;
     parentId: string | null;
     endorsement: string | null;
+    keyVoucher: string | null;
     grants: { projectId: string; canRead: boolean; canWrite: boolean }[];
   };
 
@@ -231,6 +233,25 @@ const makeOwner = async (world: TestWorld) => {
           });
         }
       }
+    },
+    /**
+     * What the Service accounts page does: hands a scoped service account a project, to the key
+     * its maker vouched for to the account. Throws when nothing does.
+     */
+    handOn: async (credentialId: string, name: string, { canRead }: { canRead: boolean }) => {
+      const { credentials } = await api<{ credentials: Listed[] }>('GET', '/credentials');
+      const target = credentials.find(({ id }) => id === credentialId);
+      const maker = credentials.find(({ id }) => id === target?.parentId);
+      if (target === undefined || maker === undefined) throw new Error('no such service account');
+      const reader = await vouchedScopedReader(keys, { serviceAccount: target, maker });
+      const project = await projectByName(name);
+      const grant = await grantToTrustedReader(keys, project.owned, reader, { canRead });
+      await api('PUT', `/credentials/${credentialId}/grants/${project.id}`, {
+        canRead,
+        canWrite: false,
+        keyProof: grant.keyProof,
+        ...(grant.readWrap === null ? {} : { readWrap: grant.readWrap }),
+      });
     },
     projectByName,
   };
@@ -464,16 +485,6 @@ layer(NodeServices.layer)(it => {
         expect(JSON.parse(waiting.stderr).error.message).toContain(
           'Ask the owner to open the baymutt dashboard once',
         );
-        const asked = yield* run(world, agent, [
-          'access',
-          'request',
-          'app/production',
-          '--read',
-          '--reason',
-          'to deploy',
-        ]);
-        expect(asked.exitCode).toBe(4);
-
         yield* Effect.promise(() => owner.topUp());
 
         expect(yield* load(world, agent, 'app/production')).toEqual({ API_KEY: 'the value' });
@@ -689,6 +700,170 @@ layer(NodeServices.layer)(it => {
         expect((yield* run(world, ci, ['projects', 'list'])).json.projects).toHaveLength(1);
         expect((yield* run(world, ci, ['set', 'app/production', 'API_KEY'], 'x')).exitCode).toBe(4);
         expect((yield* run(world, ci, ['projects', 'create', 'app/ci-made'])).exitCode).toBe(2);
+      }),
+    );
+
+    it.effect('changes its access from its login and keeps its key', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, laptop } = yield* paired;
+        for (const name of ['app/production', 'app/staging']) {
+          yield* run(world, laptop, ['projects', 'create', name]);
+          yield* run(world, laptop, ['set', name, 'API_KEY'], `for ${name}`);
+        }
+        const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
+        const created = yield* run(world, laptop, [
+          'service-accounts',
+          'create',
+          '--name',
+          'ci',
+          '--read',
+          'app/production',
+          '--',
+          'sh',
+          '-c',
+          `cat > ${keyFile}`,
+        ]);
+        const ci: Seat = {
+          configHome: yield* fs.makeTempDirectoryScoped(),
+          env: { BAYMUTT_KEY: yield* fs.readFileString(keyFile) },
+        };
+        const id: string = created.json.id;
+
+        const changed = yield* run(world, laptop, [
+          'service-accounts',
+          'access',
+          id,
+          '--read',
+          'app/staging',
+          '--write',
+          'app/staging',
+          '--remove',
+          'app/production',
+        ]);
+
+        expect(changed).toMatchObject({
+          exitCode: 0,
+          json: {
+            id,
+            grants: [{ projectName: 'app/staging', canRead: true, canWrite: true }],
+          },
+        });
+        expect(yield* load(world, ci, 'app/staging')).toEqual({ API_KEY: 'for app/staging' });
+        expect((yield* run(world, ci, ['set', 'app/staging', 'API_KEY'], 'from ci')).exitCode).toBe(
+          0,
+        );
+        expect(Exit.isFailure(yield* Effect.exit(load(world, ci, 'app/production')))).toBe(true);
+        // It cannot change its own.
+        expect(
+          (yield* run(world, ci, ['service-accounts', 'access', id, '--read', 'app/staging']))
+            .exitCode,
+        ).toBe(5);
+      }),
+    );
+
+    it.effect('wraps nothing to a key its login did not vouch for', () =>
+      Effect.gen(function* () {
+        const { world, laptop } = yield* paired;
+        yield* run(world, laptop, ['projects', 'create', 'app/production']);
+        yield* run(world, laptop, ['projects', 'create', 'app/staging']);
+        const created = yield* run(world, laptop, [
+          'service-accounts',
+          'create',
+          '--name',
+          'ci',
+          '--write',
+          'app/production',
+          '--',
+          'true',
+        ]);
+        const id: string = created.json.id;
+        const grants = () =>
+          world.sqlite
+            .prepare('SELECT project_id, read_wrap FROM project_grant WHERE credential_id = ?')
+            .all(id);
+        const before = grants();
+
+        // A store that wants to read shows a key of its own as the service account's.
+        world.sqlite
+          .prepare('UPDATE credential SET public_key = ? WHERE id = ?')
+          .run('hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo', id);
+        const swapped = yield* run(world, laptop, [
+          'service-accounts',
+          'access',
+          id,
+          '--read',
+          'app/production',
+        ]);
+        expect(swapped.exitCode).toBe(8);
+        expect(grants()).toEqual(before);
+
+        // One made before its login wrote vouchers: it loses access, and gains no read or project.
+        world.sqlite
+          .prepare(
+            'UPDATE credential SET key_voucher_owner = NULL, key_voucher_maker = NULL, account_voucher = NULL WHERE id = ?',
+          )
+          .run(id);
+        for (const args of [
+          ['--read', 'app/production', '--write', 'app/production'],
+          ['--write', 'app/staging'],
+        ]) {
+          const refused = yield* run(world, laptop, ['service-accounts', 'access', id, ...args]);
+          expect(refused.exitCode).toBe(8);
+          expect(JSON.parse(refused.stderr).error.message).toContain('Nothing vouches for');
+        }
+        expect(grants()).toEqual(before);
+        expect(
+          (yield* run(world, laptop, [
+            'service-accounts',
+            'access',
+            id,
+            '--remove',
+            'app/production',
+          ])).json.grants,
+        ).toEqual([]);
+      }),
+    );
+
+    it.effect('takes a project the owner hands it from the dashboard', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, owner, laptop } = yield* paired;
+        yield* run(world, laptop, ['projects', 'create', 'app/production']);
+        yield* run(world, laptop, ['projects', 'create', 'app/staging']);
+        yield* run(world, laptop, ['set', 'app/staging', 'API_KEY'], 'staged');
+        const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
+        const created = yield* run(world, laptop, [
+          'service-accounts',
+          'create',
+          '--name',
+          'ci',
+          '--write',
+          'app/production',
+          '--',
+          'sh',
+          '-c',
+          `cat > ${keyFile}`,
+        ]);
+        const ci: Seat = {
+          configHome: yield* fs.makeTempDirectoryScoped(),
+          env: { BAYMUTT_KEY: yield* fs.readFileString(keyFile) },
+        };
+        const id: string = created.json.id;
+
+        yield* Effect.promise(() => owner.handOn(id, 'app/staging', { canRead: true }));
+
+        expect(yield* load(world, ci, 'app/staging')).toEqual({ API_KEY: 'staged' });
+
+        // The owner's browser refuses a key the store swapped in, and one nothing vouches for.
+        world.sqlite
+          .prepare('UPDATE credential SET public_key = ? WHERE id = ?')
+          .run('hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo', id);
+        yield* Effect.promise(() =>
+          expect(owner.handOn(id, 'app/production', { canRead: true })).rejects.toMatchObject({
+            code: 'unreadable',
+          }),
+        );
       }),
     );
 

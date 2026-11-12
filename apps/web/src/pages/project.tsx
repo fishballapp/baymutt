@@ -385,7 +385,7 @@ const GrantRow = ({ project, grant }: { readonly project: Project; readonly gran
             can {grantWords(grant)}
             {isLogin(grant)
               ? ' · a CLI login, which holds every project'
-              : ' · made by a login, which handed this on'}
+              : ' · made by a login; its access changes under Service accounts'}
           </p>
         </div>
         {/* A login holds every project: revoking it, under Service accounts, is the way to end that. */}
@@ -412,7 +412,7 @@ const Access = ({ project }: { readonly project: Project }) => {
   return (
     <Section
       title="Who can reach it"
-      lede="You and every CLI login can read and write it. A service account a login made reaches it only if its maker handed it on. One that reads keeps what it read: taking access away stops the next load, not the last one."
+      lede="You and every CLI login can read and write it. A service account a login made reaches it only if it was handed it, by that login or by you. One that reads keeps what it read: taking access away stops the next load, not the last one."
     >
       {grants === null && <Skeleton rows={2} />}
       {grants?.length === 0 && (

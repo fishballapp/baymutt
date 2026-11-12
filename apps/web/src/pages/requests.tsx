@@ -1,92 +1,24 @@
-import type { AccessRequest, PasteRequest, Project } from '@baymutt/api';
+import type { PasteRequest } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
-import { useOwner } from '../components/gate.tsx';
 import {
   Code,
   Empty,
-  grantWords,
   Notice,
   PageHeader,
   Row,
   Rows,
-  Section,
   Skeleton,
   Time,
 } from '../components/parts.tsx';
 import { Button, buttonStyles } from '../components/ui/button.tsx';
-import {
-  accessRequestsAtom,
-  approveAccessAtom,
-  cancelPasteAtom,
-  denyAccessAtom,
-  pasteRequestsAtom,
-  projectsAtom,
-} from '../lib/data.ts';
+import { cancelPasteAtom, pasteRequestsAtom } from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
 const Reason = ({ children }: { readonly children: string }) =>
   children === '' ? null : (
     <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted">{children}</p>
   );
-
-const AccessRow = ({
-  request,
-  project,
-}: {
-  readonly request: AccessRequest;
-  readonly project: Project | undefined;
-}) => {
-  const owner = useOwner();
-  const [approving, approve] = useAtom(approveAccessAtom(request.id));
-  const [denying, deny] = useAtom(denyAccessAtom(request.id));
-  const wants = grantWords({ canRead: request.wantsRead, canWrite: request.wantsWrite });
-  // A grant is sealed to the service account's key, and the vault only vouches for the key of a service account
-  // the owner paired.
-  const cannotRead = request.endorsement === null;
-  const isBusy = approving.waiting || denying.waiting;
-  const failure = failureMessage(approving) ?? failureMessage(denying);
-  return (
-    <Row>
-      <div className="flex flex-col gap-x-4 gap-y-3 sm:flex-row sm:items-start">
-        <div className="min-w-0 flex-1">
-          <p>
-            <span className="font-medium">{request.credentialName}</span> asks to{' '}
-            <span className="font-medium">{wants}</span> <Code>{request.projectName}</Code>
-          </p>
-          <Reason>{request.reason}</Reason>
-          <p className="mt-1.5 text-sm text-muted">
-            asked <Time at={request.createdAt} />
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1.5 sm:shrink-0">
-          <Button
-            disabled={isBusy || cannotRead || project === undefined}
-            onClick={() => project && approve({ owner, request, project })}
-          >
-            {approving.waiting ? 'Approving…' : `Approve ${wants}`}
-          </Button>
-          <Button disabled={isBusy} onClick={() => deny()}>
-            {denying.waiting ? 'Denying…' : 'Deny'}
-          </Button>
-        </div>
-      </div>
-      {cannotRead && (
-        <Notice tone="plain" className="mt-3">
-          This service account was made by another service account, so nothing here vouches for its
-          key. The service account that made it can hand it access; you can deny this.
-        </Notice>
-      )}
-      {request.wantsRead && !cannotRead && (
-        <p className="mt-3 text-sm text-muted">
-          Approving wraps the project key to this service account. What it reads afterwards cannot
-          be unread.
-        </p>
-      )}
-      {failure && <Notice className="mt-3">{failure}</Notice>}
-    </Row>
-  );
-};
 
 const PasteRow = ({ request }: { readonly request: PasteRequest }) => {
   const [cancelling, cancel] = useAtom(cancelPasteAtom(request.id));
@@ -123,51 +55,31 @@ const PasteRow = ({ request }: { readonly request: PasteRequest }) => {
 };
 
 export const RequestsPage = () => {
-  const accessResult = useAtomValue(accessRequestsAtom);
-  const pasteResult = useAtomValue(pasteRequestsAtom);
-  const access = latest(accessResult);
-  const paste = latest(pasteResult);
-  const projects = latest(useAtomValue(projectsAtom)) ?? [];
-  const failure = failureMessage(accessResult) ?? failureMessage(pasteResult);
-  const isEmpty = access?.length === 0 && paste?.length === 0;
+  const result = useAtomValue(pasteRequestsAtom);
+  const paste = latest(result);
+  const failure = failureMessage(result);
   return (
     <>
       <PageHeader
         title="Requests"
-        lede="What your service accounts are waiting on you for. Everything else they do without asking."
+        lede="Values your service accounts asked you to paste. Everything else they do without asking."
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
-      {(access === null || paste === null) && !failure && <Skeleton rows={2} />}
-      {isEmpty && (
+      {paste === null && !failure && <Skeleton rows={2} />}
+      {paste?.length === 0 && (
         <Empty title="Nothing is waiting on you">
           <p>
-            An agent asks for a value only you can fetch with <Code>baymutt request</Code>, and a
-            service account a login made asks for more access with{' '}
-            <Code>baymutt access request</Code>. Both land here.
+            An agent asks for a value only you can fetch with <Code>baymutt request</Code>. It lands
+            here.
           </p>
         </Empty>
       )}
-      {access !== null && access.length > 0 && (
-        <Section title="Access">
-          <Rows>
-            {access.map(request => (
-              <AccessRow
-                key={request.id}
-                request={request}
-                project={projects.find(({ id }) => id === request.projectId)}
-              />
-            ))}
-          </Rows>
-        </Section>
-      )}
       {paste !== null && paste.length > 0 && (
-        <Section title="Values to paste">
-          <Rows>
-            {paste.map(request => (
-              <PasteRow key={request.id} request={request} />
-            ))}
-          </Rows>
-        </Section>
+        <Rows>
+          {paste.map(request => (
+            <PasteRow key={request.id} request={request} />
+          ))}
+        </Rows>
       )}
     </>
   );

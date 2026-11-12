@@ -1,5 +1,4 @@
-// The two things a service account asks the owner for: access it does not hold, and a value only the owner
-// can fetch (a paste link).
+// What a service account asks the owner for: a value only the owner can fetch (a paste link).
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -19,16 +18,12 @@ import {
   ActorSchema,
   HashSchema,
   IdSchema,
-  KeyProofSchema,
-  LabelSchema,
   ProjectNameSchema,
   PublicKeySchema,
   ReasonSchema,
-  SealedSchema,
   SecretNameSchema,
   TimestampSchema,
   VersionSchema,
-  WrapSchema,
 } from './fields.ts';
 import {
   Authenticated,
@@ -39,71 +34,22 @@ import {
 } from './guards.ts';
 import { SecretSchema, WriteSecretPayloadSchema } from './secrets.ts';
 
-export const AccessRequestSchema = Schema.Struct({
-  id: Schema.String,
-  projectId: Schema.String,
-  projectName: ProjectNameSchema,
-  credentialId: Schema.String,
-  credentialName: LabelSchema,
-  credentialPublicKey: PublicKeySchema,
-  /** The owner's vault vouching for that key; null for a service account the owner did not pair, which cannot be given a read. */
-  endorsement: Schema.NullOr(SealedSchema),
-  wantsRead: Schema.Boolean,
-  wantsWrite: Schema.Boolean,
-  reason: ReasonSchema,
-  status: Schema.Literals(['pending', 'approved', 'denied']),
-  createdAt: TimestampSchema,
-}).annotate({ identifier: 'AccessRequest' });
-export type AccessRequest = typeof AccessRequestSchema.Type;
-
-export class AccessRequestsGroup extends HttpApiGroup.make('accessRequests')
+/**
+ * `baymutt access request` and `access list` from CLIs before 0.4.0. Access requests were removed:
+ * both answer with an error that says what to do instead.
+ */
+export class RetiredGroup extends HttpApiGroup.make('retired')
   .add(
-    HttpApiEndpoint.get('list', '/access-requests', {
-      success: Schema.Struct({ requests: Schema.Array(AccessRequestSchema) }),
-    }).annotateMerge(
-      OpenApi.annotations({
-        summary: 'List access requests',
-        description:
-          'The owner sees every pending one; a service account sees its own, resolved or not.',
-      }),
-    ),
-    HttpApiEndpoint.post('create', '/access-requests', {
-      payload: Schema.Struct({
-        id: IdSchema,
-        projectName: ProjectNameSchema,
-        wantsRead: Schema.Boolean,
-        wantsWrite: Schema.Boolean,
-        reason: ReasonSchema,
-      }),
-      success: AccessRequestSchema.pipe(HttpApiSchema.status(201)),
-      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(AlreadyExistsError)],
-    }).annotateMerge(
-      OpenApi.annotations({
-        summary: 'Ask the owner for access to a project',
-        description:
-          'A service account cannot give itself access. The owner approves in the dashboard.',
-      }),
-    ),
-    HttpApiEndpoint.post('approve', '/access-requests/:id/approve', {
-      params: { id: Schema.String },
-      payload: Schema.Struct({
-        canWrite: Schema.Boolean,
-        readWrap: Schema.NullOr(WrapSchema),
-        keyProof: KeyProofSchema,
-        keyVersion: Schema.Int,
-      }),
-      success: AccessRequestSchema,
-      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(LinkSpentError)],
-    }).annotateMerge(OpenApi.annotations({ exclude: true })),
-    HttpApiEndpoint.post('deny', '/access-requests/:id/deny', {
-      params: { id: Schema.String },
-      success: AccessRequestSchema,
-      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(LinkSpentError)],
-    }).annotateMerge(OpenApi.annotations({ exclude: true })),
+    HttpApiEndpoint.post('accessRequest', '/access-requests', {
+      error: coded(OwnerRequiredError),
+    }),
+    HttpApiEndpoint.get('accessRequests', '/access-requests', {
+      error: coded(OwnerRequiredError),
+    }),
   )
   .middleware(Authenticated)
   .middleware(Credentials)
-  .annotateMerge(OpenApi.annotations({ title: 'Access requests' })) {}
+  .annotateMerge(OpenApi.annotations({ exclude: true })) {}
 
 export const PasteRequestSchema = Schema.Struct({
   id: Schema.String,

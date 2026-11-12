@@ -78,6 +78,12 @@ export const KeyProofSchema = base64(128).annotate({
     'The project’s public key as the owner, or the service account that made the reader, vouches for it to that reader, base64. The store cannot make one.',
 });
 
+/** A public key one party vouches for to another: a service account's, or the account's. */
+export const VoucherSchema = base64(128).annotate({
+  description:
+    'A public key the login that made a service account vouches for to one reader, base64. The store cannot make one.',
+});
+
 export const VersionSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 
 export const ReasonSchema = Schema.String.check(Schema.isMaxLength(500)).annotate({

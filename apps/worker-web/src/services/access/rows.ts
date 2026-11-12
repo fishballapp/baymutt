@@ -23,6 +23,9 @@ export const ServiceAccountRowSchema = Schema.Struct({
   description: Schema.NullOr(Schema.String),
   endorsement: Schema.NullOr(Schema.String),
   welcome: Schema.NullOr(Schema.String),
+  keyVoucherOwner: Schema.NullOr(Schema.String),
+  keyVoucherMaker: Schema.NullOr(Schema.String),
+  accountVoucher: Schema.NullOr(Schema.String),
   createdAt: Schema.Finite,
   lastUsedAt: Schema.NullOr(Schema.Finite),
   expiresAt: Schema.NullOr(Schema.Finite),
@@ -146,7 +149,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         message:
           actor._tag === 'Owner' || isLogin(actor)
             ? 'No project has this id.'
-            : 'No project with this id is granted to this service account. List what it holds with `baymutt projects`, or ask for one with `baymutt access request`.',
+            : 'No project with this id is granted to this service account. List what it holds with `baymutt projects`; the login that made it, or the owner, can hand it one.',
       });
     }
     return access;
@@ -165,7 +168,7 @@ export const lookups = (sql: D1Client.D1Client) => {
             need,
             message: access.readerIsLogin
               ? awaitingDashboard(access.project.name)
-              : `This service account has no ${need} access to ${access.project.name}. Ask the owner: \`baymutt access request ${access.project.name} --${need} --reason "…"\`.`,
+              : `This service account has no ${need} access to ${access.project.name}. The login that made it can hand that on with \`baymutt service-accounts access\`, or the owner from the dashboard.`,
           }),
         );
   };
@@ -175,7 +178,8 @@ export const lookups = (sql: D1Client.D1Client) => {
     Result: ServiceAccountRowSchema,
     execute: ({ accountId, id }) =>
       sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
-            created_at, last_used_at, expires_at
+            key_voucher_owner, key_voucher_maker, account_voucher, created_at, last_used_at,
+            expires_at
           FROM credential
           WHERE id = ${id} AND account_id = ${accountId} AND revoked_at IS NULL`,
   });

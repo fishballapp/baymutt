@@ -4,7 +4,6 @@ import { cn } from 'cn';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { createContext, type ReactNode, use, useEffect, useState } from 'react';
 import {
-  accessRequestsAtom,
   isLogin,
   pasteRequestsAtom,
   projectsAtom,
@@ -73,9 +72,7 @@ const sectionOf = (path: string): NavPath | undefined =>
   path.startsWith('/pair') ? '/service-accounts' : NAV.find(({ to }) => path.startsWith(to))?.to;
 
 const PendingCount = () => {
-  const pending =
-    (latest(useAtomValue(accessRequestsAtom))?.length ?? 0) +
-    (latest(useAtomValue(pasteRequestsAtom))?.length ?? 0);
+  const pending = latest(useAtomValue(pasteRequestsAtom))?.length ?? 0;
   if (pending === 0) return null;
   return (
     <span className="absolute top-0.5 right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-xs leading-none font-medium text-accent-foreground tabular-nums md:static md:ml-auto md:h-5 md:min-w-5 md:px-1.5">

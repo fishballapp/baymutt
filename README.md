@@ -33,6 +33,9 @@ value. `baymutt --help` lists them all.
   baymutt service-accounts create --name "CI: deploy" --read app/production --expires 90d -- gh secret set BAYMUTT_KEY -R owner/repo
   ```
 
+  Its login, or the owner in the dashboard, changes what it reaches later, and its key stays the
+  same: `baymutt service-accounts access <id> --read app/staging --remove app/production`.
+
 ### Loading values with varlock
 
 [varlock](https://varlock.dev) loads a project's values into a process through
@@ -57,7 +60,8 @@ the key it stored; in CI it is the job's secret.
   and never sent.
 - **Read access is cryptographic.** Reading a project means holding its key, wrapped to yours by
   someone who already holds it: the owner's browser wraps every project to each login it approves,
-  and a login hands a scoped service account only what it holds. The Worker stores ciphertext,
+  and a login hands a scoped service account only what it holds. The owner can hand one more,
+  to the key its login vouched for when it made it. The Worker stores ciphertext,
   public keys, wraps, grants and the audit log.
 - **A client does not trust a public key the store serves.** Which key belongs to a project or a
   service account is vouched for by a party the reader already trusts, in a box only those two can make.

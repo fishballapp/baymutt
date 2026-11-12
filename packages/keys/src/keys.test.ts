@@ -1,5 +1,13 @@
 import { hkdfSync } from 'node:crypto';
-import { generateKeyPair, importPrivateKey } from '@internal/zk-vault';
+import {
+  decodePublicKey,
+  fromBase64,
+  generateKeyPair,
+  importPrivateKey,
+  openVouched,
+  toBase64Url,
+  utf8,
+} from '@internal/zk-vault';
 import { describe, expect, it } from 'vitest';
 import { fromCrockford, toCrockford } from './encoding.ts';
 import {
@@ -13,6 +21,7 @@ import {
   generateRecoveryKey,
   generateServiceAccountToken,
   grantToServiceAccount,
+  grantToTrustedReader,
   openAccountKey,
   openOwnedProject,
   openValue,
@@ -28,8 +37,12 @@ import {
   serviceAccountKeyFromToken,
   unwrapProjectKey,
   vaultProof,
+  vouchedAccountKey,
   vouchedProjectKey,
+  vouchedScopedReader,
+  vouchedServiceAccountKey,
   vouchForProjectKey,
+  vouchForServiceAccount,
   wrapProjectKey,
 } from './index.ts';
 
@@ -548,5 +561,161 @@ describe('a service account key made by another service account', () => {
       credentialId: made.credentialId,
       bearerHash: made.bearerHash,
     });
+  });
+});
+
+describe('a scoped service account’s vouchers', () => {
+  /** An owner, a login it paired, and a service account that login made. */
+  const setup = async () => {
+    const { vault } = await ownerVault();
+    const account = await createAccountKey(vault);
+    const owner = {
+      vault,
+      accountId: BINDING.accountId,
+      accountKey: await openAccountKey(vault, account),
+    };
+    const login = await serviceAccountKeyFromToken(generateServiceAccountToken());
+    const maker = {
+      id: login.credentialId,
+      publicKey: login.publicKey,
+      endorsement: await endorseCredential(vault, login),
+    };
+    const made = await serviceAccountKeyFromToken(generateServiceAccountToken(login.publicKey));
+    const vouchers = await vouchForServiceAccount({
+      makerKey: login.privateKey,
+      accountId: BINDING.accountId,
+      accountPublicKey: account.publicKey,
+      serviceAccount: { id: made.credentialId, publicKey: made.publicKey },
+    });
+    const listed = { id: made.credentialId, publicKey: made.publicKey };
+    return { owner, account, login, maker, made, vouchers, listed };
+  };
+
+  it('tell the owner, the maker and the service account the keys each needs', async () => {
+    const { owner, account, login, maker, made, vouchers, listed } = await setup();
+
+    expect(
+      await vouchedScopedReader(owner, {
+        serviceAccount: { ...listed, keyVoucher: vouchers.keyToOwner },
+        maker,
+      }),
+    ).toEqual(listed);
+    expect(
+      await vouchedServiceAccountKey({
+        readerKey: login.privateKey,
+        makerPublicKey: login.publicKey,
+        accountId: BINDING.accountId,
+        serviceAccount: { ...listed, keyVoucher: vouchers.keyToMaker },
+      }),
+    ).toEqual(listed);
+    expect(
+      await vouchedAccountKey({
+        serviceAccountKey: made.privateKey,
+        serviceAccountId: made.credentialId,
+        makerPublicKey: login.publicKey,
+        accountId: BINDING.accountId,
+        accountVoucher: vouchers.accountKey,
+      }),
+    ).toBe(account.publicKey);
+    // The labels and the binding, pinned: changing either strands every voucher already written.
+    const pinned = await openVouched({
+      recipient: owner.accountKey,
+      sender: decodePublicKey(login.publicKey, 'the maker'),
+      info: 'baymutt-service-account-key',
+      aad: utf8(JSON.stringify([BINDING.accountId, made.credentialId])),
+      box: fromBase64(vouchers.keyToOwner, 'the voucher'),
+      what: 'the voucher',
+    });
+    expect(toBase64Url(pinned)).toBe(made.publicKey);
+    const pinnedAccount = await openVouched({
+      recipient: made.privateKey,
+      sender: decodePublicKey(login.publicKey, 'the maker'),
+      info: 'baymutt-account-key',
+      aad: utf8(JSON.stringify([BINDING.accountId, made.credentialId])),
+      box: fromBase64(vouchers.accountKey, 'the voucher'),
+      what: 'the voucher',
+    });
+    expect(toBase64Url(pinnedAccount)).toBe(account.publicKey);
+  });
+
+  it('let the service account take the owner’s proof of a project it was granted later', async () => {
+    const { owner, account, made, vouchers } = await setup();
+    const created = await createProjectKey({
+      voucherKey: owner.accountKey,
+      binding: BINDING,
+      readers: [{ id: BINDING.accountId, publicKey: account.publicKey }],
+    });
+    const [own] = created.grants;
+    if (own === undefined) throw new Error('no grant');
+    const owned = { ...BINDING, ownerWrap: own.wrap, ownerProof: own.proof, creator: null };
+    const grant = await grantToTrustedReader(
+      owner,
+      owned,
+      { id: made.credentialId, publicKey: made.publicKey },
+      { canRead: true },
+    );
+    const accountPublicKey = await vouchedAccountKey({
+      serviceAccountKey: made.privateKey,
+      serviceAccountId: made.credentialId,
+      makerPublicKey: made.issuerPublicKey ?? '',
+      accountId: BINDING.accountId,
+      accountVoucher: vouchers.accountKey,
+    });
+
+    expect(
+      await vouchedProjectKey({
+        proof: grant.keyProof,
+        readerKey: made.privateKey,
+        readerId: made.credentialId,
+        vouchers: [accountPublicKey],
+        binding: BINDING,
+      }),
+    ).toBe(created.publicKey);
+  });
+
+  it('cannot be made by the store, moved to another service account, or name a swapped key', async () => {
+    const { owner, account, login, maker, vouchers, listed } = await setup();
+    const host = await serviceAccountKeyFromToken(generateServiceAccountToken());
+    const forged = await vouchForServiceAccount({
+      makerKey: host.privateKey,
+      accountId: BINDING.accountId,
+      accountPublicKey: account.publicKey,
+      serviceAccount: { id: listed.id, publicKey: host.publicKey },
+    });
+    const other = await serviceAccountKeyFromToken(generateServiceAccountToken(login.publicKey));
+
+    for (const [serviceAccount, makerOf] of [
+      // No voucher: made before vouchers were written.
+      [{ ...listed, keyVoucher: null }, maker],
+      // The store's own key, vouched for by the store, or under the real maker's name.
+      [{ ...listed, publicKey: host.publicKey, keyVoucher: forged.keyToOwner }, maker],
+      // The store's key beside the real voucher.
+      [{ ...listed, publicKey: host.publicKey, keyVoucher: vouchers.keyToOwner }, maker],
+      // The real voucher moved to another service account.
+      [
+        { id: other.credentialId, publicKey: listed.publicKey, keyVoucher: vouchers.keyToOwner },
+        maker,
+      ],
+      // A maker the vault never endorsed.
+      [
+        { ...listed, keyVoucher: vouchers.keyToOwner },
+        { ...maker, endorsement: null },
+      ],
+      // The maker's own copy, which is not the owner's.
+      [{ ...listed, keyVoucher: vouchers.keyToMaker }, maker],
+    ] as const) {
+      await expect(
+        vouchedScopedReader(owner, { serviceAccount, maker: makerOf }),
+      ).rejects.toMatchObject({ code: 'unreadable' });
+    }
+    await expect(
+      vouchedAccountKey({
+        serviceAccountKey: other.privateKey,
+        serviceAccountId: other.credentialId,
+        makerPublicKey: login.publicKey,
+        accountId: BINDING.accountId,
+        accountVoucher: vouchers.accountKey,
+      }),
+    ).rejects.toMatchObject({ code: 'unreadable' });
   });
 });

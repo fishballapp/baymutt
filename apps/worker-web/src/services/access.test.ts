@@ -14,7 +14,11 @@ const child = async (
     keyProof: string;
   }>,
   name = 'ci',
-  about: { readonly description?: string; readonly expiresAt?: number } = {},
+  about: {
+    readonly description?: string;
+    readonly expiresAt?: number;
+    readonly vouchers?: { keyToOwner: string; keyToMaker: string; accountKey: string };
+  } = {},
 ) => {
   const id = crypto.randomUUID();
   const secret = keyLike('c');
@@ -46,6 +50,7 @@ describe('a service account', () => {
           name: 'laptop',
           parentId: null,
           welcome: sealedLike('welcome'),
+          accountVoucher: null,
         },
       },
     });
@@ -364,6 +369,12 @@ describe('what a caller is shown', () => {
       ['GET', `/projects/${projectId}/bundle`, undefined],
       ['DELETE', `/projects/${projectId}`, undefined],
       ['DELETE', `/credentials/${serviceAccount.id}`, undefined],
+      ['DELETE', `/credentials/${serviceAccount.id}/grants/${projectId}`, undefined],
+      [
+        'PUT',
+        `/credentials/${serviceAccount.id}/grants/${projectId}`,
+        { canRead: false, canWrite: true, keyProof: sealedLike('proof') },
+      ],
       [
         'PUT',
         `/projects/${projectId}/grants/${serviceAccount.id}`,
@@ -382,105 +393,198 @@ describe('what a caller is shown', () => {
   });
 });
 
-describe('an access request', () => {
-  const ask = (
-    { w }: StoreWorld,
-    headers: Record<string, string>,
-    request: { projectName: string; wantsRead?: boolean; wantsWrite?: boolean },
-  ) => {
-    const id = crypto.randomUUID();
-    return call(w, 'POST', '/access-requests', headers, {
-      id,
-      wantsRead: false,
-      wantsWrite: false,
-      reason: 'to deploy the worker',
-      ...request,
-    }).then(answer => ({ id, answer }));
+const VOUCHERS = {
+  keyToOwner: sealedLike('key-to-owner', 64),
+  keyToMaker: sealedLike('key-to-maker', 64),
+  accountKey: sealedLike('account-key', 64),
+};
+
+describe('a scoped service account’s access', () => {
+  /** A login holding two projects, and a service account it made with read on the first. */
+  const setup = async () => {
+    const world = await storeWorld();
+    const first = await world.project('app/production');
+    const second = await world.project('app/staging');
+    const login = await world.pair('laptop', { projects: [first, second] });
+    const made = await child(
+      world,
+      login,
+      [
+        {
+          projectId: first,
+          canWrite: false,
+          readWrap: sealedLike('first-wrap'),
+          keyProof: sealedLike('first-proof'),
+        },
+      ],
+      'ci',
+      { vouchers: VOUCHERS },
+    );
+    return { ...world, first, second, login, made };
   };
 
-  it('names a project the service account cannot yet see, and the owner’s approval is the grant', async () => {
-    const world = await storeWorld();
-    const { w, owner, pair, project } = world;
-    const projectId = await project('app/production');
-    const serviceAccount = await child(world, await pair('laptop'), [], 'ci');
+  const access = (
+    { w }: StoreWorld,
+    headers: Record<string, string>,
+    id: string,
+    projectId: string,
+    body: Record<string, unknown>,
+  ) => call(w, 'PUT', `/credentials/${id}/grants/${projectId}`, headers, body);
 
-    const { id, answer } = await ask(world, serviceAccount.headers, {
-      projectName: 'app/production',
-      wantsRead: true,
-      wantsWrite: true,
-    });
+  it('keeps its maker’s vouchers, each shown only to the one it is sealed to', async () => {
+    const { w, owner, pair, login, made } = await setup();
+    const other = await pair('desktop');
+    const keyVoucherSeenBy = async (headers: Record<string, string>) =>
+      (
+        await ok<{ credentials: { id: string; keyVoucher: string | null }[] }>(
+          w,
+          'GET',
+          '/credentials',
+          headers,
+        )
+      ).credentials.find(({ id }) => id === made.id)?.keyVoucher;
 
-    expect(answer).toMatchObject({ status: 201, body: { status: 'pending', endorsement: null } });
-    expect(await call(w, 'GET', '/access-requests', owner)).toMatchObject({
-      body: {
-        requests: [
-          {
-            id,
-            projectId,
-            credentialName: 'ci',
-            endorsement: null,
-            wantsRead: true,
-            wantsWrite: true,
-            reason: 'to deploy the worker',
-          },
-        ],
-      },
+    expect(await keyVoucherSeenBy(owner)).toBe(VOUCHERS.keyToOwner);
+    expect(await keyVoucherSeenBy(login.headers)).toBe(VOUCHERS.keyToMaker);
+    expect(await keyVoucherSeenBy(made.headers)).toBeNull();
+    expect(await keyVoucherSeenBy(other.headers)).toBeUndefined();
+    expect(await call(w, 'GET', '/me', made.headers)).toMatchObject({
+      body: { credential: { id: made.id, accountVoucher: VOUCHERS.accountKey } },
     });
-    expect(
-      await call(w, 'POST', `/access-requests/${id}/approve`, serviceAccount.headers, {
-        canWrite: true,
-        readWrap: sealedLike('self'),
-        keyProof: sealedLike('proof'),
-        keyVersion: 1,
-      }),
-    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
-
-    await ok(w, 'POST', `/access-requests/${id}/approve`, owner, {
-      canWrite: true,
-      readWrap: sealedLike('approved-wrap'),
-      keyProof: sealedLike('proof'),
-      keyVersion: 1,
-    });
-
-    expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
-      body: { canRead: true, canWrite: true },
-    });
-    expect(await call(w, 'GET', '/access-requests', owner)).toEqual({
-      status: 200,
-      body: { requests: [] },
-    });
-    expect(await call(w, 'GET', '/access-requests', serviceAccount.headers)).toMatchObject({
-      body: { requests: [{ id, status: 'approved' }] },
-    });
-    expect(await call(w, 'POST', `/access-requests/${id}/deny`, owner)).toMatchObject({
-      status: 410,
-      body: { code: 'LinkSpentError' },
+    expect(await call(w, 'GET', '/me', login.headers)).toMatchObject({
+      body: { credential: { id: login.id, accountVoucher: null } },
     });
   });
 
-  it('gives nothing when denied, and is refused for a project that does not exist', async () => {
-    const world = await storeWorld();
-    const { w, owner, pair, project } = world;
-    const projectId = await project('app/production');
-    const serviceAccount = await child(world, await pair(), []);
+  it('changes by its maker and by the owner, and it reads the new project with the key it had', async () => {
+    const world = await setup();
+    const { w, owner, first, second, login, made } = world;
 
+    // Its maker hands it the second project to read and write.
     expect(
-      (await ask(world, serviceAccount.headers, { projectName: 'app/missing', wantsRead: true }))
-        .answer,
-    ).toMatchObject({ status: 404 });
-    expect(
-      (await ask(world, owner, { projectName: 'app/production', wantsRead: true })).answer,
-    ).toMatchObject({ status: 403 });
-
-    const { id } = await ask(world, serviceAccount.headers, {
-      projectName: 'app/production',
-      wantsRead: true,
+      await access(world, login.headers, made.id, second, {
+        canRead: true,
+        canWrite: true,
+        readWrap: sealedLike('second-wrap'),
+        keyProof: sealedLike('second-proof'),
+      }),
+    ).toMatchObject({
+      status: 200,
+      body: {
+        id: made.id,
+        grants: [
+          { projectId: first, canRead: true, canWrite: false },
+          { projectId: second, canRead: true, canWrite: true },
+        ],
+      },
     });
-    await ok(w, 'POST', `/access-requests/${id}/deny`, owner);
+    expect(await call(w, 'GET', `/projects/${second}/bundle`, made.headers)).toMatchObject({
+      status: 200,
+      body: { wrap: sealedLike('second-wrap') },
+    });
 
-    expect(await call(w, 'GET', `/projects/${projectId}`, serviceAccount.headers)).toMatchObject({
+    // The owner drops its read on the second, keeping the proof it already holds.
+    await ok(w, 'PUT', `/credentials/${made.id}/grants/${second}`, owner, {
+      canRead: false,
+      canWrite: true,
+    });
+    expect(await call(w, 'GET', `/projects/${second}`, made.headers)).toMatchObject({
+      body: { canRead: false, canWrite: true, keyProof: sealedLike('second-proof') },
+    });
+    // Write added on the first keeps the wrap it reads with.
+    await ok(w, 'PUT', `/credentials/${made.id}/grants/${first}`, login.headers, {
+      canRead: true,
+      canWrite: true,
+    });
+    expect(await call(w, 'GET', `/projects/${first}/bundle`, made.headers)).toMatchObject({
+      body: { wrap: sealedLike('first-wrap') },
+    });
+
+    // Its maker takes the first away; the owner the second.
+    await ok(w, 'DELETE', `/credentials/${made.id}/grants/${first}`, login.headers);
+    await ok(w, 'DELETE', `/credentials/${made.id}/grants/${second}`, owner);
+    expect(await call(w, 'GET', '/projects', made.headers)).toEqual({
+      status: 200,
+      body: { projects: [] },
+    });
+
+    const audit = await ok<{ events: { action: string; detail: string | null }[] }>(
+      w,
+      'GET',
+      '/audit',
+      owner,
+    );
+    const grants = audit.events.filter(({ action }) => action.startsWith('grant.'));
+    expect(grants.slice(0, 5).map(({ action, detail }) => [action, detail])).toEqual([
+      ['grant.remove', 'ci'],
+      ['grant.remove', 'ci'],
+      ['grant.set', 'ci: read + write'],
+      ['grant.set', 'ci: write'],
+      ['grant.set', 'ci: read + write'],
+    ]);
+  });
+
+  it('cannot be changed by itself, a sibling or another login', async () => {
+    const world = await setup();
+    const { w, pair, second, login, made } = world;
+    const sibling = await child(world, login, [], 'sibling');
+    const otherLogin = await pair('desktop', { projects: [second] });
+    const widen = {
+      canRead: true,
+      canWrite: true,
+      readWrap: sealedLike('forged-wrap'),
+      keyProof: sealedLike('forged-proof'),
+    };
+
+    for (const headers of [made.headers, sibling.headers, otherLogin.headers]) {
+      expect(await access(world, headers, made.id, second, widen)).toMatchObject({
+        status: 403,
+        body: { code: 'OwnerRequiredError' },
+      });
+      expect(
+        await call(w, 'DELETE', `/credentials/${made.id}/grants/${second}`, headers),
+      ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    }
+    // A login's own access is every project, and does not change this way.
+    expect(await access(world, world.owner, login.id, second, widen)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    expect(await call(w, 'GET', `/projects/${second}`, made.headers)).toMatchObject({
       status: 404,
     });
+  });
+
+  it('needs a wrap for a read it gains and a proof for a project it gains', async () => {
+    const world = await setup();
+    const { first, second, login, made } = world;
+
+    for (const [projectId, body] of [
+      [second, { canRead: false, canWrite: true }],
+      [second, { canRead: true, canWrite: false, keyProof: sealedLike('proof') }],
+      [first, { canRead: false, canWrite: false }],
+      [first, { canRead: false, canWrite: true, readWrap: sealedLike('stray') }],
+    ] as const) {
+      expect(await access(world, login.headers, made.id, projectId, body)).toMatchObject({
+        status: 400,
+        body: { code: 'InvalidRequestError' },
+      });
+    }
+  });
+
+  it('is handed on by a login only as far as it holds the project itself', async () => {
+    const world = await setup();
+    const { project, login, made } = world;
+    // Made by the owner after the login's approval: the login holds nothing on it yet.
+    const later = await project('app/later');
+
+    expect(
+      await access(world, login.headers, made.id, later, {
+        canRead: false,
+        canWrite: true,
+        keyProof: sealedLike('proof'),
+      }),
+    ).toMatchObject({ status: 403, body: { code: 'NoAccessError' } });
   });
 });
 

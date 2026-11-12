@@ -1,4 +1,4 @@
-// Who may do what. Owns `credential`, `project`, `project_grant` and `access_request`: the
+// Who may do what. Owns `credential`, `project` and `project_grant`: the
 // service accounts of an account, its projects, and the grants between them. Its sub-domains are in
 // ./access; they share one set of lookups.
 import * as D1Client from '@effect/sql-d1/D1Client';
@@ -6,14 +6,12 @@ import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import { projects } from './access/projects.ts';
-import { accessRequests } from './access/requests.ts';
 import { lookups as makeLookups } from './access/rows.ts';
 import { serviceAccounts } from './access/service-accounts.ts';
 import { Audit } from './audit.ts';
 
 type Methods = ReturnType<typeof serviceAccounts> &
   Omit<ReturnType<typeof projects>, 'grantStatement'> &
-  ReturnType<typeof accessRequests> &
   Pick<ReturnType<typeof makeLookups>, 'needing' | 'ownersProject'>;
 
 export class Access extends Context.Service<Access, Methods>()(
@@ -27,9 +25,8 @@ export class Access extends Context.Service<Access, Methods>()(
       const lookups = makeLookups(sql);
       const { grantStatement, ...projectMethods } = projects({ sql, audit, lookups });
       return Access.of({
-        ...serviceAccounts({ sql, audit, lookups }),
+        ...serviceAccounts({ sql, audit, grantStatement, lookups }),
         ...projectMethods,
-        ...accessRequests({ sql, audit, grantStatement }),
         needing: lookups.needing,
         ownersProject: lookups.ownersProject,
       });

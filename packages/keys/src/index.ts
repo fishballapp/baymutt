@@ -31,6 +31,7 @@ export {
   recoveryVaultKey,
   rewrapDek,
   vaultProof,
+  vouchedScopedReader,
 } from './owner.ts';
 export { openWelcome, sealWelcome, type Welcome } from './pairing.ts';
 export {
@@ -51,4 +52,10 @@ export {
   type ServiceAccountKey,
   serviceAccountKeyFromToken,
 } from './service-account.ts';
+export {
+  type ServiceAccountVouchers,
+  vouchedAccountKey,
+  vouchedServiceAccountKey,
+  vouchForServiceAccount,
+} from './vouchers.ts';
 export { formatBearer, parseBearer, tokenHash } from './wire.ts';

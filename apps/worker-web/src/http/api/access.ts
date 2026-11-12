@@ -1,5 +1,5 @@
-/** Service accounts, projects, grants and access requests (`Access`), and the audit log (`Audit`). */
-import { Api, CurrentActor } from '@baymutt/api';
+/** Service accounts, projects and grants (`Access`), and the audit log (`Audit`). */
+import { Api, CurrentActor, OwnerRequiredError } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
 import * as Layer from 'effect/Layer';
@@ -29,12 +29,19 @@ const CredentialsHandlers = HttpApiBuilder.group(
           grants,
         });
       }),
-      create: Effect.fn(function* ({ payload: { grants, ...serviceAccount } }) {
+      create: Effect.fn(function* ({ payload: { grants, vouchers, ...serviceAccount } }) {
         return yield* access.createServiceAccount({
           actor: yield* CurrentActor,
           serviceAccount,
           grants,
+          vouchers,
         });
+      }),
+      setAccess: Effect.fn(function* ({ params, payload }) {
+        return yield* access.setAccess({ actor: yield* CurrentActor, ...params, access: payload });
+      }),
+      removeAccess: Effect.fn(function* ({ params }) {
+        return yield* access.removeAccess({ actor: yield* CurrentActor, ...params });
       }),
       setExpiry: Effect.fn(function* ({ params, payload }) {
         return yield* access.setExpiry({
@@ -84,30 +91,16 @@ const ProjectsHandlers = HttpApiBuilder.group(
   }),
 );
 
-const AccessRequestsHandlers = HttpApiBuilder.group(
-  Api,
-  'accessRequests',
-  Effect.fn(function* (handlers) {
-    const access = yield* Access;
-    return handlers.handleAll({
-      list: Effect.fn(function* () {
-        return { requests: yield* access.listAccessRequests(yield* CurrentActor) };
-      }),
-      create: Effect.fn(function* ({ payload }) {
-        return yield* access.requestAccess({ actor: yield* CurrentActor, request: payload });
-      }),
-      approve: Effect.fn(function* ({ params, payload }) {
-        return yield* access.approveAccess({
-          actor: yield* CurrentActor,
-          id: params.id,
-          ...payload,
-        });
-      }),
-      deny: Effect.fn(function* ({ params }) {
-        return yield* access.denyAccess({ actor: yield* CurrentActor, id: params.id });
-      }),
-    });
-  }),
+/** What CLIs before 0.4.0 call for `baymutt access request` and `access list`. */
+const accessRequestsRemoved = new OwnerRequiredError({
+  message:
+    'Access requests were removed. The login that made this service account changes its access with `baymutt service-accounts access`, and the owner from the dashboard; it keeps its key.',
+});
+
+const RetiredHandlers = HttpApiBuilder.group(Api, 'retired', handlers =>
+  handlers
+    .handle('accessRequest', () => Effect.fail(accessRequestsRemoved))
+    .handle('accessRequests', () => Effect.fail(accessRequestsRemoved)),
 );
 
 const AuditHandlers = HttpApiBuilder.group(
@@ -126,6 +119,6 @@ const AuditHandlers = HttpApiBuilder.group(
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
   ProjectsHandlers,
-  AccessRequestsHandlers,
+  RetiredHandlers,
   AuditHandlers,
 );

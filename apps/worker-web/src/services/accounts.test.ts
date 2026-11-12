@@ -165,7 +165,7 @@ describe('a session whose vault is locked', () => {
     const second = user.passkey('second');
 
     // What a magic link gives: enough to look around.
-    for (const path of ['/account', '/projects', '/credentials', '/audit', '/access-requests']) {
+    for (const path of ['/account', '/projects', '/credentials', '/audit']) {
       expect(await call(w, 'GET', path, locked)).toMatchObject({ status: 200 });
     }
 

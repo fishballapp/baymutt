@@ -8,7 +8,7 @@ import { AuditGroup } from './audit.ts';
 import { CredentialsGroup } from './credentials.ts';
 import { RequestValidation } from './guards.ts';
 import { ProjectsGroup } from './projects.ts';
-import { AccessRequestsGroup, PasteGroup, PasteRequestsGroup } from './requests.ts';
+import { PasteGroup, PasteRequestsGroup, RetiredGroup } from './requests.ts';
 import { SecretsGroup } from './secrets.ts';
 
 export class Api extends HttpApi.make('baymutt')
@@ -16,10 +16,10 @@ export class Api extends HttpApi.make('baymutt')
   .add(CredentialsGroup)
   .add(ProjectsGroup)
   .add(SecretsGroup)
-  .add(AccessRequestsGroup)
   .add(PasteRequestsGroup)
   .add(PasteGroup)
   .add(AuditGroup)
+  .add(RetiredGroup)
   .middleware(RequestValidation)
   .prefix('/api/v1')
   .annotateMerge(

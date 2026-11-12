@@ -13,7 +13,8 @@ baymutt logout                    # revokes this login and forgets its key
 
 - Values are sealed and opened on this computer. The store holds only ciphertext.
 - A login reads and writes every project of the account. `service-accounts create` makes a
-  scoped one, which holds only the projects it names and cannot widen them. Both take `--description` (never a secret: it is stored readable) and `--expires 12h|90d`.
+  scoped one, which holds only the projects it names and cannot widen them;
+  `service-accounts access` changes them later, keeping its key. Both take `--description` (never a secret: it is stored readable) and `--expires 12h|90d`.
 - Every command prints JSON on stdout. A failure is one JSON line on stderr that says what to do
   next, with a stable exit code: 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict,
   7 unreachable, 8 integrity, 9 check differs.

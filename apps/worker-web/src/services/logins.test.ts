@@ -115,7 +115,7 @@ describe('a login', () => {
     });
   });
 
-  it('cannot hand a new project to other logins, nor ask for access it already holds', async () => {
+  it('cannot hand a new project to other logins, and finds access requests removed', async () => {
     const { w, pair } = await storeWorld();
     const laptop = await pair('laptop');
     const server = await pair('server');
@@ -134,15 +134,32 @@ describe('a login', () => {
         ],
       }),
     ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
-    expect(
-      await call(w, 'POST', '/access-requests', laptop.headers, {
-        id: crypto.randomUUID(),
-        projectName: 'app/production',
-        wantsRead: true,
-        wantsWrite: false,
-        reason: 'to deploy',
-      }),
-    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    // What `baymutt access request` and `access list` call from a CLI before 0.4.0.
+    for (const method of ['POST', 'GET'] as const) {
+      expect(
+        await call(
+          w,
+          method,
+          '/access-requests',
+          laptop.headers,
+          method === 'GET'
+            ? undefined
+            : {
+                id: crypto.randomUUID(),
+                projectName: 'app/production',
+                wantsRead: true,
+                wantsWrite: false,
+                reason: 'to deploy',
+              },
+        ),
+      ).toMatchObject({
+        status: 403,
+        body: {
+          code: 'OwnerRequiredError',
+          message: expect.stringContaining('Access requests were removed'),
+        },
+      });
+    }
   });
 });
 

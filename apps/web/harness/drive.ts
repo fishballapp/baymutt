@@ -375,6 +375,7 @@ const main = async (browser: Browser) => {
   await page.getByLabel('New project').fill('app/preview');
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('link', { name: /app\/preview/ }).waitFor();
+  laptop.cli(['set', 'app/preview', 'API_KEY'], 'preview-value');
   check(
     'a project made in the dashboard reaches every login at once',
     laptop.cli(['secrets', 'app/preview']).status === 0 &&
@@ -413,6 +414,42 @@ const main = async (browser: Browser) => {
   });
   check('the CI service account reaches nothing it was not handed', ciAsked.status === 5);
 
+  /** Whether the CI service account, with the key it was made with, loads `API_KEY` of a project through varlock. */
+  const ciLoads = (project: string, value: string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'baymutt-drive-ci-'));
+    copyFileSync(pluginFile, join(dir, 'plugin.cjs'));
+    writeFileSync(
+      join(dir, '.env.schema'),
+      `# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("${project}"))\n# ---\nAPI_KEY=\n`,
+    );
+    return (
+      spawnSync(
+        varlockBin,
+        [
+          'run',
+          '--',
+          'node',
+          '-e',
+          `process.exit(process.env.API_KEY===${JSON.stringify(value)}?0:1)`,
+        ],
+        { cwd: dir, env: ciEnv, encoding: 'utf8' },
+      ).status === 0
+    );
+  };
+  const ciId: string = created.json.id;
+  const handedOn = laptop.cli(['service-accounts', 'access', ciId, '--read', 'app/staging']);
+  check(
+    'its login hands it another project from the CLI, and it loads it with the key it already had',
+    handedOn.status === 0 && ciLoads('app/staging', 'staging-value'),
+  );
+  check(
+    'it cannot change its own access',
+    spawnSync('node', [cliBin, 'service-accounts', 'access', ciId, '--read', 'app/preview'], {
+      env: ciEnv,
+      encoding: 'utf8',
+    }).status !== 0 && !ciLoads('app/preview', 'preview-value'),
+  );
+
   // --- the dashboard after all that -----------------------------------------------------------
   await page.goto(`${WEB}/projects`);
   await page.getByRole('link', { name: /app\/production/ }).click();
@@ -436,6 +473,30 @@ const main = async (browser: Browser) => {
   );
   await shoot(page, '11-service-accounts');
   await shootPhone(page, '11b-service-accounts-phone');
+
+  // The owner hands the CI service account a project from the dashboard, under its old key.
+  await page.getByRole('button', { name: 'Access' }).click();
+  const accessDialog = page.getByRole('alertdialog');
+  await accessDialog.waitFor();
+  await accessDialog
+    .getByRole('listitem')
+    .filter({ hasText: 'app/preview' })
+    .getByLabel('read')
+    .check();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(shots, '11e-access.png') });
+  await page.setViewportSize(PHONE);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(shots, '11f-access-phone.png') });
+  await page.setViewportSize(DESKTOP);
+  await page.getByRole('button', { name: 'Save access' }).click();
+  await accessDialog.waitFor({ state: 'hidden' });
+  await page.getByText('app/preview', { exact: true }).waitFor();
+  check(
+    'the owner hands it a project from the dashboard, and it loads it with the key it already had',
+    ciLoads('app/preview', 'preview-value'),
+  );
+  await shoot(page, '11g-service-accounts-after-access');
   await page.getByRole('button', { name: 'Expiry' }).last().click();
   await page.getByLabel('Expires').selectOption('never');
   await page.getByRole('alertdialog').waitFor();
@@ -478,6 +539,10 @@ const main = async (browser: Browser) => {
   await page.getByText('No service accounts yet').waitFor();
   await shoot(page, '14b-service-accounts-empty');
   check('a revoked service account is refused', server.cli(['projects', 'list']).status === 3);
+  await page.goto(`${WEB}/requests`);
+  await page.getByText('Nothing is waiting on you').waitFor();
+  await shoot(page, '14c-requests-empty');
+  await shootPhone(page, '14d-requests-empty-phone');
 
   // --- dark, and a phone ----------------------------------------------------------------------
   // The same page: the virtual authenticator belongs to its target.

@@ -237,8 +237,6 @@ export const projects = ({
       yield* sql
         .batch([
           sql`UPDATE project SET archived_at = ${now} WHERE id = ${id} AND archived_at IS NULL`,
-          sql`UPDATE access_request SET status = 'denied', resolved_at = ${now}
-              WHERE project_id = ${id} AND status = 'pending'`,
           sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
               WHERE project_id = ${id} AND status = 'pending'`,
           yield* audit.entry({
@@ -328,14 +326,6 @@ export const projects = ({
             keyVersion,
             now,
           }),
-          // A grant of both settles anything the service account asked for on this project.
-          ...(readWrap !== null && canWrite
-            ? [
-                sql`UPDATE access_request SET status = 'approved', resolved_at = ${now}
-                    WHERE project_id = ${id} AND credential_id = ${credentialId}
-                      AND status = 'pending'`,
-              ]
-            : []),
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),

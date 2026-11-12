@@ -26,7 +26,7 @@ Then `varlock run -- <command>`.
 - `url` is optional, for a baymutt that is not `https://baymutt.fsh.ba`:
   `@initBaymutt(key=$BAYMUTT_KEY, url="http://localhost:5183")`.
 - It needs a read grant on the project. A login holds one on every project; a service account
-  `baymutt service-accounts create --read <project>` made holds one on the projects it names.
+  `baymutt service-accounts create --read <project>` made holds one on the projects it was handed.
 
 The CLI that logs in service accounts and manages secrets is
 [`baymutt`](https://www.npmjs.com/package/baymutt).

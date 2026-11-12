@@ -2,6 +2,7 @@
 import {
   type ActorIdentity,
   AlreadyExistsError,
+  InvalidRequestError,
   type LoginGrant,
   type Me,
   NoAccessError,
@@ -9,6 +10,8 @@ import {
   OwnerRequiredError,
   type ServiceAccount,
   type ServiceAccountActor,
+  type ServiceAccountVouchers,
+  type SetAccessPayload,
   UnauthorizedError,
 } from '@baymutt/api';
 import { parseBearer } from '@baymutt/keys/wire';
@@ -21,7 +24,8 @@ import * as Schema from 'effect/Schema';
 import * as SqlSchema from 'effect/sql/SqlSchema';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
-import { type Lookups, ServiceAccountRowSchema } from './rows.ts';
+import type { projects } from './projects.ts';
+import { type Lookups, type ServiceAccountRow, ServiceAccountRowSchema } from './rows.ts';
 
 const LAST_USED_RESOLUTION_MS = 60_000;
 
@@ -50,10 +54,12 @@ const isSameHash = (one: string, other: string): boolean =>
 export const serviceAccounts = ({
   sql,
   audit,
-  lookups: { projectsOf, serviceAccountIn, underLimit },
+  grantStatement,
+  lookups: { projectsOf, projectFor, ownersProject, serviceAccountIn, underLimit },
 }: {
   readonly sql: D1Client.D1Client;
   readonly audit: Audit['Service'];
+  readonly grantStatement: ReturnType<typeof projects>['grantStatement'];
   readonly lookups: Lookups;
 }) => {
   const byBearer = SqlSchema.findOneOption({
@@ -66,7 +72,8 @@ export const serviceAccounts = ({
     // A revoked parent revokes its children with it; an expired one stops them too.
     execute: id =>
       sql`SELECT c.id, c.account_id, c.name, c.public_key, c.bearer_hash, c.parent_id,
-            c.description, c.endorsement, c.welcome, c.created_at, c.last_used_at, c.expires_at,
+            c.description, c.endorsement, c.welcome, c.key_voucher_owner, c.key_voucher_maker,
+            c.account_voucher, c.created_at, c.last_used_at, c.expires_at,
             p.expires_at AS parent_expires_at
           FROM credential c LEFT JOIN credential p ON p.id = c.parent_id
           WHERE c.id = ${id} AND c.revoked_at IS NULL`,
@@ -77,7 +84,8 @@ export const serviceAccounts = ({
     Result: ServiceAccountRowSchema,
     execute: ({ accountId, self }) =>
       sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
-            created_at, last_used_at, expires_at
+            key_voucher_owner, key_voucher_maker, account_voucher, created_at, last_used_at,
+            expires_at
           FROM credential
           WHERE account_id = ${accountId} AND revoked_at IS NULL
             AND (${self} IS NULL OR id = ${self} OR parent_id = ${self})
@@ -107,6 +115,12 @@ export const serviceAccounts = ({
     execute: accountId => sql`SELECT name, public_key FROM store_account WHERE id = ${accountId}`,
   });
 
+  /** Each copy is sealed to one reader: the owner's to the account key, the maker's to itself. */
+  const keyVoucherFor = (actor: ActorIdentity, row: ServiceAccountRow): string | null => {
+    if (actor._tag === 'Owner') return row.keyVoucherOwner;
+    return row.parentId === actor.credentialId ? row.keyVoucherMaker : null;
+  };
+
   const list = Effect.fn('Access.listServiceAccounts')(function* (actor: ActorIdentity) {
     const [rows, grants] = yield* Effect.all(
       [
@@ -128,6 +142,7 @@ export const serviceAccounts = ({
         expiresAt: row.expiresAt,
         // Only the owner's vault can read an endorsement, and only the owner acts on one.
         endorsement: actor._tag === 'Owner' ? row.endorsement : null,
+        keyVoucher: keyVoucherFor(actor, row),
         createdAt: row.createdAt,
         lastUsedAt: row.lastUsedAt,
         grants: grants
@@ -156,17 +171,21 @@ export const serviceAccounts = ({
       parentId = null,
       endorsement = null,
       welcome = null,
+      vouchers,
     }: {
       readonly parentId?: string | null;
       readonly endorsement?: string | null;
       readonly welcome?: string | null;
+      readonly vouchers?: ServiceAccountVouchers | undefined;
     }) =>
       sql`INSERT OR IGNORE INTO credential
           (id, account_id, name, public_key, bearer_hash, parent_id, description, endorsement,
-           welcome, created_at, expires_at)
+           welcome, key_voucher_owner, key_voucher_maker, account_voucher, created_at, expires_at)
         VALUES (${serviceAccount.id}, ${accountId}, ${serviceAccount.name}, ${serviceAccount.publicKey},
           ${serviceAccount.bearerHash}, ${parentId}, ${serviceAccount.description ?? null},
-          ${endorsement}, ${welcome}, ${now}, ${serviceAccount.expiresAt ?? null})
+          ${endorsement}, ${welcome}, ${vouchers?.keyToOwner ?? null},
+          ${vouchers?.keyToMaker ?? null}, ${vouchers?.accountKey ?? null}, ${now},
+          ${serviceAccount.expiresAt ?? null})
         RETURNING id`;
 
   /** Whether this request's insert is the row: an id that was taken leaves another's bearer there. */
@@ -178,6 +197,30 @@ export const serviceAccounts = ({
   const taken = new AlreadyExistsError({
     message:
       'A service account with this id exists. Make a new service account key and log in again.',
+  });
+
+  /**
+   * A scoped service account whose access `actor` may change: the owner, or the login that made
+   * it. Never itself, so it cannot widen its own access; never another login, which cannot tell
+   * its real key from one the store made up. A login's access is every project and does not change.
+   */
+  const changeable = Effect.fnUntraced(function* (actor: ActorIdentity, id: string) {
+    const target = yield* serviceAccountIn(actor.accountId, id);
+    if (target.parentId === null) {
+      return yield* new OwnerRequiredError({
+        message:
+          'A CLI login reads and writes every project, so its access does not change. Revoke it to end it.',
+      });
+    }
+    if (actor._tag === 'ServiceAccount' && actor.credentialId !== target.parentId) {
+      return yield* new OwnerRequiredError({
+        message:
+          actor.credentialId === target.id
+            ? 'A service account cannot change its own access. The login that made it can, or the owner from the dashboard.'
+            : 'Only the login that made this service account, or the owner from the dashboard, changes its access.',
+      });
+    }
+    return target;
   });
 
   return {
@@ -227,11 +270,14 @@ export const serviceAccounts = ({
         accountPublicKey: account.publicKey,
       };
       if (actor._tag === 'Owner') return { ...base, credential: null } satisfies Me;
-      const { id, name, parentId, welcome } = yield* serviceAccountIn(
+      const { id, name, parentId, welcome, accountVoucher } = yield* serviceAccountIn(
         actor.accountId,
         actor.credentialId,
       );
-      return { ...base, credential: { id, name, parentId, welcome } } satisfies Me;
+      return {
+        ...base,
+        credential: { id, name, parentId, welcome, accountVoucher },
+      } satisfies Me;
     }, Effect.orDie),
 
     listServiceAccounts: list,
@@ -294,6 +340,7 @@ export const serviceAccounts = ({
       actor,
       serviceAccount,
       grants,
+      vouchers,
     }: {
       readonly actor: ActorIdentity;
       readonly serviceAccount: NewServiceAccount;
@@ -303,6 +350,7 @@ export const serviceAccounts = ({
         readonly readWrap: string | null;
         readonly keyProof: string;
       }>;
+      readonly vouchers?: ServiceAccountVouchers | undefined;
     }) {
       if (actor._tag !== 'ServiceAccount' || actor.parentId !== null) {
         return yield* new OwnerRequiredError({
@@ -338,7 +386,7 @@ export const serviceAccounts = ({
       const made = madeBy(serviceAccount, now);
       const [inserted] = yield* sql
         .batch([
-          insert(actor.accountId, serviceAccount, now)({ parentId: actor.credentialId }),
+          insert(actor.accountId, serviceAccount, now)({ parentId: actor.credentialId, vouchers }),
           ...grants.map(grant => {
             const keyVersion =
               held.find(({ project }) => project.id === grant.projectId)?.project.keyVersion ?? 0;
@@ -363,6 +411,130 @@ export const serviceAccounts = ({
         .pipe(Effect.orDie);
       if ((inserted ?? []).length === 0) return yield* taken;
       return yield* one(actor, serviceAccount.id);
+    }),
+
+    setAccess: Effect.fn('Access.setAccess')(function* ({
+      actor,
+      id,
+      projectId,
+      access,
+    }: {
+      readonly actor: ActorIdentity;
+      readonly id: string;
+      readonly projectId: string;
+      readonly access: SetAccessPayload;
+    }) {
+      const target = yield* changeable(actor, id);
+      const { canRead, canWrite, readWrap, keyProof } = access;
+      if (!canRead && !canWrite) {
+        return yield* new InvalidRequestError({
+          message: 'Access is read, write or both. To take the project away, remove its access.',
+        });
+      }
+      if (!canRead && readWrap !== undefined) {
+        return yield* new InvalidRequestError({
+          message: 'A read wrap was sent for access that does not read.',
+        });
+      }
+      const { project } =
+        actor._tag === 'Owner'
+          ? yield* ownersProject(actor, projectId)
+          : yield* projectFor(actor, projectId);
+      // A login hands on only what it holds, as when it made this one.
+      if (actor._tag === 'ServiceAccount') {
+        for (const need of ['read', 'write'] as const) {
+          const wants = need === 'read' ? canRead : canWrite;
+          const holds = need === 'read' ? project.canRead : project.canWrite;
+          if (wants && !holds) {
+            return yield* new NoAccessError({
+              need,
+              message: `This login has no ${need} access to ${project.name}, so it cannot hand it on.`,
+            });
+          }
+        }
+      }
+      // Only what was made for the project's current key is kept.
+      const [held] = yield* sql<{
+        readonly readWrap: string | null;
+        readonly keyProof: string;
+      }>`SELECT read_wrap, key_proof FROM project_grant
+          WHERE project_id = ${projectId} AND credential_id = ${id}
+            AND key_version = ${project.keyVersion}`.pipe(Effect.orDie);
+      // A read it gains is a wrap only a holder of the project key can make, and a project it
+      // gains comes with a proof of its key: the store keeps either, and makes neither.
+      const wrap = canRead ? (readWrap ?? held?.readWrap ?? null) : null;
+      if (canRead && wrap === null) {
+        return yield* new InvalidRequestError({
+          message: `${target.name} does not read ${project.name} yet: send the project key wrapped to it (\`readWrap\`).`,
+        });
+      }
+      const proof = keyProof ?? held?.keyProof;
+      if (proof === undefined) {
+        return yield* new InvalidRequestError({
+          message: `${target.name} holds nothing on ${project.name} yet: send the proof of the project’s key (\`keyProof\`).`,
+        });
+      }
+      const now = yield* Clock.currentTimeMillis;
+      yield* sql
+        .batch([
+          grantStatement({
+            accountId: actor.accountId,
+            projectId,
+            credentialId: id,
+            canWrite,
+            readWrap: wrap,
+            keyProof: proof,
+            keyVersion: project.keyVersion,
+            now,
+          }),
+          yield* audit.entry({
+            accountId: actor.accountId,
+            actor: actorOf(actor),
+            action: 'grant.set',
+            projectId,
+            projectName: project.name,
+            detail: `${target.name}: ${[canRead && 'read', canWrite && 'write'].filter(Boolean).join(' + ')}`,
+          }),
+        ])
+        .pipe(Effect.orDie);
+      return yield* one(actor, id);
+    }),
+
+    removeAccess: Effect.fn('Access.removeAccess')(function* ({
+      actor,
+      id,
+      projectId,
+    }: {
+      readonly actor: ActorIdentity;
+      readonly id: string;
+      readonly projectId: string;
+    }) {
+      const target = yield* changeable(actor, id);
+      // By the caller's list, not its grant: a login may take away a project it lacks itself.
+      const [listed] = yield* projectsOf(actor, projectId);
+      if (listed === undefined) {
+        return yield* new NotFoundError({ message: 'No project has this id.' });
+      }
+      const held = sql`EXISTS (SELECT 1 FROM project_grant
+        WHERE project_id = ${projectId} AND credential_id = ${id})`;
+      yield* sql
+        .batch([
+          // Logged only when there was access to remove, so before the delete.
+          yield* audit.entry(
+            {
+              accountId: actor.accountId,
+              actor: actorOf(actor),
+              action: 'grant.remove',
+              projectId,
+              projectName: listed.project.name,
+              detail: target.name,
+            },
+            held,
+          ),
+          sql`DELETE FROM project_grant WHERE project_id = ${projectId} AND credential_id = ${id}`,
+        ])
+        .pipe(Effect.orDie);
+      return yield* one(actor, id);
     }),
 
     setExpiry: Effect.fn('Access.setExpiry')(function* ({
@@ -417,15 +589,13 @@ export const serviceAccounts = ({
       const now = yield* Clock.currentTimeMillis;
       const revokedIds = sql`SELECT id FROM credential
         WHERE (id = ${id} OR parent_id = ${id}) AND account_id = ${actor.accountId}`;
-      // One batch: the bearers stop working, the wraps and pending requests go, and the log says
+      // One batch: the bearers stop working, the wraps go, and the log says
       // so. A service account it made holds nothing its maker did not, so it goes with it.
       const [revoked] = yield* sql
         .batch([
           sql`UPDATE credential SET revoked_at = ${now}, bearer_hash = ''
               WHERE id IN (${revokedIds}) AND revoked_at IS NULL RETURNING id`,
           sql`DELETE FROM project_grant WHERE credential_id IN (${revokedIds})`,
-          sql`UPDATE access_request SET status = 'denied', resolved_at = ${now}
-              WHERE credential_id IN (${revokedIds}) AND status = 'pending'`,
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),

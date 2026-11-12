@@ -18,6 +18,7 @@ import {
   PublicKeySchema,
   SealedSchema,
   TimestampSchema,
+  VoucherSchema,
   WrapSchema,
 } from './fields.ts';
 import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
@@ -43,6 +44,12 @@ export const ServiceAccountSchema = Schema.Struct({
   expiresAt: Schema.NullOr(TimestampSchema),
   /** The owner's vault vouching for `publicKey`. Only a service account the owner paired has one, and only the owner can read it. */
   endorsement: Schema.NullOr(SealedSchema),
+  /**
+   * The login that made this one vouching for `publicKey`, to the caller: the owner, or that
+   * login. Null for a login, for any other caller, and for a service account made by a CLI before
+   * 0.4.0, which nothing vouches for: it can lose access, and gain none that needs its key.
+   */
+  keyVoucher: Schema.NullOr(VoucherSchema),
   createdAt: TimestampSchema,
   lastUsedAt: Schema.NullOr(TimestampSchema),
   grants: Schema.Array(CredentialGrantSchema),
@@ -62,6 +69,28 @@ const aboutNewCredential = {
   /** When it stops working. Omitted: never. */
   expiresAt: Schema.optionalKey(ExpirySchema),
 };
+
+/** What a login writes when it makes a service account, so that its access can change later. */
+export const ServiceAccountVouchersSchema = Schema.Struct({
+  /** Its public key, vouched for to the account's key: what the owner's browser trusts. */
+  keyToOwner: VoucherSchema,
+  /** Its public key, vouched for to its maker: what the maker trusts later. */
+  keyToMaker: VoucherSchema,
+  /** The account's public key, vouched for to it: so it takes the owner's proof of a project's key. */
+  accountKey: VoucherSchema,
+}).annotate({ identifier: 'ServiceAccountVouchers' });
+export type ServiceAccountVouchers = typeof ServiceAccountVouchersSchema.Type;
+
+/** The access a service account holds on one project, as it is to become. */
+export const SetAccessPayloadSchema = Schema.Struct({
+  canRead: Schema.Boolean,
+  canWrite: Schema.Boolean,
+  /** The project key wrapped to it: needed when it gains read, and kept from before otherwise. */
+  readWrap: Schema.optionalKey(WrapSchema),
+  /** The granter's proof of the project's public key: needed when it gains the project, kept otherwise. */
+  keyProof: Schema.optionalKey(KeyProofSchema),
+}).annotate({ identifier: 'SetAccessPayload' });
+export type SetAccessPayload = typeof SetAccessPayloadSchema.Type;
 
 /** Read and write on one project for a login, as the owner's vault wraps and vouches for it. */
 export const LoginGrantSchema = Schema.Struct({
@@ -93,6 +122,8 @@ export const MeSchema = Schema.Struct({
       name: LabelSchema,
       parentId: Schema.NullOr(Schema.String),
       welcome: Schema.NullOr(SealedSchema),
+      /** Its maker vouching for the account's public key; null for a login, or one made before 0.4.0. */
+      accountVoucher: Schema.NullOr(VoucherSchema),
     }),
   ),
 }).annotate({ identifier: 'Me' });
@@ -144,6 +175,8 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
             keyProof: KeyProofSchema,
           }),
         ),
+        /** Optional, so older clients still send a valid request; without them its access can only shrink. */
+        vouchers: Schema.optionalKey(ServiceAccountVouchersSchema),
       }),
       success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [
@@ -158,6 +191,29 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
         summary: 'Make a narrower service account',
         description:
           'A service account hands part of its own access to a new one. It cannot grant what it does not hold, and a service account made this way can make no others.',
+      }),
+    ),
+    HttpApiEndpoint.put('setAccess', '/credentials/:id/grants/:projectId', {
+      params: { id: Schema.String, projectId: Schema.String },
+      payload: SetAccessPayloadSchema,
+      success: ServiceAccountSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(NoAccessError)],
+    }).annotateMerge(
+      OpenApi.annotations({
+        summary: 'Change a service account’s access to a project',
+        description:
+          'For a service account a login made, by that login or by the owner. It keeps its key. A read is the project key wrapped to it, which only a holder of the key can make; it cannot change its own access.',
+      }),
+    ),
+    HttpApiEndpoint.delete('removeAccess', '/credentials/:id/grants/:projectId', {
+      params: { id: Schema.String, projectId: Schema.String },
+      success: ServiceAccountSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(
+      OpenApi.annotations({
+        summary: 'Take a project away from a service account',
+        description:
+          'For a service account a login made, by that login or by the owner. What it already read stays read.',
       }),
     ),
     HttpApiEndpoint.put('setExpiry', '/credentials/:id/expiry', {

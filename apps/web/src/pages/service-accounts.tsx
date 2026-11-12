@@ -1,8 +1,10 @@
-import type { ServiceAccount } from '@baymutt/api';
-import { useAtom, useAtomValue } from '@effect/atom-react';
+import type { Project, ServiceAccount } from '@baymutt/api';
+import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { RobotIcon, TerminalWindowIcon } from '@phosphor-icons/react';
+import * as Atom from 'effect/reactivity/Atom';
 import { useState } from 'react';
 import { ExpiryField, expiryLabel } from '../components/expiry.tsx';
+import { useOwner } from '../components/gate.tsx';
 import {
   Code,
   CommandLine,
@@ -20,7 +22,11 @@ import {
 import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
 import {
+  type AccessChange,
+  changeAccessAtom,
   isLogin,
+  isVouched,
+  projectsAtom,
   revokeServiceAccountAtom,
   serviceAccountsAtom,
   setExpiryAtom,
@@ -82,6 +88,129 @@ const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: ServiceAcco
   );
 };
 
+type Held = { readonly canRead: boolean; readonly canWrite: boolean };
+
+const heldOn = (serviceAccount: ServiceAccount, projectId: string): Held => {
+  const grant = serviceAccount.grants.find(held => held.projectId === projectId);
+  return { canRead: grant?.canRead ?? false, canWrite: grant?.canWrite ?? false };
+};
+
+const AccessBox = ({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  readonly label: string;
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (checked: boolean) => void;
+}) => (
+  <label className="flex items-center gap-1.5 text-sm text-foreground has-disabled:text-muted">
+    <input
+      type="checkbox"
+      className="size-4 shrink-0 accent-accent"
+      checked={checked}
+      disabled={disabled}
+      onChange={event => onChange(event.target.checked)}
+    />
+    {label}
+  </label>
+);
+
+/**
+ * What a scoped service account can reach, changed here under the key it already has. A read or
+ * a project it gains needs its key as its maker vouched for it; one made by a CLI before 0.4.0 has
+ * no such voucher, so it can only lose access, and gain write on a project it holds.
+ */
+const ChangeAccess = ({
+  serviceAccount,
+  maker,
+}: {
+  readonly serviceAccount: ServiceAccount;
+  readonly maker: ServiceAccount | undefined;
+}) => {
+  const owner = useOwner();
+  const projects = latest(useAtomValue(projectsAtom)) ?? [];
+  const [saving, save] = useAtom(changeAccessAtom, { mode: 'promiseExit' });
+  // One atom serves every row, so an earlier row's failure is cleared when this dialog opens.
+  const forget = useAtomSet(changeAccessAtom);
+  const [isOpen, setIsOpen] = useState(false);
+  const [chosen, setChosen] = useState<Readonly<Record<string, Held>>>({});
+  const vouched = isVouched(serviceAccount) && maker !== undefined;
+  const accessOn = (project: Project) => chosen[project.id] ?? heldOn(serviceAccount, project.id);
+  const changes: ReadonlyArray<AccessChange> = projects.flatMap(project => {
+    const before = heldOn(serviceAccount, project.id);
+    const after = accessOn(project);
+    return before.canRead === after.canRead && before.canWrite === after.canWrite
+      ? []
+      : [{ projectId: project.id, ...after }];
+  });
+  return (
+    <Confirm
+      open={isOpen}
+      onOpenChange={open => {
+        setIsOpen(open);
+        if (open) {
+          setChosen({});
+          forget(Atom.Reset);
+        }
+      }}
+      trigger={
+        <Button size="sm" intent="subtle">
+          Access
+        </Button>
+      }
+      title={`What can ${serviceAccount.name} reach?`}
+      confirmLabel="Save access"
+      pendingLabel="Saving…"
+      isPending={saving.waiting}
+      error={failureMessage(
+        saving,
+        'Something went wrong. The list behind shows what it holds now; try again.',
+      )}
+      onConfirm={async () => {
+        if (maker === undefined || changes.length === 0) return setIsOpen(false);
+        const exit = await save({ owner, serviceAccount, maker, changes });
+        if (exit._tag === 'Success') setIsOpen(false);
+      }}
+    >
+      <ul className="max-h-72 divide-y divide-line overflow-y-auto border-line border-y">
+        {projects.map(project => {
+          const before = heldOn(serviceAccount, project.id);
+          const after = accessOn(project);
+          const set = (next: Held) => setChosen(current => ({ ...current, [project.id]: next }));
+          return (
+            <li key={project.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
+              <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">{project.name}</Code>
+              <AccessBox
+                label="read"
+                checked={after.canRead}
+                disabled={!vouched && !before.canRead}
+                onChange={canRead => set({ ...after, canRead })}
+              />
+              <AccessBox
+                label="write"
+                checked={after.canWrite}
+                disabled={!vouched && !before.canRead && !before.canWrite}
+                onChange={canWrite => set({ ...after, canWrite })}
+              />
+            </li>
+          );
+        })}
+      </ul>
+      {vouched ? (
+        <p>A read wraps the project key to it. What it reads cannot be unread.</p>
+      ) : (
+        <p>
+          A CLI before 0.4.0 made it, so nothing vouches for its key: it can lose access here, and
+          gain only write on a project it holds.
+        </p>
+      )}
+    </Confirm>
+  );
+};
+
 /** What it can reach: every project for a login, what it was handed for any other. */
 const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) => {
   if (isLogin(serviceAccount)) {
@@ -108,11 +237,11 @@ const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) 
 
 const ServiceAccountRow = ({
   serviceAccount,
-  madeBy,
+  maker,
   made,
 }: {
   readonly serviceAccount: ServiceAccount;
-  readonly madeBy: string | undefined;
+  readonly maker: ServiceAccount | undefined;
   readonly made: number;
 }) => {
   const [revoking, revoke] = useAtom(revokeServiceAccountAtom, { mode: 'promiseExit' });
@@ -135,7 +264,7 @@ const ServiceAccountRow = ({
           )}
           <p className="mt-0.5 text-sm text-muted">
             {isLogin(serviceAccount) ? 'CLI login, approved' : 'Service account, made by'}{' '}
-            {madeBy !== undefined && `${madeBy} `}
+            {maker !== undefined && `${maker.name} `}
             <Time at={serviceAccount.createdAt} /> ·{' '}
             {serviceAccount.lastUsedAt === null ? (
               'never used'
@@ -148,6 +277,9 @@ const ServiceAccountRow = ({
           <Reach serviceAccount={serviceAccount} />
         </div>
         <RowActions>
+          {!isLogin(serviceAccount) && (
+            <ChangeAccess serviceAccount={serviceAccount} maker={maker} />
+          )}
           <ChangeExpiry serviceAccount={serviceAccount} />
           <Confirm
             open={isConfirming}
@@ -191,7 +323,7 @@ export const ServiceAccountsPage = () => {
     <>
       <PageHeader
         title="Service accounts"
-        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every project; a service account a login made reaches only what its maker handed on."
+        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every project; a service account a login made reaches only what it was handed, by that login or by you."
       />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
       {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
@@ -213,7 +345,7 @@ export const ServiceAccountsPage = () => {
             <ServiceAccountRow
               key={serviceAccount.id}
               serviceAccount={serviceAccount}
-              madeBy={serviceAccounts.find(({ id }) => id === serviceAccount.parentId)?.name}
+              maker={serviceAccounts.find(({ id }) => id === serviceAccount.parentId)}
               made={serviceAccounts.filter(({ parentId }) => parentId === serviceAccount.id).length}
             />
           ))}
