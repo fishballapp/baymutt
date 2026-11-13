@@ -2,6 +2,7 @@
 // is what makes it safe for a service account to write without asking.
 
 import { coded } from '@internal/effect-api';
+import * as Effect from 'effect/Effect';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as OpenApi from 'effect/http-api/OpenApi';
@@ -21,7 +22,7 @@ import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const SecretSchema = Schema.Struct({
   name: SecretNameSchema,
-  /** The version a load answers with; null once deleted. */
+  /** The version a load answers with; null once deleted, while it is in the bin. */
   currentVersion: Schema.NullOr(VersionSchema),
   /** The highest version ever written: the next write is one above it. */
   latestVersion: VersionSchema,
@@ -29,6 +30,11 @@ export const SecretSchema = Schema.Struct({
   size: Schema.NullOr(Schema.Int),
   updatedAt: TimestampSchema,
   updatedBy: ActorSchema,
+  /**
+   * When a deleted secret leaves the bin for good, every version with it; null while it is live.
+   * A store from before the bin sends no such key, which reads as null.
+   */
+  purgeAt: Schema.NullOr(TimestampSchema).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 }).annotate({ identifier: 'Secret' });
 export type Secret = typeof SecretSchema.Type;
 
@@ -130,18 +136,23 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
       OpenApi.annotations({
         summary: 'Delete a secret',
         description:
-          'Soft: a load stops answering it, its versions stay, and a rollback brings it back.',
+          'It goes to the bin: a load stops answering it, and a rollback brings it back with every version. After 30 days in the bin it is removed for good.',
       }),
     ),
     HttpApiEndpoint.post('rollback', '/projects/:projectId/secrets/:name/rollback', {
       params: secretParams,
-      payload: Schema.Struct({ version: VersionSchema }),
+      payload: Schema.Struct({
+        version: VersionSchema,
+        /** A restore from the bin: refused when the secret is no longer in it. */
+        fromBin: Schema.optionalKey(Schema.Boolean),
+      }),
       success: SecretSchema,
       error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Make an earlier version current',
-        description: 'Needs a write grant. No version is removed.',
+        description:
+          'Needs a write grant. No version is removed. On a deleted secret, it is how one leaves the bin; `fromBin` refuses when it has already left.',
       }),
     ),
     HttpApiEndpoint.get('versions', '/projects/:projectId/secrets/:name/versions', {
@@ -153,6 +164,11 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
       params: secretParams,
       payload: Schema.Struct({ version: VersionSchema }),
       success: SealedVersionSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
+    // The owner's alone, from the dashboard with the vault open: it cannot be undone.
+    HttpApiEndpoint.post('purge', '/projects/:projectId/secrets/:name/purge', {
+      params: secretParams,
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(OpenApi.annotations({ exclude: true })),
   )

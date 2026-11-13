@@ -27,7 +27,7 @@ import { Confirm } from '../components/ui/confirm.tsx';
 import { TextArea, TextField } from '../components/ui/field.tsx';
 import { copyWhenReady } from '../lib/clipboard.ts';
 import {
-  archiveProjectAtom,
+  deleteProjectAtom,
   grantsAtom,
   isLogin,
   projectAtom,
@@ -39,7 +39,7 @@ import {
   versionsAtom,
   writeSecretAtom,
 } from '../lib/data.ts';
-import { bytes, counted, exactTime } from '../lib/format.ts';
+import { bytes, exactTime } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
 const isSecretName = Schema.is(SecretNameSchema);
@@ -243,69 +243,60 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
   const [panel, setPanel] = useState<'replace' | 'history' | null>(null);
   const [removing, remove] = useAtom(removeSecretAtom, { mode: 'promiseExit' });
   const [isConfirming, setIsConfirming] = useState(false);
-  const isDeleted = secret.currentVersion === null;
   const toggle = (next: 'replace' | 'history') => setPanel(panel === next ? null : next);
   return (
     // A row written in the last few seconds says so once: it is the only motion on the page.
     <Row className={Date.now() - secret.updatedAt < 3000 ? 'animate-written' : undefined}>
       <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
-          <Code className={isDeleted ? 'text-muted line-through' : 'text-base font-medium'}>
-            {secret.name}
-          </Code>
+          <Code className="text-base font-medium">{secret.name}</Code>
           <p className="mt-0.5 text-sm text-muted">
-            {isDeleted
-              ? `deleted · ${counted(secret.latestVersion, 'version')} kept`
-              : `sealed · ${bytes(secret.size ?? 0)} · v${secret.currentVersion}`}{' '}
-            · {secret.updatedBy.name}, <Time at={secret.updatedAt} />
+            sealed · {bytes(secret.size ?? 0)} · v{secret.currentVersion} · {secret.updatedBy.name},{' '}
+            <Time at={secret.updatedAt} />
           </p>
         </div>
         <RowActions>
-          {!isDeleted && (
-            <Button
-              size="sm"
-              intent="subtle"
-              aria-expanded={panel === 'replace'}
-              onClick={() => toggle('replace')}
-            >
-              Replace
-            </Button>
-          )}
+          <Button
+            size="sm"
+            intent="subtle"
+            aria-expanded={panel === 'replace'}
+            onClick={() => toggle('replace')}
+          >
+            Replace
+          </Button>
           <Button
             size="sm"
             intent="subtle"
             aria-expanded={panel === 'history'}
             onClick={() => toggle('history')}
           >
-            {isDeleted ? 'Restore' : 'History'}
+            History
           </Button>
-          {!isDeleted && (
-            <Confirm
-              open={isConfirming}
-              onOpenChange={setIsConfirming}
-              trigger={
-                <Button size="sm" intent="subtleDanger">
-                  Delete
-                </Button>
-              }
-              title={`Delete ${secret.name}?`}
-              keepLabel="Keep it"
-              confirmLabel="Delete secret"
-              pendingLabel="Deleting…"
-              isDangerous
-              isPending={removing.waiting}
-              error={failureMessage(removing)}
-              onConfirm={async () => {
-                const exit = await remove({ projectId: project.id, name: secret.name });
-                if (exit._tag === 'Success') setIsConfirming(false);
-              }}
-            >
-              <p>
-                Service accounts stop receiving it on their next load. Its versions are kept, so you
-                can restore it from its history.
-              </p>
-            </Confirm>
-          )}
+          <Confirm
+            open={isConfirming}
+            onOpenChange={setIsConfirming}
+            trigger={
+              <Button size="sm" intent="subtleDanger">
+                Delete
+              </Button>
+            }
+            title={`Delete ${secret.name}?`}
+            keepLabel="Keep it"
+            confirmLabel="Delete secret"
+            pendingLabel="Deleting…"
+            isDangerous
+            isPending={removing.waiting}
+            error={failureMessage(removing)}
+            onConfirm={async () => {
+              const exit = await remove({ projectId: project.id, name: secret.name });
+              if (exit._tag === 'Success') setIsConfirming(false);
+            }}
+          >
+            <p>
+              Service accounts stop receiving it on their next load. It stays in the Bin for 30
+              days, where you can restore it.
+            </p>
+          </Confirm>
         </RowActions>
       </div>
       {secret.currentVersion !== null && (
@@ -326,7 +317,8 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
 
 const Secrets = ({ project }: { readonly project: Project }) => {
   const result = useAtomValue(secretsAtom(project.id));
-  const secrets = latest(result);
+  // A deleted secret is in the Bin, not here.
+  const secrets = latest(result)?.filter(secret => secret.currentVersion !== null) ?? null;
   const [isAdding, setIsAdding] = useState(false);
   return (
     <Section
@@ -434,32 +426,32 @@ const Access = ({ project }: { readonly project: Project }) => {
   );
 };
 
-const Archive = ({ project }: { readonly project: Project }) => {
+const DeleteProject = ({ project }: { readonly project: Project }) => {
   const navigate = useNavigate();
-  const [archiving, archive] = useAtom(archiveProjectAtom, { mode: 'promiseExit' });
+  const [deleting, remove] = useAtom(deleteProjectAtom, { mode: 'promiseExit' });
   return (
     <Section
-      title="Archive"
-      lede="Stops every load and write of this project. Its rows are kept, and its name stays taken."
+      title="Delete"
+      lede="Moves it to the Bin, which stops every load and write of it. Its name stays taken. You can restore it for 30 days; then it is removed for good."
       className="border-line border-t pt-8"
       action={
         <Confirm
-          trigger={<Button intent="danger">Archive project</Button>}
-          title={`Archive ${project.name}?`}
+          trigger={<Button intent="danger">Delete project</Button>}
+          title={`Delete ${project.name}?`}
           keepLabel="Keep project"
-          confirmLabel="Archive project"
-          pendingLabel="Archiving…"
+          confirmLabel="Delete project"
+          pendingLabel="Deleting…"
           isDangerous
-          isPending={archiving.waiting}
-          error={failureMessage(archiving)}
+          isPending={deleting.waiting}
+          error={failureMessage(deleting)}
           onConfirm={async () => {
-            const exit = await archive(project.id);
+            const exit = await remove(project.id);
             if (exit._tag === 'Success') await navigate({ to: '/projects' });
           }}
         >
           <p>
-            Anything that loads it will fail on its next run, deploys included. This cannot be
-            undone from the dashboard.
+            Anything that loads it will fail on its next run, deploys included. It stays in the Bin
+            for 30 days, where you can restore it.
           </p>
         </Confirm>
       }
@@ -499,7 +491,7 @@ export const ProjectPage = ({ id }: { readonly id: string }) => {
       />
       <Secrets project={project} />
       <Access project={project} />
-      <Archive project={project} />
+      <DeleteProject project={project} />
     </>
   );
 };

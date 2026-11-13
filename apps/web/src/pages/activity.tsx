@@ -46,7 +46,14 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
     );
   },
   'project.create': event => <>created {project(event)}</>,
-  'project.archive': event => <>archived {project(event)}</>,
+  'project.archive': event => <>deleted {project(event)}</>,
+  'project.delete': event => <>deleted {project(event)}</>,
+  'project.restore': event => <>restored {project(event)} from the bin</>,
+  'project.purge': event => (
+    <>
+      removed {project(event)} for good{event.detail !== null && `, ${event.detail}`}
+    </>
+  ),
   'project.load': event => <>loaded {project(event)}</>,
   'secret.write': event => (
     <>
@@ -58,9 +65,20 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
       deleted {secret(event)} in {project(event)}
     </>
   ),
-  'secret.rollback': event => (
+  'secret.rollback': event =>
+    event.detail === 'from the bin' ? (
+      <>
+        restored {secret(event)} in {project(event)} from the bin
+      </>
+    ) : (
+      <>
+        rolled {secret(event)} back in {project(event)}
+      </>
+    ),
+  'secret.purge': event => (
     <>
-      rolled {secret(event)} back in {project(event)}
+      removed {secret(event)} in {project(event)} for good
+      {event.detail !== null && `, ${event.detail}`}
     </>
   ),
   'secret.reveal': event => (

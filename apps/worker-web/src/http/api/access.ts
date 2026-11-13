@@ -1,10 +1,11 @@
-/** Service accounts, projects and grants (`Access`), and the audit log (`Audit`). */
+/** Service accounts, projects and grants (`Access`), the bin (`Bin`) and the audit log (`Audit`). */
 import { Api, CurrentActor, OwnerRequiredError } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
 import * as Layer from 'effect/Layer';
 import { Access } from '../../services/access.ts';
 import { Audit } from '../../services/audit.ts';
+import { Bin } from '../../services/bin.ts';
 
 const CredentialsHandlers = HttpApiBuilder.group(
   Api,
@@ -62,6 +63,7 @@ const ProjectsHandlers = HttpApiBuilder.group(
   'projects',
   Effect.fn(function* (handlers) {
     const access = yield* Access;
+    const bin = yield* Bin;
     return handlers.handleAll({
       list: Effect.fn(function* () {
         return { projects: yield* access.listProjects(yield* CurrentActor) };
@@ -72,8 +74,14 @@ const ProjectsHandlers = HttpApiBuilder.group(
       get: Effect.fn(function* ({ params }) {
         return (yield* access.project(yield* CurrentActor, params.id)).project;
       }),
-      archive: Effect.fn(function* ({ params }) {
-        return yield* access.archiveProject({ actor: yield* CurrentActor, id: params.id });
+      remove: Effect.fn(function* ({ params }) {
+        return yield* access.removeProject({ actor: yield* CurrentActor, id: params.id });
+      }),
+      restore: Effect.fn(function* ({ params }) {
+        return yield* access.restoreProject({ actor: yield* CurrentActor, id: params.id });
+      }),
+      purge: Effect.fn(function* ({ params }) {
+        yield* bin.purgeProject({ actor: yield* CurrentActor, id: params.id });
       }),
       ownerWrap: Effect.fn(function* ({ params }) {
         return yield* access.ownerWrap({ actor: yield* CurrentActor, id: params.id });
@@ -116,9 +124,23 @@ const AuditHandlers = HttpApiBuilder.group(
   }),
 );
 
+const BinHandlers = HttpApiBuilder.group(
+  Api,
+  'bin',
+  Effect.fn(function* (handlers) {
+    const bin = yield* Bin;
+    return handlers.handleAll({
+      list: Effect.fn(function* () {
+        return yield* bin.list(yield* CurrentActor);
+      }),
+    });
+  }),
+);
+
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
   ProjectsHandlers,
   RetiredHandlers,
   AuditHandlers,
+  BinHandlers,
 );

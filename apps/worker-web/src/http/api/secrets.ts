@@ -3,6 +3,7 @@ import { Api, CurrentActor, CurrentCaller, PASTE_TOKEN_HEADER } from '@baymutt/a
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
 import * as Layer from 'effect/Layer';
+import { Bin } from '../../services/bin.ts';
 import { Secrets } from '../../services/secrets.ts';
 
 const SecretHandlers = HttpApiBuilder.group(
@@ -10,6 +11,7 @@ const SecretHandlers = HttpApiBuilder.group(
   'secrets',
   Effect.fn(function* (handlers) {
     const secrets = yield* Secrets;
+    const bin = yield* Bin;
     return handlers.handleAll({
       list: Effect.fn(function* ({ params }) {
         return { secrets: yield* secrets.list({ actor: yield* CurrentActor, ...params }) };
@@ -34,6 +36,9 @@ const SecretHandlers = HttpApiBuilder.group(
       }),
       reveal: Effect.fn(function* ({ params, payload }) {
         return yield* secrets.reveal({ actor: yield* CurrentActor, ...params, ...payload });
+      }),
+      purge: Effect.fn(function* ({ params }) {
+        yield* bin.purgeSecret({ actor: yield* CurrentActor, ...params });
       }),
     });
   }),

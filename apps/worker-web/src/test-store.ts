@@ -39,7 +39,7 @@ export const VAULT_PROOF = 'the-open-vault';
 
 export const newAccount = async (id: string, credentialId: string) => ({
   id,
-  name: 'Jason',
+  name: 'Test owner',
   publicKey: keyLike('a'),
   encryptedPrivateKey: sealedLike('private'),
   passkey: { credentialId, wrappedDek: sealedLike('wrap') },

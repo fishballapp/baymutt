@@ -20,7 +20,7 @@ const listCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'The projects this service account holds a grant on, and what it may do in each',
+    'The projects this service account holds a grant on, and what it may do in each. Deleted ones are in `baymutt bin list`',
   ),
   Command.withAlias('ls'),
 );

@@ -6,6 +6,7 @@ import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
 import * as Logger from 'effect/Logger';
 import { auditCommand, serviceAccountsCommand } from './commands/access.ts';
+import { binCommand } from './commands/bin.ts';
 import { loginCommand, logoutCommand } from './commands/login.ts';
 import { projectsCommand, whoamiCommand } from './commands/projects.ts';
 import { secretCommands } from './commands/secrets.ts';
@@ -22,6 +23,7 @@ export const cli = Command.make('baymutt').pipe(
     whoamiCommand,
     projectsCommand,
     ...secretCommands,
+    binCommand,
     serviceAccountsCommand,
     auditCommand,
   ]),

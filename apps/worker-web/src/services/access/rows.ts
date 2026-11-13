@@ -210,7 +210,7 @@ export const lookups = (sql: D1Client.D1Client) => {
     if (Number(row?.held ?? 0) >= LIMITS[what]) {
       return yield* new LimitReachedError({
         limit: LIMITS[what],
-        message: `An account holds up to ${LIMITS[what]} ${what === 'projects' ? 'projects' : 'service accounts'} while baymutt is in beta. ${what === 'projects' ? 'Archive one in the dashboard' : 'Revoke one with `baymutt service-accounts revoke`'} to make room.`,
+        message: `An account holds up to ${LIMITS[what]} ${what === 'projects' ? 'projects' : 'service accounts'} while baymutt is in beta. ${what === 'projects' ? 'Delete one in the dashboard' : 'Revoke one with `baymutt service-accounts revoke`'} to make room.`,
       });
     }
   });

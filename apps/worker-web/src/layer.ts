@@ -9,13 +9,14 @@ import type { Auth } from './platform/auth.ts';
 import { Access } from './services/access.ts';
 import { Accounts } from './services/accounts.ts';
 import { Audit } from './services/audit.ts';
+import { Bin } from './services/bin.ts';
 import { Secrets } from './services/secrets.ts';
 
 export const makeWorkerLayer = (
   env: Env,
   edges: { readonly auth: Layer.Layer<Auth, Config.ConfigError> },
 ) =>
-  Secrets.layer.pipe(
+  Layer.mergeAll(Secrets.layer, Bin.layer).pipe(
     Layer.provideMerge(Layer.mergeAll(Access.layer, Accounts.layer)),
     Layer.provideMerge(Audit.layer),
     Layer.provideMerge(

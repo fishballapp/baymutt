@@ -68,8 +68,10 @@ the key it stored; in CI it is the job's secret.
 - **The dashboard reveals a value only with the vault open.** The owner's browser fetches one
   version's ciphertext and opens it with the vault; the store logs the request and never sees the
   value. A session an email link made cannot.
-- **Every write is a new version and every delete is soft**, so what an agent changes can be rolled
-  back.
+- **Every write is a new version and a delete goes to the bin**, so what an agent changes can be
+  rolled back. `baymutt bin list` shows what was deleted and `baymutt bin restore` brings a secret
+  back, for 30 days; then it is removed for good. Only the owner, in the dashboard, removes
+  something sooner.
 
 What it does not hide: project and secret names, sizes, and who read or wrote what when. What it
 does not protect yet: a compromised host could swap a value for one of its own or answer with an

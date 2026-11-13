@@ -27,6 +27,8 @@
   // every local request as that host. `scripts/deploy-worker.ts` passes it at deploy (`--domains`).
   "workers_dev": false,
   "preview_urls": false,
+  // Once a day: what has been in the bin for 30 days is removed for good (src/services/bin.ts).
+  "triggers": { "crons": ["17 3 * * *"] },
   "observability": { "enabled": true },
   "vars": {
     "MODE": "production",

@@ -91,11 +91,12 @@ export const ReasonSchema = Schema.String.check(Schema.isMaxLength(500)).annotat
 });
 
 /**
- * Who did something: the owner, or a service account by its credential. The kind `'machine'` is
- * the wire and stored name of a service account (audit rows hold it), kept so they stay readable.
+ * Who did something: the owner, a service account by its credential, a paste link, or the store
+ * itself (`'system'`: the bin removing what was deleted 30 days ago). The kind `'machine'` is the
+ * wire and stored name of a service account (audit rows hold it), kept so they stay readable.
  */
 export const ActorSchema = Schema.Struct({
-  kind: Schema.Literals(['owner', 'machine', 'link']),
+  kind: Schema.Literals(['owner', 'machine', 'link', 'system']),
   id: Schema.String,
   name: Schema.String,
 }).annotate({ identifier: 'Actor' });

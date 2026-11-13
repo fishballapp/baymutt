@@ -103,16 +103,32 @@ export class ProjectsGroup extends HttpApiGroup.make('projects')
       success: ProjectSchema,
       error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(OpenApi.annotations({ summary: 'Get a project' })),
-    HttpApiEndpoint.delete('archive', '/projects/:id', {
+    HttpApiEndpoint.delete('remove', '/projects/:id', {
       params: idParam,
-      success: Schema.Struct({ archivedAt: TimestampSchema }),
+      success: Schema.Struct({ deletedAt: TimestampSchema, purgeAt: TimestampSchema }),
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Archive a project',
-        description: 'Owner only. Nothing can load or write it afterwards; its rows are kept.',
+        summary: 'Delete a project',
+        description:
+          'Owner only. It goes to the bin: nothing can load or write it, and its name stays taken. The owner can restore it for 30 days; then it is removed for good with its secrets and grants.',
       }),
     ),
+    HttpApiEndpoint.post('restore', '/projects/:id/restore', {
+      params: idParam,
+      success: ProjectSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(LimitReachedError)],
+    }).annotateMerge(
+      OpenApi.annotations({
+        summary: 'Restore a project from the bin',
+        description: 'Owner only, as deleting it is. It comes back with its secrets and grants.',
+      }),
+    ),
+    // The owner's alone, from the dashboard with the vault open: it cannot be undone.
+    HttpApiEndpoint.post('purge', '/projects/:id/purge', {
+      params: idParam,
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
     HttpApiEndpoint.get('ownerWrap', '/projects/:id/owner-wrap', {
       params: idParam,
       success: Schema.Struct({

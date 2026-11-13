@@ -156,9 +156,9 @@ const main = async (browser: Browser) => {
   await page.getByRole('link', { name: 'Create an account' }).click();
   await page.getByRole('heading', { name: 'Create your account' }).waitFor();
   await shoot(page, '01b-sign-up');
-  await followLink(page, '/signup', 'jason@example.test');
+  await followLink(page, '/signup', 'owner@example.test');
   await page.getByRole('heading', { name: 'Set up your vault' }).waitFor();
-  await page.getByLabel('Your name').fill('Jason');
+  await page.getByLabel('Your name').fill('Test owner');
   await shoot(page, '02-set-up');
   await page.getByRole('button', { name: 'Use a passkey' }).click();
   const recoveryKey = await keepRecoveryKey(page);
@@ -450,11 +450,21 @@ const main = async (browser: Browser) => {
     }).status !== 0 && !ciLoads('app/preview', 'preview-value'),
   );
 
+  // A secret an agent deleted: it is in the bin, not in the project's list.
+  laptop.cli(['set', 'app/production', 'OLD_TOKEN'], 'old-value');
+  const binned = laptop.cli(['delete', 'app/production', 'OLD_TOKEN']);
+  check(
+    'a deleted secret goes to the bin, and the CLI lists it there',
+    typeof binned.json?.purgeAt === 'number' &&
+      laptop.cli(['bin', 'list']).json?.secrets?.[0]?.name === 'OLD_TOKEN',
+  );
+
   // --- the dashboard after all that -----------------------------------------------------------
   await page.goto(`${WEB}/projects`);
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByText('STRIPE_SECRET_KEY').waitFor();
   await shoot(page, '10-project');
+  check('the project lists no deleted secret', (await page.getByText('OLD_TOKEN').count()) === 0);
   await page.getByRole('button', { name: 'History' }).first().click();
   await page.getByText(/^v1$/).waitFor();
   await shoot(page, '10b-project-history');
@@ -510,6 +520,39 @@ const main = async (browser: Browser) => {
     (await page.getByText(/expires in \d+ days/).count()) === 1,
   );
   await shoot(page, '11d-service-accounts-after-expiry');
+  // --- the bin ---------------------------------------------------------------------------------
+  laptop.cli(['projects', 'create', 'app/old']);
+  await page.goto(`${WEB}/projects`);
+  await page.getByRole('link', { name: /app\/old/ }).click();
+  await page.getByRole('button', { name: 'Delete project' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete project' }).click();
+  await page.waitForURL(`${WEB}/projects`);
+  await page.getByRole('link', { name: 'Bin' }).first().click();
+  await page.getByText('OLD_TOKEN').waitFor();
+  await page.getByText('app/old').waitFor();
+  await shoot(page, '11g-bin');
+  await shootPhone(page, '11h-bin-phone');
+  const secretRow = page.getByRole('listitem').filter({ hasText: 'OLD_TOKEN' });
+  await secretRow.getByRole('button', { name: 'Restore' }).click();
+  await page.getByText('OLD_TOKEN').waitFor({ state: 'detached' });
+  check(
+    'the owner restores a secret from the bin, and the CLI loads it again',
+    laptop
+      .cli(['secrets', 'app/production'])
+      .json?.secrets?.some((secret: { name: string }) => secret.name === 'OLD_TOKEN') === true,
+  );
+  const projectRow = page.getByRole('listitem').filter({ hasText: 'app/old' });
+  await projectRow.getByRole('button', { name: 'Delete for good' }).click();
+  await page.getByRole('alertdialog').waitFor();
+  await page.waitForTimeout(300);
+  await shoot(page, '11i-bin-delete-for-good');
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete for good' }).click();
+  await page.getByText('The bin is empty').waitFor();
+  check(
+    'the owner deletes a project in the bin for good, and its name is free again',
+    laptop.cli(['projects', 'create', 'app/old']).status === 0,
+  );
+
   await page.goto(`${WEB}/activity`);
   await page.getByText('pasted').waitFor();
   await shoot(page, '12-activity');
@@ -595,7 +638,7 @@ const main = async (browser: Browser) => {
   await freshPage.getByRole('link', { name: 'Lost your password or passkey?' }).click();
   await freshPage.getByRole('heading', { name: 'Recover your account' }).waitFor();
   await shoot(freshPage, '17a-recover-email');
-  await followLink(freshPage, '/recover', 'jason@example.test');
+  await followLink(freshPage, '/recover', 'owner@example.test');
   await freshPage.getByRole('heading', { name: 'Recover your vault' }).waitFor();
   // Signed in by a link alone: it can look, and the store refuses any change.
   const refused = await freshPage.evaluate(async () => {
@@ -623,7 +666,7 @@ const main = async (browser: Browser) => {
 
   const spent = await browser.newContext({ colorScheme: 'dark', viewport: PHONE });
   const spentPage = await spent.newPage();
-  await followLink(spentPage, '/recover', 'jason@example.test');
+  await followLink(spentPage, '/recover', 'owner@example.test');
   await spentPage.getByLabel('Recovery key').fill(recoveryKey);
   await spentPage.getByRole('button', { name: 'Open my vault' }).click();
   await spentPage.getByRole('alert').waitFor();

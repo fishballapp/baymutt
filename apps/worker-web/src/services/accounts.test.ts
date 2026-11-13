@@ -36,7 +36,7 @@ describe('the account', () => {
 
     expect(created).toMatchObject({
       id,
-      name: 'Jason',
+      name: 'Test owner',
       hasPassword: false,
       passkeys: [{ ...user.first, name: 'first', hasWrap: true }],
     });

@@ -5,6 +5,7 @@ import * as HttpApi from 'effect/http-api/HttpApi';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import { AccountGroup } from './account.ts';
 import { AuditGroup } from './audit.ts';
+import { BinGroup } from './bin.ts';
 import { CredentialsGroup } from './credentials.ts';
 import { RequestValidation } from './guards.ts';
 import { ProjectsGroup } from './projects.ts';
@@ -18,6 +19,7 @@ export class Api extends HttpApi.make('baymutt')
   .add(SecretsGroup)
   .add(PasteRequestsGroup)
   .add(PasteGroup)
+  .add(BinGroup)
   .add(AuditGroup)
   .add(RetiredGroup)
   .middleware(RequestValidation)

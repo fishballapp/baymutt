@@ -1,6 +1,7 @@
 export * from './account.ts';
 export * from './api.ts';
 export * from './audit.ts';
+export * from './bin.ts';
 export * from './credentials.ts';
 export * from './errors.ts';
 export * from './fields.ts';

@@ -148,7 +148,7 @@ const makeOwner = async (world: TestWorld) => {
   };
   await api('POST', '/account', {
     id: accountId,
-    name: 'Jason',
+    name: 'Test owner',
     ...accountKeys,
     passkey: { credentialId: user.first.credentialId, wrappedDek },
     password: null,
@@ -293,7 +293,7 @@ layer(NodeServices.layer)(it => {
             json: {
               status: 'loggedIn',
               serviceAccountId,
-              account: { id: owner.accountId, name: 'Jason' },
+              account: { id: owner.accountId, name: 'Test owner' },
             },
           });
           // An account with no projects yet: nothing to hold.
@@ -410,6 +410,34 @@ layer(NodeServices.layer)(it => {
           { version: 2, isCurrent: false },
           { version: 1, isCurrent: true },
         ]);
+      }),
+    );
+
+    it.effect('go to the bin when deleted, and come back from it with every version', () =>
+      Effect.gen(function* () {
+        const { world, laptop } = yield* paired;
+        yield* run(world, laptop, ['projects', 'create', 'app/dev']);
+        yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'first');
+        yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'second');
+
+        const deleted = (yield* run(world, laptop, ['delete', 'app/dev', 'API_KEY'])).json;
+        expect(deleted.purgeAt).toEqual(expect.any(Number));
+        // It leaves the project's list for the bin's.
+        expect((yield* run(world, laptop, ['secrets', 'app/dev'])).json.secrets).toEqual([]);
+        expect((yield* run(world, laptop, ['bin', 'list'])).json).toMatchObject({
+          projects: [],
+          secrets: [{ projectName: 'app/dev', name: 'API_KEY', latestVersion: 2 }],
+        });
+
+        const missing = yield* run(world, laptop, ['bin', 'restore', 'app/dev', 'OTHER']);
+        expect(missing.exitCode).toBe(5);
+        expect(
+          (yield* run(world, laptop, ['bin', 'restore', 'app/dev', 'API_KEY'])).json,
+        ).toMatchObject({ currentVersion: 2, purgeAt: null });
+        expect((yield* load(world, laptop, 'app/dev')).API_KEY).toBe('second');
+        expect((yield* run(world, laptop, ['bin', 'list'])).json.secrets).toEqual([]);
+        // Nothing here removes anything for good.
+        expect((yield* run(world, laptop, ['bin', 'purge'])).exitCode).not.toBe(0);
       }),
     );
 

@@ -74,6 +74,8 @@ export const removePasswordAtom = ApiClient.runtime.fn(
 
 // --- projects and secrets ----------------------------------------------------------------------
 
+type SecretKey = { readonly projectId: string; readonly name: string };
+
 export const projectsAtom = ApiClient.query('projects', 'list', {
   reactivityKeys: ['projects'],
 }).pipe(Atom.mapResult(({ projects }) => projects));
@@ -156,10 +158,51 @@ export const createProjectAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['projects', 'serviceAccounts', 'grants'] },
 );
 
-export const archiveProjectAtom = ApiClient.runtime.fn(
+export const deleteProjectAtom = ApiClient.runtime.fn(
   (id: string) =>
-    ApiClient.use(client => client.projects.archive({ params: { id } })).pipe(faultsAsDefects),
-  { reactivityKeys: ['projects', 'requests'] },
+    ApiClient.use(client => client.projects.remove({ params: { id } })).pipe(faultsAsDefects),
+  { reactivityKeys: ['projects', 'requests', 'serviceAccounts', 'grants', 'bin', 'audit'] },
+);
+
+// --- the bin -----------------------------------------------------------------------------------
+
+export const binAtom = ApiClient.query('bin', 'list', { reactivityKeys: ['bin'] });
+
+export const restoreProjectAtom = Atom.family((_id: string) =>
+  ApiClient.runtime.fn(
+    (id: string) =>
+      ApiClient.use(client => client.projects.restore({ params: { id } })).pipe(faultsAsDefects),
+    { reactivityKeys: ['projects', 'serviceAccounts', 'grants', 'bin', 'audit'] },
+  ),
+);
+
+/** Removes a deleted project for good, with its secrets, versions and grants. */
+export const purgeProjectAtom = Atom.family((_id: string) =>
+  ApiClient.runtime.fn(
+    (id: string) =>
+      ApiClient.use(client => client.projects.purge({ params: { id } })).pipe(faultsAsDefects),
+    { reactivityKeys: ['serviceAccounts', 'grants', 'bin', 'audit'] },
+  ),
+);
+
+/** A deleted secret comes back as its newest version, with every version kept. */
+export const restoreSecretAtom = Atom.family((_slot: string) =>
+  ApiClient.runtime.fn(
+    ({ version, ...params }: SecretKey & { readonly version: number }) =>
+      ApiClient.use(client =>
+        client.secrets.rollback({ params, payload: { version, fromBin: true } }),
+      ).pipe(faultsAsDefects),
+    { reactivityKeys: ['secrets', 'projects', 'bin', 'audit'] },
+  ),
+);
+
+/** Removes a deleted secret for good, every version. */
+export const purgeSecretAtom = Atom.family((_slot: string) =>
+  ApiClient.runtime.fn(
+    (params: SecretKey) =>
+      ApiClient.use(client => client.secrets.purge({ params })).pipe(faultsAsDefects),
+    { reactivityKeys: ['bin', 'audit'] },
+  ),
 );
 
 /**
@@ -219,8 +262,6 @@ export const writeSecretAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['secrets', 'projects', 'audit'] },
 );
 
-type SecretKey = { readonly projectId: string; readonly name: string };
-
 /**
  * One version's value, opened here with the project key the vault just proved. The store logs the
  * request and never sees the value. One per secret, and nothing keeps it: a row resets it on hide
@@ -264,7 +305,7 @@ export const revealSecretAtom = Atom.family((_slot: string) =>
 export const removeSecretAtom = ApiClient.runtime.fn(
   (params: SecretKey) =>
     ApiClient.use(client => client.secrets.remove({ params })).pipe(faultsAsDefects),
-  { reactivityKeys: ['secrets', 'projects', 'audit'] },
+  { reactivityKeys: ['secrets', 'projects', 'bin', 'audit'] },
 );
 
 export const rollbackSecretAtom = ApiClient.runtime.fn(
@@ -272,7 +313,7 @@ export const rollbackSecretAtom = ApiClient.runtime.fn(
     ApiClient.use(client => client.secrets.rollback({ params, payload: { version } })).pipe(
       faultsAsDefects,
     ),
-  { reactivityKeys: ['secrets', 'projects', 'audit'] },
+  { reactivityKeys: ['secrets', 'projects', 'bin', 'audit'] },
 );
 
 // --- service accounts and access -----------------------------------------------------------------------

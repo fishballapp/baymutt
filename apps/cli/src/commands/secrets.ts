@@ -34,11 +34,17 @@ const listCommand = Command.make(
     const { api } = yield* ServiceAccount;
     const { id, name } = yield* resolveProject(project);
     const { secrets } = yield* api.secrets.list({ params: { projectId: id } });
-    yield* print({ project: name, secrets });
+    // A deleted one is in the bin, listed by `baymutt bin list`.
+    yield* print({
+      project: name,
+      secrets: secrets.filter(secret => secret.currentVersion !== null),
+    });
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
-  Command.withDescription('A project’s secrets: names, versions and sizes. Never a value'),
+  Command.withDescription(
+    'A project’s secrets: names, versions and sizes. Never a value. Deleted ones are in `baymutt bin list`',
+  ),
 );
 
 const stdinValue = Effect.gen(function* () {
@@ -126,7 +132,7 @@ const deleteCommand = Command.make(
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Delete a secret. A load stops answering it; its versions are kept, and `rollback` brings it back',
+    'Delete a secret. It goes to the bin: a load stops answering it, `baymutt bin restore` brings it back with every version for 30 days, then it is removed for good',
   ),
 );
 

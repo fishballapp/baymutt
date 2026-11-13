@@ -43,7 +43,7 @@ describe('a service account', () => {
       status: 200,
       body: {
         accountId,
-        accountName: 'Jason',
+        accountName: 'Test owner',
         accountPublicKey: keyLike('a'),
         credential: {
           id: serviceAccount.id,
@@ -651,7 +651,7 @@ describe('the audit log', () => {
 });
 
 describe('the beta limits', () => {
-  it('refuses one project more than an account may hold, and makes room when one is archived', async () => {
+  it('refuses one project more than an account may hold, and makes room when one is deleted', async () => {
     const { w, owner, project, accountId } = await storeWorld();
     const first = await project('p/0');
     w.sqlite.exec(

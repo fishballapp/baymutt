@@ -1,0 +1,367 @@
+/** The bin: deleting, restoring, the owner removing for good, and the 30-day sweep. */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { SecretSchema } from '@baymutt/api';
+import * as Effect from 'effect/Effect';
+import * as Schema from 'effect/Schema';
+import * as Struct from 'effect/Struct';
+import { describe, expect, it } from 'vitest';
+import { call, ok, type StoreWorld, storeWorld } from '../test-store.ts';
+import { sealedLike, send } from '../test-support.ts';
+import { BIN_MS, Bin } from './bin.ts';
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/** A purge answers 204, with no body. */
+const purge = async (w: StoreWorld['w'], path: string, headers: Record<string, string>) => {
+  const response = await w.api(`/api/v1${path}`, send('POST', undefined, headers));
+  return { status: response.status, body: response.status === 204 ? null : await response.json() };
+};
+
+const setup = async () => {
+  const world = await storeWorld();
+  const login = await world.pair('laptop');
+  const projectId = await world.project('app/production', world.owner, [login.id]);
+  const scoped = await world.pair('ci');
+  // A scoped service account: one the login made, which holds only what it was handed.
+  world.w.sqlite
+    .prepare('UPDATE credential SET parent_id = ? WHERE id = ?')
+    .run(login.id, scoped.id);
+  await world.grant(projectId, scoped.id, { read: true, write: true });
+  await world.write(projectId, 'API_KEY', 1);
+  await world.write(projectId, 'API_KEY', 2);
+  return { ...world, login, scoped, projectId };
+};
+
+const sweep = (w: StoreWorld['w']) =>
+  Effect.runPromise(Effect.flatMap(Bin, bin => bin.sweep).pipe(Effect.provide(w.services)));
+
+/** Moves everything in the bin `days` closer to being removed, as that many days passing would. */
+const age = (w: StoreWorld['w'], days: number) => {
+  w.sqlite.exec(`UPDATE secret SET purge_at = purge_at - ${days * DAY_MS},
+    updated_at = updated_at - ${days * DAY_MS} WHERE current_version IS NULL`);
+  w.sqlite.exec(`UPDATE project SET purge_at = purge_at - ${days * DAY_MS},
+    archived_at = archived_at - ${days * DAY_MS} WHERE archived_at IS NOT NULL`);
+};
+
+const count = (w: StoreWorld['w'], table: string) =>
+  (w.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+const actions = (w: StoreWorld['w']) =>
+  w.sqlite.prepare('SELECT action, actor, detail FROM audit_event ORDER BY id').all() as Array<{
+    action: string;
+    actor: string;
+    detail: string | null;
+  }>;
+
+describe('a deleted secret', () => {
+  it('goes to the bin for 30 days, and a rollback by whoever could delete it brings it back', async () => {
+    const { w, owner, scoped, projectId } = await setup();
+
+    const deleted = await ok<{ updatedAt: number; purgeAt: number }>(
+      w,
+      'DELETE',
+      `/projects/${projectId}/secrets/API_KEY`,
+      scoped.headers,
+    );
+    expect(deleted).toMatchObject({ currentVersion: null, latestVersion: 2 });
+    expect(deleted.purgeAt - deleted.updatedAt).toBe(BIN_MS);
+    // Deleting it again does not restart its 30 days.
+    expect(await call(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner)).toMatchObject({
+      status: 404,
+    });
+
+    expect(await ok(w, 'GET', '/bin', owner)).toEqual({
+      projects: [],
+      secrets: [
+        {
+          projectId,
+          projectName: 'app/production',
+          name: 'API_KEY',
+          latestVersion: 2,
+          deletedAt: deleted.updatedAt,
+          deletedBy: { kind: 'machine', id: scoped.id, name: 'ci' },
+          purgeAt: deleted.purgeAt,
+        },
+      ],
+    });
+
+    expect(
+      await call(w, 'POST', `/projects/${projectId}/secrets/API_KEY/rollback`, scoped.headers, {
+        version: 2,
+      }),
+    ).toMatchObject({ status: 200, body: { currentVersion: 2, purgeAt: null } });
+    expect(await ok(w, 'GET', '/bin', owner)).toEqual({ projects: [], secrets: [] });
+    expect(actions(w).at(-1)).toMatchObject({ action: 'secret.rollback', detail: 'from the bin' });
+  });
+
+  it('is not restored from the bin once it has left it: a value set since stays current', async () => {
+    const { w, owner, projectId, write } = await setup();
+    await ok(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner);
+    await write(projectId, 'API_KEY', 3);
+
+    // A Bin page loaded before that write still offers version 2.
+    expect(
+      await call(w, 'POST', `/projects/${projectId}/secrets/API_KEY/rollback`, owner, {
+        version: 2,
+        fromBin: true,
+      }),
+    ).toMatchObject({ status: 404 });
+    expect(await ok(w, 'GET', `/projects/${projectId}/secrets`, owner)).toMatchObject({
+      secrets: [{ name: 'API_KEY', currentVersion: 3 }],
+    });
+  });
+
+  it('leaves the bin when its name is set again, with its versions kept as history', async () => {
+    const { w, owner, projectId, write } = await setup();
+    await ok(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner);
+
+    expect(await write(projectId, 'API_KEY', 3)).toMatchObject({
+      status: 200,
+      body: { currentVersion: 3, purgeAt: null },
+    });
+    expect(count(w, 'secret_version')).toBe(3);
+    expect(await ok(w, 'GET', '/bin', owner)).toEqual({ projects: [], secrets: [] });
+  });
+
+  it('is removed for good, every version, 30 days after it was deleted and not before', async () => {
+    const { w, owner, projectId, write } = await setup();
+    await write(projectId, 'OTHER', 1);
+    await ok(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner);
+
+    age(w, 29);
+    expect(await sweep(w)).toEqual({ projects: 0, secrets: 0 });
+    expect(count(w, 'secret_version')).toBe(3);
+
+    age(w, 1);
+    expect(await sweep(w)).toEqual({ projects: 0, secrets: 1 });
+    expect(w.sqlite.prepare('SELECT name, version FROM secret_version').all()).toEqual([
+      { name: 'OTHER', version: 1 },
+    ]);
+    expect(await ok(w, 'GET', '/bin', owner)).toEqual({ projects: [], secrets: [] });
+    // The log still says what happened to it, and who removed it.
+    const log = actions(w);
+    expect(log.filter(({ action }) => action === 'secret.write')).toHaveLength(3);
+    expect(log.at(-1)).toEqual({
+      action: 'secret.purge',
+      actor: JSON.stringify({ kind: 'system', id: 'bin', name: 'baymutt' }),
+      detail: 'after 30 days in the bin',
+    });
+    // The name is free: a new secret starts at version 1.
+    expect(await write(projectId, 'API_KEY', 1)).toMatchObject({ status: 200 });
+  });
+});
+
+describe('a deleted project', () => {
+  it('goes to the bin, keeps its name, and the owner restores it whole', async () => {
+    const { w, owner, login, scoped, projectId } = await setup();
+    expect(await call(w, 'DELETE', `/projects/${projectId}`, login.headers)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    const { deletedAt, purgeAt } = await ok<{ deletedAt: number; purgeAt: number }>(
+      w,
+      'DELETE',
+      `/projects/${projectId}`,
+      owner,
+    );
+    expect(purgeAt - deletedAt).toBe(BIN_MS);
+    expect(await ok(w, 'GET', '/bin', login.headers)).toEqual({
+      projects: [{ id: projectId, name: 'app/production', deletedAt, purgeAt }],
+      secrets: [],
+    });
+    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, scoped.headers)).toMatchObject({
+      status: 404,
+    });
+
+    // Its name stays taken while it is in the bin, and the refusal says where it is.
+    const taken = await call(w, 'POST', '/projects', owner, {
+      id: crypto.randomUUID(),
+      name: 'app/production',
+      publicKey: 'p'.repeat(42) + 'A',
+      ownerWrap: sealedLike('owner-wrap'),
+      ownerProof: sealedLike('owner-proof'),
+      creatorWrap: null,
+      creatorProof: null,
+    });
+    expect(taken).toMatchObject({ status: 409, body: { code: 'AlreadyExistsError' } });
+    expect(JSON.stringify(taken.body)).toContain('in the bin');
+
+    for (const headers of [login.headers, scoped.headers]) {
+      expect(await call(w, 'POST', `/projects/${projectId}/restore`, headers)).toMatchObject({
+        status: 403,
+        body: { code: 'OwnerRequiredError' },
+      });
+    }
+    expect(await call(w, 'POST', `/projects/${projectId}/restore`, owner)).toMatchObject({
+      status: 200,
+      body: { id: projectId, name: 'app/production', secretCount: 1 },
+    });
+    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, scoped.headers)).toMatchObject({
+      status: 200,
+      body: { secrets: [{ name: 'API_KEY', version: 2 }] },
+    });
+    expect(await ok(w, 'GET', '/bin', owner)).toEqual({ projects: [], secrets: [] });
+    expect(actions(w).map(({ action }) => action)).toContain('project.restore');
+  });
+
+  it('is removed for good after 30 days, with its secrets, versions and grants', async () => {
+    const { w, owner, projectId } = await setup();
+    await ok(w, 'DELETE', `/projects/${projectId}`, owner);
+
+    age(w, 29);
+    expect(await sweep(w)).toEqual({ projects: 0, secrets: 0 });
+    age(w, 1);
+    expect(await sweep(w)).toEqual({ projects: 1, secrets: 0 });
+
+    for (const table of ['project', 'secret', 'secret_version', 'project_grant']) {
+      expect(count(w, table)).toBe(0);
+    }
+    const log = actions(w);
+    expect(log.some(({ action }) => action === 'project.create')).toBe(true);
+    expect(log.at(-1)).toMatchObject({
+      action: 'project.purge',
+      detail: 'after 30 days in the bin',
+    });
+  });
+});
+
+describe('removing for good straight away', () => {
+  it('is the owner’s alone, with the vault open: never a login, a service account or a locked session', async () => {
+    const { w, owner, locked, login, scoped, projectId } = await setup();
+    await ok(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner);
+    const purgeSecret = (headers: Record<string, string>) =>
+      purge(w, `/projects/${projectId}/secrets/API_KEY/purge`, headers);
+
+    for (const headers of [login.headers, scoped.headers]) {
+      expect(await purgeSecret(headers)).toMatchObject({
+        status: 403,
+        body: { code: 'OwnerRequiredError' },
+      });
+    }
+    expect(await purgeSecret(locked)).toMatchObject({
+      status: 403,
+      body: { code: 'VaultLockedError' },
+    });
+    expect(count(w, 'secret_version')).toBe(2);
+
+    expect(await purgeSecret(owner)).toMatchObject({ status: 204 });
+    expect(count(w, 'secret_version')).toBe(0);
+    expect(await purgeSecret(owner)).toMatchObject({ status: 404 });
+    expect(actions(w).at(-1)).toMatchObject({
+      action: 'secret.purge',
+      actor: expect.stringContaining('"kind":"owner"'),
+      detail: null,
+    });
+  });
+
+  it('takes only what is in the bin, and a whole project for the owner', async () => {
+    const { w, owner, login, projectId } = await setup();
+    // A live project or secret is deleted first.
+    expect(await purge(w, `/projects/${projectId}/purge`, owner)).toMatchObject({
+      status: 404,
+    });
+    expect(await purge(w, `/projects/${projectId}/secrets/API_KEY/purge`, owner)).toMatchObject({
+      status: 404,
+    });
+
+    await ok(w, 'DELETE', `/projects/${projectId}`, owner);
+    expect(await purge(w, `/projects/${projectId}/purge`, login.headers)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    expect(await purge(w, `/projects/${projectId}/purge`, owner)).toMatchObject({
+      status: 204,
+    });
+    for (const table of ['project', 'secret', 'secret_version', 'project_grant']) {
+      expect(count(w, table)).toBe(0);
+    }
+    expect(await ok(w, 'GET', '/bin', owner)).toEqual({ projects: [], secrets: [] });
+  });
+});
+
+describe('what a scoped service account sees in the bin', () => {
+  it('is what is in the projects it holds a grant on', async () => {
+    const { w, owner, scoped, project, write } = await setup();
+    const other = await project('app/staging');
+    await write(other, 'TOKEN', 1);
+    await ok(w, 'DELETE', `/projects/${other}/secrets/TOKEN`, owner);
+
+    expect(await ok(w, 'GET', '/bin', scoped.headers)).toEqual({ projects: [], secrets: [] });
+    expect((await ok<{ secrets: Array<unknown> }>(w, 'GET', '/bin', owner)).secrets).toHaveLength(
+      1,
+    );
+  });
+});
+
+describe('what was deleted before the bin', () => {
+  it('gets its 30 days from the migration, not from when it was deleted', async () => {
+    const { w, owner, projectId, project, write } = await setup();
+    const archived = await project('old/archived');
+    await ok(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner);
+    await ok(w, 'DELETE', `/projects/${archived}`, owner);
+    // As a store from before the bin holds them: deleted a year ago, with no purge_at.
+    const yearAgo = Date.now() - 365 * DAY_MS;
+    w.sqlite.exec(`UPDATE secret SET purge_at = NULL, updated_at = ${yearAgo}
+      WHERE current_version IS NULL`);
+    w.sqlite.exec(`UPDATE project SET purge_at = NULL, archived_at = ${yearAgo}
+      WHERE archived_at IS NOT NULL`);
+    // The migration's own statements, without the columns it adds (already there).
+    const migration = readFileSync(
+      fileURLToPath(new URL('../../migrations/0005_bin.sql', import.meta.url).href),
+      'utf8',
+    );
+    w.sqlite.exec(
+      migration
+        .split(';')
+        .filter(statement => statement.includes('UPDATE'))
+        .join(';'),
+    );
+
+    expect(await sweep(w)).toEqual({ projects: 0, secrets: 0 });
+    const bin = await ok<{
+      projects: Array<{ deletedAt: number; purgeAt: number }>;
+      secrets: Array<{ deletedAt: number; purgeAt: number }>;
+    }>(w, 'GET', '/bin', owner);
+    for (const item of [...bin.projects, ...bin.secrets]) {
+      expect(item.deletedAt).toBe(yearAgo);
+      expect(Math.abs(item.purgeAt - (Date.now() + BIN_MS))).toBeLessThan(60_000);
+    }
+    expect(bin.projects).toHaveLength(1);
+    expect(bin.secrets).toHaveLength(1);
+
+    age(w, 30);
+    expect(await sweep(w)).toEqual({ projects: 1, secrets: 1 });
+    expect(await write(projectId, 'API_KEY', 1)).toMatchObject({ status: 200 });
+  });
+});
+
+describe('clients on either side of the bin', () => {
+  const v041Secret = SecretSchema.mapFields(Struct.omit(['purgeAt']));
+
+  it('a store from before it still reads to a newer client: purgeAt is null', () => {
+    const secret = Schema.decodeUnknownSync(SecretSchema)({
+      name: 'API_KEY',
+      currentVersion: null,
+      latestVersion: 2,
+      size: null,
+      updatedAt: 1,
+      updatedBy: { kind: 'owner', id: 'a', name: 'Owner' },
+    });
+    expect(secret.purgeAt).toBeNull();
+  });
+
+  it('a 0.4.1 client reads this store’s secrets', async () => {
+    const { w, owner, projectId } = await setup();
+    await ok(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, owner);
+    const { secrets } = await ok<{ secrets: Array<unknown> }>(
+      w,
+      'GET',
+      `/projects/${projectId}/secrets`,
+      owner,
+    );
+    expect(Schema.decodeUnknownSync(Schema.Array(v041Secret))(secrets)).toEqual([
+      expect.objectContaining({ name: 'API_KEY', currentVersion: null, latestVersion: 2 }),
+    ]);
+  });
+});

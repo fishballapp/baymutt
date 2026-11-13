@@ -1,6 +1,6 @@
 // Owns `secret`, `secret_version` and `paste_request`: a project's values as ciphertext. A write
-// adds a version and never changes one, a delete only clears the pointer to the current version,
-// and none of it can be read here.
+// adds a version and never changes one, a delete only clears the pointer to the current version
+// (the secret is then in the bin, until `Bin` removes it for good), and none of it can be read here.
 import {
   type Actor,
   type ActorIdentity,
@@ -32,6 +32,7 @@ import type * as Statement from 'effect/sql/Statement';
 import { Access } from './access.ts';
 import { ActorJsonSchema, actorOf, encodeActor, LINK_ACTOR } from './actors.ts';
 import { Audit } from './audit.ts';
+import { BIN_MS } from './bin.ts';
 
 const SecretRowSchema = Schema.Struct({
   name: Schema.String,
@@ -40,6 +41,7 @@ const SecretRowSchema = Schema.Struct({
   size: Schema.NullOr(Schema.Finite),
   updatedAt: Schema.Finite,
   updatedBy: ActorJsonSchema,
+  purgeAt: Schema.NullOr(Schema.Finite),
 });
 
 const VersionRowSchema = Schema.Struct({
@@ -115,12 +117,17 @@ export class Secrets extends Context.Service<
       Secret,
       NotFoundError | NoAccessError | VersionConflictError | LimitReachedError
     >;
-    /** Soft: clears the current version and keeps every version. */
+    /** To the bin: clears the current version and keeps every version until it is removed for good. */
     readonly remove: (
       request: { readonly actor: ActorIdentity } & Slot,
     ) => Effect.Effect<Secret, NotFoundError | NoAccessError>;
     readonly rollback: (
-      request: { readonly actor: ActorIdentity; readonly version: number } & Slot,
+      request: {
+        readonly actor: ActorIdentity;
+        readonly version: number;
+        /** A restore from the bin: nothing moves when the secret has left it since. */
+        readonly fromBin?: boolean;
+      } & Slot,
     ) => Effect.Effect<Secret, NotFoundError | NoAccessError>;
     readonly versions: (
       request: { readonly actor: ActorIdentity } & Slot,
@@ -174,6 +181,8 @@ export class Secrets extends Context.Service<
         Result: SecretRowSchema,
         execute: ({ projectId, name }) =>
           sql`SELECT s.name, s.current_version, s.latest_version, s.updated_at, s.updated_by,
+                CASE WHEN s.current_version IS NULL
+                  THEN COALESCE(s.purge_at, s.updated_at + ${BIN_MS}) END AS purge_at,
                 (SELECT length(v.ciphertext) * 3 / 4 FROM secret_version v
                   WHERE v.project_id = s.project_id AND v.name = s.name
                     AND v.version = s.current_version) AS size
@@ -300,7 +309,7 @@ export class Secrets extends Context.Service<
                 SET current_version = excluded.current_version,
                     latest_version = excluded.latest_version,
                     updated_at = excluded.updated_at, updated_by = excluded.updated_by,
-                    write_id = excluded.write_id
+                    write_id = excluded.write_id, purge_at = NULL
                 WHERE secret.latest_version = excluded.latest_version - 1
               RETURNING latest_version`,
           sql`INSERT INTO secret_version
@@ -361,9 +370,16 @@ export class Secrets extends Context.Service<
         {
           to,
           action,
-        }: { readonly to: number | null; readonly action: 'secret.delete' | 'secret.rollback' },
+          fromBin = false,
+        }: {
+          readonly to: number | null;
+          readonly action: 'secret.delete' | 'secret.rollback';
+          readonly fromBin?: boolean;
+        },
       ) {
         const { project } = yield* access.needing(yield* access.project(actor, projectId), 'write');
+        // A rollback of a deleted secret is how it leaves the bin; the log says so.
+        const [before] = yield* secretRows({ projectId, name }).pipe(Effect.orDie);
         const now = yield* Clock.currentTimeMillis;
         const by = encodeActor(actorOf(actor));
         const writeId = crypto.randomUUID();
@@ -371,8 +387,10 @@ export class Secrets extends Context.Service<
           .batch([
             sql`UPDATE secret
                 SET current_version = ${to}, updated_at = ${now}, updated_by = ${by},
-                    write_id = ${writeId}
+                    write_id = ${writeId}, purge_at = ${to === null ? now + BIN_MS : null}
                 WHERE project_id = ${projectId} AND name = ${name}
+                  AND (${to} IS NOT NULL OR current_version IS NOT NULL)
+                  AND (${fromBin ? 1 : 0} = 0 OR current_version IS NULL)
                   AND (${to} IS NULL OR EXISTS (SELECT 1 FROM secret_version
                                                WHERE project_id = ${projectId} AND name = ${name}
                                                  AND version = ${to}))
@@ -386,6 +404,7 @@ export class Secrets extends Context.Service<
                 projectName: project.name,
                 secretName: name,
                 version: to,
+                detail: to !== null && before?.currentVersion === null ? 'from the bin' : null,
               },
               sql`EXISTS (SELECT 1 FROM secret WHERE project_id = ${projectId} AND name = ${name}
                            AND write_id = ${writeId})`,
@@ -393,11 +412,15 @@ export class Secrets extends Context.Service<
           ])
           .pipe(Effect.orDie);
         if ((moved ?? []).length === 0) {
+          if (to === null) {
+            return yield* new NotFoundError({
+              message: `This project has no secret named ${name}, or it is already in the bin (\`baymutt bin list\`).`,
+            });
+          }
           return yield* new NotFoundError({
-            message:
-              to === null
-                ? `This project has no secret named ${name}.`
-                : `${name} has no version ${to}. See its history with \`baymutt secrets history\`.`,
+            message: fromBin
+              ? `${name} is not in the bin any more, or has no version ${to}. See what is with \`baymutt bin list\`.`
+              : `${name} has no version ${to}. See its history with \`baymutt secrets history\`.`,
           });
         }
         return yield* secret({ projectId, name }).pipe(Effect.orDie);
@@ -504,8 +527,8 @@ export class Secrets extends Context.Service<
           return yield* point(request, { to: null, action: 'secret.delete' });
         }),
 
-        rollback: Effect.fn('Secrets.rollback')(function* ({ version, ...request }) {
-          return yield* point(request, { to: version, action: 'secret.rollback' });
+        rollback: Effect.fn('Secrets.rollback')(function* ({ version, fromBin, ...request }) {
+          return yield* point(request, { to: version, action: 'secret.rollback', fromBin });
         }),
 
         versions: Effect.fn('Secrets.versions')(function* ({ actor, projectId, name }) {

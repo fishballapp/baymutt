@@ -1,7 +1,9 @@
+import * as Effect from 'effect/Effect';
 import * as HttpRouter from 'effect/http/HttpRouter';
 import * as Layer from 'effect/Layer';
 import { HttpApp } from './http/app.ts';
 import { runtime, WorkerLive } from './runtime.ts';
+import { Bin } from './services/bin.ts';
 
 // Built once per isolate, at module load: `toWebHandler` builds the app layer (and, through the
 // runtime's memo map, the services) right away, so no layer may do I/O while it builds.
@@ -24,5 +26,9 @@ export default {
     // A missing file (a chunk an older page still asks for) is a 404, never the shell's HTML.
     if (isFilePath(pathname)) return env.ASSETS.fetch(request);
     return env.ASSETS.fetch(new Request(new URL('/_shell', request.url), request));
+  },
+  // The daily Cron Trigger (wrangler.jsonc): what has been in the bin for 30 days goes for good.
+  scheduled: async () => {
+    await runtime.runPromise(Effect.flatMap(Bin, bin => bin.sweep));
   },
 } satisfies ExportedHandler<Env>;

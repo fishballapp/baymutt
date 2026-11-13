@@ -177,7 +177,7 @@ describe('loading', () => {
     });
   });
 
-  it('stops for an archived project, which only the owner archives', async () => {
+  it('stops for a project in the bin, which only the owner deletes', async () => {
     const { w, owner, projectId, reader, writer, write } = await setup();
 
     expect(await call(w, 'DELETE', `/projects/${projectId}`, reader.headers)).toMatchObject({

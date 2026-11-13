@@ -13,6 +13,7 @@ import * as Schema from 'effect/Schema';
 import * as SqlSchema from 'effect/sql/SqlSchema';
 import { actorOf, encodeActor } from '../actors.ts';
 import type { Audit } from '../audit.ts';
+import { BIN_MS } from '../bin.ts';
 import type { Lookups } from './rows.ts';
 
 const GrantRowSchema = Schema.Struct({
@@ -217,38 +218,79 @@ export const projects = ({
         ])
         .pipe(Effect.orDie);
       if ((inserted ?? []).length === 0) {
+        // A name in the bin stays taken: reusing it would leave two projects to tell apart.
+        const [binned] = yield* sql`SELECT 1 AS binned FROM project
+          WHERE account_id = ${actor.accountId} AND name = ${project.name}
+            AND archived_at IS NOT NULL`.pipe(Effect.orDie);
         return yield* new AlreadyExistsError({
-          message: `A project named ${project.name} exists in this account (an archived one keeps its name).`,
+          message:
+            binned === undefined
+              ? `A project named ${project.name} exists in this account.`
+              : `A project named ${project.name} is in the bin, and keeps its name until it is removed for good. The owner can restore it, or remove it for good, from the Bin in the dashboard.`,
         });
       }
       return (yield* projectFor(actor, project.id).pipe(Effect.orDie)).project;
     }),
 
-    archiveProject: Effect.fn('Access.archiveProject')(function* ({
+    removeProject: Effect.fn('Access.removeProject')(function* ({
       actor,
       id,
     }: {
       readonly actor: ActorIdentity;
       readonly id: string;
     }) {
-      yield* ownerOnly(actor, 'archives a project');
+      yield* ownerOnly(actor, 'deletes a project');
       const { project } = yield* ownersProject(actor, id);
       const now = yield* Clock.currentTimeMillis;
+      const purgeAt = now + BIN_MS;
       yield* sql
         .batch([
-          sql`UPDATE project SET archived_at = ${now} WHERE id = ${id} AND archived_at IS NULL`,
+          sql`UPDATE project SET archived_at = ${now}, purge_at = ${purgeAt}
+              WHERE id = ${id} AND archived_at IS NULL`,
           sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
               WHERE project_id = ${id} AND status = 'pending'`,
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
-            action: 'project.archive',
+            action: 'project.delete',
             projectId: id,
             projectName: project.name,
           }),
         ])
         .pipe(Effect.orDie);
-      return { archivedAt: now };
+      return { deletedAt: now, purgeAt };
+    }),
+
+    restoreProject: Effect.fn('Access.restoreProject')(function* ({
+      actor,
+      id,
+    }: {
+      readonly actor: ActorIdentity;
+      readonly id: string;
+    }) {
+      yield* ownerOnly(actor, 'restores a project, as only the owner deletes one');
+      const [binned] = yield* sql`SELECT name FROM project
+        WHERE id = ${id} AND account_id = ${actor.accountId} AND archived_at IS NOT NULL`.pipe(
+        Effect.orDie,
+      );
+      if (binned === undefined) {
+        return yield* new NotFoundError({ message: 'No project in the bin has this id.' });
+      }
+      yield* underLimit(actor.accountId, 'projects');
+      yield* sql
+        .batch([
+          sql`UPDATE project SET archived_at = NULL, purge_at = NULL
+              WHERE id = ${id} AND archived_at IS NOT NULL`,
+          yield* audit.entry({
+            accountId: actor.accountId,
+            actor: actorOf(actor),
+            action: 'project.restore',
+            projectId: id,
+            projectName: String(binned.name),
+          }),
+        ])
+        .pipe(Effect.orDie);
+      return (yield* projectFor(actor, id).pipe(Effect.orDie)).project;
     }),
 
     ownerWrap: Effect.fn('Access.ownerWrap')(function* ({

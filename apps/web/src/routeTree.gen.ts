@@ -15,6 +15,7 @@ import { Route as RecoverRouteImport } from './routes/recover'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AppAccountRouteImport } from './routes/_app.account'
 import { Route as AppActivityRouteImport } from './routes/_app.activity'
+import { Route as AppBinRouteImport } from './routes/_app.bin'
 import { Route as AppPairRouteImport } from './routes/_app.pair'
 import { Route as AppRequestsRouteImport } from './routes/_app.requests'
 import { Route as AppServiceAccountsRouteImport } from './routes/_app.service-accounts'
@@ -50,6 +51,11 @@ const AppAccountRoute = AppAccountRouteImport.update({
 const AppActivityRoute = AppActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBinRoute = AppBinRouteImport.update({
+  id: '/bin',
+  path: '/bin',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPairRoute = AppPairRouteImport.update({
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/account': typeof AppAccountRoute
   '/activity': typeof AppActivityRoute
+  '/bin': typeof AppBinRoute
   '/pair': typeof AppPairRoute
   '/requests': typeof AppRequestsRoute
   '/service-accounts': typeof AppServiceAccountsRoute
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/account': typeof AppAccountRoute
   '/activity': typeof AppActivityRoute
+  '/bin': typeof AppBinRoute
   '/pair': typeof AppPairRoute
   '/requests': typeof AppRequestsRoute
   '/service-accounts': typeof AppServiceAccountsRoute
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_app/account': typeof AppAccountRoute
   '/_app/activity': typeof AppActivityRoute
+  '/_app/bin': typeof AppBinRoute
   '/_app/pair': typeof AppPairRoute
   '/_app/requests': typeof AppRequestsRoute
   '/_app/service-accounts': typeof AppServiceAccountsRoute
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account'
     | '/activity'
+    | '/bin'
     | '/pair'
     | '/requests'
     | '/service-accounts'
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/account'
     | '/activity'
+    | '/bin'
     | '/pair'
     | '/requests'
     | '/service-accounts'
@@ -169,6 +180,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_app/account'
     | '/_app/activity'
+    | '/_app/bin'
     | '/_app/pair'
     | '/_app/requests'
     | '/_app/service-accounts'
@@ -230,6 +242,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppActivityRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/bin': {
+      id: '/_app/bin'
+      path: '/bin'
+      fullPath: '/bin'
+      preLoaderRoute: typeof AppBinRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/pair': {
       id: '/_app/pair'
       path: '/pair'
@@ -285,6 +304,7 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppAccountRoute: typeof AppAccountRoute
   AppActivityRoute: typeof AppActivityRoute
+  AppBinRoute: typeof AppBinRoute
   AppPairRoute: typeof AppPairRoute
   AppRequestsRoute: typeof AppRequestsRoute
   AppServiceAccountsRoute: typeof AppServiceAccountsRoute
@@ -296,6 +316,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppAccountRoute: AppAccountRoute,
   AppActivityRoute: AppActivityRoute,
+  AppBinRoute: AppBinRoute,
   AppPairRoute: AppPairRoute,
   AppRequestsRoute: AppRequestsRoute,
   AppServiceAccountsRoute: AppServiceAccountsRoute,

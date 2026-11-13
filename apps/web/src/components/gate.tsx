@@ -62,6 +62,7 @@ const NAV = [
   { to: '/service-accounts', label: 'Service accounts' },
   { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
+  { to: '/bin', label: 'Bin' },
   { to: '/account', label: 'Account' },
 ] as const;
 
@@ -126,7 +127,7 @@ const navItem = (isCurrent: boolean) =>
 
 /**
  * The side nav and one column of content. Under 48rem the nav is a bar across the top, with
- * Account beside the wordmark so the other four fit a phone's width.
+ * Account beside the wordmark so the other five fit a phone's width.
  */
 export const Shell = () => {
   const owner = useOwner();
@@ -150,7 +151,7 @@ export const Shell = () => {
           </div>
           <nav
             aria-label="Main"
-            className="grid grid-cols-4 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:py-4"
+            className="grid grid-cols-5 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:py-4"
           >
             {NAV.map(({ to, label }) => (
               <Link
