@@ -17,9 +17,12 @@ jobs:
     name: Gates
     uses: ./.github/workflows/ci.yml
 
-  # D1 migrations, then the Worker with the landing page and the dashboard. The deploy's secrets are
-  # in baymutt itself: BAYMUTT_KEY, a secret of the `production` environment that only main can
-  # deploy to, is a service account that reads the one environment they are in (apps/worker-web/.env.schema).
+  # The landing page and the dashboard are built, then one `varlock run` loads the deploy's secrets,
+  # applies the D1 migrations and deploys the Worker (apps/worker-web/scripts/deploy-worker.ts). The
+  # secrets are in baymutt itself: BAYMUTT_KEY, a secret of the `production` environment that only
+  # main can deploy to, is a service account that reads the one environment they are in
+  # (apps/worker-web/.env.schema). They load once, before the migration, since a migration can
+  # leave the live Worker unable to answer a second load.
   deploy:
     name: Deploy baymutt.fsh.ba
     needs: gates
@@ -41,10 +44,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # First, so the Worker never ships ahead of its schema.
-      - name: Apply D1 migrations
-        run: pnpm -F @baymutt/worker-web run db:migrate:remote
-      - name: Build the landing page and the dashboard, then deploy the Worker
+      - name: Build, apply D1 migrations, deploy the Worker
         run: pnpm -F @baymutt/worker-web run deploy
 
   # No token: npm trusted publishing over the workflow's OIDC identity, configured per package on

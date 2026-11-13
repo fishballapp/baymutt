@@ -406,7 +406,7 @@ layer(NodeServices.layer)(it => {
             .prepare('SELECT * FROM secret_version')
             .all()
             .concat(
-              world.sqlite.prepare('SELECT * FROM project').all(),
+              world.sqlite.prepare('SELECT * FROM environment').all(),
               world.sqlite.prepare('SELECT * FROM audit_event').all(),
             ),
         );
@@ -590,7 +590,7 @@ layer(NodeServices.layer)(it => {
         yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'first');
         // A store that wants to read the next value shows a public key of its own.
         world.sqlite.exec(
-          "UPDATE project SET public_key = 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo'",
+          "UPDATE environment SET public_key = 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo'",
         );
 
         const swapped = yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'second');
@@ -624,8 +624,8 @@ layer(NodeServices.layer)(it => {
           });
           return { publicKey: pair.publicKey, wrap };
         });
-        world.sqlite.prepare('UPDATE project SET public_key = ?').run(forged.publicKey);
-        world.sqlite.prepare('UPDATE project_grant SET read_wrap = ?').run(forged.wrap);
+        world.sqlite.prepare('UPDATE environment SET public_key = ?').run(forged.publicKey);
+        world.sqlite.prepare('UPDATE environment_grant SET read_wrap = ?').run(forged.wrap);
 
         const write = yield* run(
           world,
@@ -684,7 +684,7 @@ layer(NodeServices.layer)(it => {
         ).toBe(0);
         // On every run it meets the store afresh: a swapped key must fail the first time too.
         world.sqlite.exec(
-          "UPDATE project SET public_key = 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo'",
+          "UPDATE environment SET public_key = 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo'",
         );
 
         expect(
@@ -895,7 +895,9 @@ layer(NodeServices.layer)(it => {
         const id: string = created.json.id;
         const grants = () =>
           world.sqlite
-            .prepare('SELECT project_id, read_wrap FROM project_grant WHERE credential_id = ?')
+            .prepare(
+              'SELECT environment_id, read_wrap FROM environment_grant WHERE credential_id = ?',
+            )
             .all(id);
         const before = grants();
 

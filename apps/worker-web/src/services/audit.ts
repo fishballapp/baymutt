@@ -77,16 +77,12 @@ export class Audit extends Context.Service<
         }),
         Result: EventRowSchema,
         execute: ({ accountId, actorId, environmentId, before, limit }) =>
-          // Rows written before environments were called projects hold `project.*`, and so do the
-          // ones the Worker that is live during a deploy writes: the log reads them as `environment.*`.
-          sql`SELECT id, at, actor, CASE WHEN action LIKE 'project.%' THEN 'environment.' || substr(action, 9)
-                     ELSE action END AS action,
-                project_id AS environment_id, project_name AS environment_name,
+          sql`SELECT id, at, actor, action, environment_id, environment_name,
                 secret_name, version, detail
               FROM audit_event
               WHERE account_id = ${accountId}
                 AND (${actorId} IS NULL OR json_extract(actor, '$.id') = ${actorId})
-                AND (${environmentId} IS NULL OR project_id = ${environmentId})
+                AND (${environmentId} IS NULL OR environment_id = ${environmentId})
                 AND (${before} IS NULL OR id < ${before})
               ORDER BY id DESC LIMIT ${limit}`,
       });
@@ -95,7 +91,7 @@ export class Audit extends Context.Service<
         entry: Effect.fn('Audit.entry')(function* (entry: AuditEntry, onlyIf?: Statement.Fragment) {
           const now = yield* Clock.currentTimeMillis;
           return sql`INSERT INTO audit_event
-              (id, account_id, at, actor, action, project_id, project_name, secret_name, version, detail)
+              (id, account_id, at, actor, action, environment_id, environment_name, secret_name, version, detail)
             SELECT ${monotonicUlid(now)}, ${entry.accountId}, ${now}, ${encodeActor(entry.actor)},
               ${entry.action}, ${entry.environmentId ?? null}, ${entry.environmentName ?? null},
               ${entry.secretName ?? null}, ${entry.version ?? null}, ${entry.detail ?? null}

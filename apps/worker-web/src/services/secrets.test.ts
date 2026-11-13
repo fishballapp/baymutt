@@ -114,7 +114,7 @@ describe('writing', () => {
         `UPDATE secret SET latest_version = 2, current_version = 2, write_id = 'other'`,
       );
       w.sqlite.exec(
-        `INSERT INTO secret_version SELECT project_id, name, 2, account_id, key_version, 'b3RoZXI=', created_by, created_at FROM secret_version`,
+        `INSERT INTO secret_version SELECT environment_id, name, 2, account_id, key_version, 'b3RoZXI=', created_by, created_at FROM secret_version`,
       );
     });
 

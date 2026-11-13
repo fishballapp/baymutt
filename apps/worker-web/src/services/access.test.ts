@@ -637,28 +637,6 @@ describe('the audit log', () => {
     ).toEqual(['environment.load', 'secret.write']);
   });
 
-  it('reads what was written under the old name, `project.*`, as `environment.*`', async () => {
-    const { w, owner, environment } = await storeWorld();
-    await environment('app/production');
-    // What a Worker from before the rename wrote, and still writes while a deploy is under way.
-    w.sqlite.exec(
-      `UPDATE audit_event SET action = 'project.create' WHERE action = 'environment.create'`,
-    );
-    w.sqlite.exec(
-      `INSERT INTO audit_event (id, account_id, at, actor, action, project_id, project_name)
-         SELECT 'z', account_id, at, actor, 'project.load', project_id, project_name
-         FROM audit_event WHERE action = 'project.create'`,
-    );
-
-    const { events } = await ok<{ events: { action: string }[] }>(w, 'GET', '/audit', owner);
-
-    expect(events.map(({ action }) => action)).toEqual([
-      'environment.load',
-      'environment.create',
-      'account.create',
-    ]);
-  });
-
   it('pages by the id before', async () => {
     const { w, owner, environment } = await storeWorld();
     await environment('a');
@@ -690,7 +668,7 @@ describe('the beta limits', () => {
     const first = await environment('p/0');
     w.sqlite.exec(
       `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
-       INSERT INTO project (id, account_id, name, public_key, key_version, owner_wrap, owner_proof, created_by, created_at)
+       INSERT INTO environment (id, account_id, name, public_key, key_version, owner_wrap, owner_proof, created_by, created_at)
        SELECT 'filler-' || i, '${accountId}', 'p/' || i, 'k', 1, 'w', 'p', '{}', 0 FROM n`,
     );
     const another = () =>

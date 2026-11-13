@@ -1,6 +1,6 @@
 // The bin: what was deleted, until it is removed for good. A deleted secret is a `secret` row with
-// no current version, a deleted environment a `environment` row with `archived_at`; each is removed for good
-// at its `purge_at`, by the daily sweep, or earlier by the owner. Removing one for good is the only
+// no current version, a deleted environment an `environment` row with `deleted_at`; each is removed for
+// good at its `purge_at`, by the daily sweep, or earlier by the owner. Removing one for good is the only
 // thing in the store that cannot be undone, so nothing a service account can call reaches it.
 //
 // A row deleted by a Worker from before the bin has no `purge_at`: it reads as its deleted time
@@ -76,7 +76,7 @@ export class Bin extends Context.Service<
       const access = yield* Access;
       const audit = yield* Audit;
 
-      const environmentPurgeAt = sql`COALESCE(p.purge_at, p.archived_at + ${BIN_MS})`;
+      const environmentPurgeAt = sql`COALESCE(e.purge_at, e.deleted_at + ${BIN_MS})`;
       const secretPurgeAt = sql`COALESCE(s.purge_at, s.updated_at + ${BIN_MS})`;
 
       const binnedEnvironments = SqlSchema.findAll({
@@ -94,16 +94,16 @@ export class Bin extends Context.Service<
           purgeAt: Schema.Finite,
         }),
         execute: ({ accountId, grantee, id, dueBy }) =>
-          sql`SELECT p.id, p.account_id, p.name, p.archived_at AS deleted_at,
+          sql`SELECT e.id, e.account_id, e.name, e.deleted_at,
                 ${environmentPurgeAt} AS purge_at
-              FROM project p
-              WHERE p.archived_at IS NOT NULL
-                AND (${accountId} IS NULL OR p.account_id = ${accountId})
-                AND (${id} IS NULL OR p.id = ${id})
+              FROM environment e
+              WHERE e.deleted_at IS NOT NULL
+                AND (${accountId} IS NULL OR e.account_id = ${accountId})
+                AND (${id} IS NULL OR e.id = ${id})
                 AND (${dueBy} IS NULL OR ${environmentPurgeAt} <= ${dueBy})
-                AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM project_grant g
-                      WHERE g.project_id = p.id AND g.credential_id = ${grantee}))
-              ORDER BY p.archived_at DESC`,
+                AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM environment_grant g
+                      WHERE g.environment_id = e.id AND g.credential_id = ${grantee}))
+              ORDER BY e.deleted_at DESC`,
       });
 
       const binnedSecrets = SqlSchema.findAll({
@@ -126,18 +126,18 @@ export class Bin extends Context.Service<
         // The list shows deleted secrets of live environments; a deleted environment's go with it. The
         // sweep (`dueBy`) takes every one that is due, its environment deleted or not.
         execute: ({ accountId, grantee, slot, dueBy }) =>
-          sql`SELECT s.project_id AS environment_id, s.account_id, p.name AS environment_name, s.name, s.latest_version,
+          sql`SELECT s.environment_id, s.account_id, e.name AS environment_name, s.name, s.latest_version,
                 s.updated_at AS deleted_at, s.updated_by AS deleted_by,
                 ${secretPurgeAt} AS purge_at
-              FROM secret s JOIN project p ON p.id = s.project_id
+              FROM secret s JOIN environment e ON e.id = s.environment_id
               WHERE s.current_version IS NULL
-                AND (${dueBy} IS NOT NULL OR p.archived_at IS NULL)
+                AND (${dueBy} IS NOT NULL OR e.deleted_at IS NULL)
                 AND (${accountId} IS NULL OR s.account_id = ${accountId})
                 AND (${slot?.environmentId ?? null} IS NULL
-                     OR (s.project_id = ${slot?.environmentId ?? null} AND s.name = ${slot?.name ?? null}))
+                     OR (s.environment_id = ${slot?.environmentId ?? null} AND s.name = ${slot?.name ?? null}))
                 AND (${dueBy} IS NULL OR ${secretPurgeAt} <= ${dueBy})
-                AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM project_grant g
-                      WHERE g.project_id = s.project_id AND g.credential_id = ${grantee}))
+                AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM environment_grant g
+                      WHERE g.environment_id = s.environment_id AND g.credential_id = ${grantee}))
               ORDER BY s.updated_at DESC`,
       });
 
@@ -146,26 +146,25 @@ export class Bin extends Context.Service<
        * holds, so a restore that lands first keeps it whole.
        */
       const environmentGone = (id: string, stillBinned: Statement.Fragment) => [
-        sql`DELETE FROM secret_version WHERE project_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM secret WHERE project_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM project_grant WHERE project_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM paste_request WHERE project_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM access_request WHERE project_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM project WHERE id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM secret_version WHERE environment_id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM secret WHERE environment_id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM environment_grant WHERE environment_id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM paste_request WHERE environment_id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM environment WHERE id = ${id} AND ${stillBinned}`,
       ];
 
       const secretGone = (environmentId: string, name: string, stillBinned: Statement.Fragment) => [
         sql`DELETE FROM secret_version
-            WHERE project_id = ${environmentId} AND name = ${name} AND ${stillBinned}`,
-        sql`DELETE FROM secret WHERE project_id = ${environmentId} AND name = ${name} AND ${stillBinned}`,
+            WHERE environment_id = ${environmentId} AND name = ${name} AND ${stillBinned}`,
+        sql`DELETE FROM secret WHERE environment_id = ${environmentId} AND name = ${name} AND ${stillBinned}`,
       ];
 
       const purgeEnvironmentNow = Effect.fnUntraced(function* (
         environment: { readonly id: string; readonly accountId: string; readonly name: string },
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
       ) {
-        const stillBinned = sql`EXISTS (SELECT 1 FROM project p
-          WHERE p.id = ${environment.id} AND p.archived_at IS NOT NULL
+        const stillBinned = sql`EXISTS (SELECT 1 FROM environment e
+          WHERE e.id = ${environment.id} AND e.deleted_at IS NOT NULL
             AND (${dueBy} IS NULL OR ${environmentPurgeAt} <= ${dueBy}))`;
         yield* sql
           .batch([
@@ -195,7 +194,7 @@ export class Bin extends Context.Service<
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
       ) {
         const stillBinned = sql`EXISTS (SELECT 1 FROM secret s
-          WHERE s.project_id = ${secret.environmentId} AND s.name = ${secret.name}
+          WHERE s.environment_id = ${secret.environmentId} AND s.name = ${secret.name}
             AND s.current_version IS NULL
             AND (${dueBy} IS NULL OR ${secretPurgeAt} <= ${dueBy}))`;
         yield* sql

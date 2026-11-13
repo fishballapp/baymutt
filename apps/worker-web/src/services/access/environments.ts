@@ -53,8 +53,8 @@ export const environments = ({
       sql`SELECT g.credential_id, c.name AS credential_name, c.public_key AS credential_public_key,
             c.parent_id, c.endorsement, g.read_wrap IS NOT NULL AS can_read, g.can_write,
             g.created_at
-          FROM project_grant g JOIN credential c ON c.id = g.credential_id
-          WHERE g.project_id = ${environmentId} AND c.revoked_at IS NULL
+          FROM environment_grant g JOIN credential c ON c.id = g.credential_id
+          WHERE g.environment_id = ${environmentId} AND c.revoked_at IS NULL
             AND (${credentialId} IS NULL OR g.credential_id = ${credentialId})
           ORDER BY c.name`,
   });
@@ -110,12 +110,12 @@ export const environments = ({
     readonly keyVersion: number;
     readonly now: number;
   }) =>
-    sql`INSERT INTO project_grant
-          (project_id, credential_id, account_id, can_write, read_wrap, key_proof, key_version,
+    sql`INSERT INTO environment_grant
+          (environment_id, credential_id, account_id, can_write, read_wrap, key_proof, key_version,
            created_at)
         VALUES (${environmentId}, ${credentialId}, ${accountId}, ${canWrite ? 1 : 0}, ${readWrap},
           ${keyProof}, ${keyVersion}, ${now})
-        ON CONFLICT (project_id, credential_id) DO UPDATE
+        ON CONFLICT (environment_id, credential_id) DO UPDATE
           SET can_write = excluded.can_write, read_wrap = excluded.read_wrap,
               key_proof = excluded.key_proof, key_version = excluded.key_version`;
 
@@ -175,13 +175,13 @@ export const environments = ({
       yield* underLimit(actor.accountId, 'environments');
       const now = yield* Clock.currentTimeMillis;
       // The wrap is this request's own: an id that was taken leaves another's there.
-      const made = sql`EXISTS (SELECT 1 FROM project
+      const made = sql`EXISTS (SELECT 1 FROM environment
         WHERE id = ${environment.id} AND created_at = ${now} AND owner_wrap = ${environment.ownerWrap})`;
       // One batch: the environment, its creator's grant and the log entry, or none. `OR IGNORE`
       // leaves a taken name or id without a row.
       const [inserted] = yield* sql
         .batch([
-          sql`INSERT OR IGNORE INTO project
+          sql`INSERT OR IGNORE INTO environment
                 (id, account_id, name, public_key, key_version, owner_wrap, owner_proof,
                  created_by, created_at)
               VALUES (${environment.id}, ${actor.accountId}, ${environment.name}, ${environment.publicKey}, 1,
@@ -189,8 +189,8 @@ export const environments = ({
               RETURNING id`,
           ...(actor._tag === 'ServiceAccount'
             ? [
-                sql`INSERT INTO project_grant
-                      (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
+                sql`INSERT INTO environment_grant
+                      (environment_id, credential_id, account_id, can_write, read_wrap, key_proof,
                        key_version, created_at)
                     SELECT ${environment.id}, ${actor.credentialId}, ${actor.accountId}, 1,
                       ${environment.creatorWrap}, ${environment.creatorProof}, 1, ${now}
@@ -200,8 +200,8 @@ export const environments = ({
           // Each login the owner wrapped the key to, if it is still a live login of this account.
           ...loginGrants.map(
             grant =>
-              sql`INSERT INTO project_grant
-                    (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
+              sql`INSERT INTO environment_grant
+                    (environment_id, credential_id, account_id, can_write, read_wrap, key_proof,
                      key_version, created_at)
                   SELECT ${environment.id}, id, account_id, 1, ${grant.readWrap}, ${grant.keyProof}, 1,
                     ${now}
@@ -223,9 +223,9 @@ export const environments = ({
         .pipe(Effect.orDie);
       if ((inserted ?? []).length === 0) {
         // A name in the bin stays taken: reusing it would leave two environments to tell apart.
-        const [binned] = yield* sql`SELECT 1 AS binned FROM project
+        const [binned] = yield* sql`SELECT 1 AS binned FROM environment
           WHERE account_id = ${actor.accountId} AND name = ${environment.name}
-            AND archived_at IS NOT NULL`.pipe(Effect.orDie);
+            AND deleted_at IS NOT NULL`.pipe(Effect.orDie);
         return yield* new AlreadyExistsError({
           message:
             binned === undefined
@@ -249,10 +249,10 @@ export const environments = ({
       const purgeAt = now + BIN_MS;
       yield* sql
         .batch([
-          sql`UPDATE project SET archived_at = ${now}, purge_at = ${purgeAt}
-              WHERE id = ${id} AND archived_at IS NULL`,
+          sql`UPDATE environment SET deleted_at = ${now}, purge_at = ${purgeAt}
+              WHERE id = ${id} AND deleted_at IS NULL`,
           sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
-              WHERE project_id = ${id} AND status = 'pending'`,
+              WHERE environment_id = ${id} AND status = 'pending'`,
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
@@ -273,8 +273,8 @@ export const environments = ({
       readonly id: string;
     }) {
       yield* ownerOnly(actor, 'restores an environment, as only the owner deletes one');
-      const [binned] = yield* sql`SELECT name FROM project
-        WHERE id = ${id} AND account_id = ${actor.accountId} AND archived_at IS NOT NULL`.pipe(
+      const [binned] = yield* sql`SELECT name FROM environment
+        WHERE id = ${id} AND account_id = ${actor.accountId} AND deleted_at IS NOT NULL`.pipe(
         Effect.orDie,
       );
       if (binned === undefined) {
@@ -283,8 +283,8 @@ export const environments = ({
       yield* underLimit(actor.accountId, 'environments');
       yield* sql
         .batch([
-          sql`UPDATE project SET archived_at = NULL, purge_at = NULL
-              WHERE id = ${id} AND archived_at IS NOT NULL`,
+          sql`UPDATE environment SET deleted_at = NULL, purge_at = NULL
+              WHERE id = ${id} AND deleted_at IS NOT NULL`,
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
@@ -402,8 +402,8 @@ export const environments = ({
       // A service account made by this one holds a copy of the same access, so it loses it too.
       const [removed] = yield* sql
         .batch([
-          sql`DELETE FROM project_grant
-              WHERE project_id = ${id}
+          sql`DELETE FROM environment_grant
+              WHERE environment_id = ${id}
                 AND credential_id IN (SELECT id FROM credential
                                       WHERE id = ${credentialId} OR parent_id = ${credentialId})
               RETURNING credential_id`,

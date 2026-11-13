@@ -1,8 +1,6 @@
-// Who may do what. Owns `credential`, `project` and `project_grant`: the
-// service accounts of an account, its environments, and the grants between them. The tables and
-// their `project_id` columns keep the name an environment had: the Worker that is live while a
-// deploy migrates and runs still reads them (a SELECT names them `environment_*` where it returns them). Its sub-domains are in
-// ./access; they share one set of lookups.
+// Who may do what. Owns `credential`, `environment` and `environment_grant`: the service accounts
+// of an account, its environments, and the grants between them. Its sub-domains are in ./access;
+// they share one set of lookups.
 import * as D1Client from '@effect/sql-d1/D1Client';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';

@@ -85,16 +85,16 @@ export const lookups = (sql: D1Client.D1Client) => {
     }),
     Result: EnvironmentRowSchema,
     execute: ({ accountId, credentialId, seesAll, environmentId }) =>
-      sql`SELECT p.id, p.account_id, p.name, p.public_key, p.key_version, p.owner_wrap,
-            p.owner_proof, p.created_by, p.created_at, g.can_write, g.read_wrap, g.key_proof,
+      sql`SELECT e.id, e.account_id, e.name, e.public_key, e.key_version, e.owner_wrap,
+            e.owner_proof, e.created_by, e.created_at, g.can_write, g.read_wrap, g.key_proof,
             (SELECT COUNT(*) FROM secret s
-              WHERE s.project_id = p.id AND s.current_version IS NOT NULL) AS secret_count
-          FROM project p
-          LEFT JOIN project_grant g ON g.project_id = p.id AND g.credential_id = ${credentialId}
-          WHERE p.account_id = ${accountId} AND p.archived_at IS NULL
-            AND (${environmentId} IS NULL OR p.id = ${environmentId})
+              WHERE s.environment_id = e.id AND s.current_version IS NOT NULL) AS secret_count
+          FROM environment e
+          LEFT JOIN environment_grant g ON g.environment_id = e.id AND g.credential_id = ${credentialId}
+          WHERE e.account_id = ${accountId} AND e.deleted_at IS NULL
+            AND (${environmentId} IS NULL OR e.id = ${environmentId})
             AND (${seesAll ? 1 : 0} = 1 OR g.credential_id IS NOT NULL)
-          ORDER BY p.name`,
+          ORDER BY e.name`,
   });
 
   const toAccess = (actor: ActorIdentity, row: EnvironmentRow): EnvironmentAccess => {
@@ -202,8 +202,8 @@ export const lookups = (sql: D1Client.D1Client) => {
   ) {
     const [row] = yield* (
       what === 'environments'
-        ? sql`SELECT COUNT(*) AS held FROM project
-            WHERE account_id = ${accountId} AND archived_at IS NULL`
+        ? sql`SELECT COUNT(*) AS held FROM environment
+            WHERE account_id = ${accountId} AND deleted_at IS NULL`
         : sql`SELECT COUNT(*) AS held FROM credential
             WHERE account_id = ${accountId} AND revoked_at IS NULL`
     ).pipe(Effect.orDie);

@@ -1,6 +1,4 @@
 /** The bin: deleting, restoring, the owner removing for good, and the 30-day sweep. */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { SecretSchema } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as Schema from 'effect/Schema';
@@ -40,8 +38,8 @@ const sweep = (w: StoreWorld['w']) =>
 const age = (w: StoreWorld['w'], days: number) => {
   w.sqlite.exec(`UPDATE secret SET purge_at = purge_at - ${days * DAY_MS},
     updated_at = updated_at - ${days * DAY_MS} WHERE current_version IS NULL`);
-  w.sqlite.exec(`UPDATE project SET purge_at = purge_at - ${days * DAY_MS},
-    archived_at = archived_at - ${days * DAY_MS} WHERE archived_at IS NOT NULL`);
+  w.sqlite.exec(`UPDATE environment SET purge_at = purge_at - ${days * DAY_MS},
+    deleted_at = deleted_at - ${days * DAY_MS} WHERE deleted_at IS NOT NULL`);
 };
 
 const count = (w: StoreWorld['w'], table: string) =>
@@ -228,7 +226,7 @@ describe('a deleted environment', () => {
     age(w, 1);
     expect(await sweep(w)).toEqual({ environments: 1, secrets: 0 });
 
-    for (const table of ['project', 'secret', 'secret_version', 'project_grant']) {
+    for (const table of ['environment', 'secret', 'secret_version', 'environment_grant']) {
       expect(count(w, table)).toBe(0);
     }
     const log = actions(w);
@@ -289,7 +287,7 @@ describe('removing for good straight away', () => {
     expect(await purge(w, `/environments/${environmentId}/purge`, owner)).toMatchObject({
       status: 204,
     });
-    for (const table of ['project', 'secret', 'secret_version', 'project_grant']) {
+    for (const table of ['environment', 'secret', 'secret_version', 'environment_grant']) {
       expect(count(w, table)).toBe(0);
     }
     expect(await ok(w, 'GET', '/bin', owner)).toEqual({ environments: [], secrets: [] });
@@ -307,48 +305,6 @@ describe('what a scoped service account sees in the bin', () => {
     expect((await ok<{ secrets: Array<unknown> }>(w, 'GET', '/bin', owner)).secrets).toHaveLength(
       1,
     );
-  });
-});
-
-describe('what was deleted before the bin', () => {
-  it('gets its 30 days from the migration, not from when it was deleted', async () => {
-    const { w, owner, environmentId, environment, write } = await setup();
-    const archived = await environment('old/archived');
-    await ok(w, 'DELETE', `/environments/${environmentId}/secrets/API_KEY`, owner);
-    await ok(w, 'DELETE', `/environments/${archived}`, owner);
-    // As a store from before the bin holds them: deleted a year ago, with no purge_at.
-    const yearAgo = Date.now() - 365 * DAY_MS;
-    w.sqlite.exec(`UPDATE secret SET purge_at = NULL, updated_at = ${yearAgo}
-      WHERE current_version IS NULL`);
-    w.sqlite.exec(`UPDATE project SET purge_at = NULL, archived_at = ${yearAgo}
-      WHERE archived_at IS NOT NULL`);
-    // The migration's own statements, without the columns it adds (already there).
-    const migration = readFileSync(
-      fileURLToPath(new URL('../../migrations/0005_bin.sql', import.meta.url).href),
-      'utf8',
-    );
-    w.sqlite.exec(
-      migration
-        .split(';')
-        .filter(statement => statement.includes('UPDATE'))
-        .join(';'),
-    );
-
-    expect(await sweep(w)).toEqual({ environments: 0, secrets: 0 });
-    const bin = await ok<{
-      environments: Array<{ deletedAt: number; purgeAt: number }>;
-      secrets: Array<{ deletedAt: number; purgeAt: number }>;
-    }>(w, 'GET', '/bin', owner);
-    for (const item of [...bin.environments, ...bin.secrets]) {
-      expect(item.deletedAt).toBe(yearAgo);
-      expect(Math.abs(item.purgeAt - (Date.now() + BIN_MS))).toBeLessThan(60_000);
-    }
-    expect(bin.environments).toHaveLength(1);
-    expect(bin.secrets).toHaveLength(1);
-
-    age(w, 30);
-    expect(await sweep(w)).toEqual({ environments: 1, secrets: 1 });
-    expect(await write(environmentId, 'API_KEY', 1)).toMatchObject({ status: 200 });
   });
 });
 

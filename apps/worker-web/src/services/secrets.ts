@@ -187,10 +187,10 @@ export class Secrets extends Context.Service<
                 CASE WHEN s.current_version IS NULL
                   THEN COALESCE(s.purge_at, s.updated_at + ${BIN_MS}) END AS purge_at,
                 (SELECT length(v.ciphertext) * 3 / 4 FROM secret_version v
-                  WHERE v.project_id = s.project_id AND v.name = s.name
+                  WHERE v.environment_id = s.environment_id AND v.name = s.name
                     AND v.version = s.current_version) AS size
               FROM secret s
-              WHERE s.project_id = ${environmentId} AND (${name} IS NULL OR s.name = ${name})
+              WHERE s.environment_id = ${environmentId} AND (${name} IS NULL OR s.name = ${name})
               ORDER BY s.name`,
       });
 
@@ -201,8 +201,8 @@ export class Secrets extends Context.Service<
           sql`SELECT v.version, v.key_version, length(v.ciphertext) * 3 / 4 AS size, v.created_at,
                 v.created_by, v.version IS s.current_version AS is_current
               FROM secret_version v
-              JOIN secret s ON s.project_id = v.project_id AND s.name = v.name
-              WHERE v.project_id = ${environmentId} AND v.name = ${name}
+              JOIN secret s ON s.environment_id = v.environment_id AND s.name = v.name
+              WHERE v.environment_id = ${environmentId} AND v.name = ${name}
               ORDER BY v.version DESC`,
       });
 
@@ -218,8 +218,8 @@ export class Secrets extends Context.Service<
           sql`SELECT v.name, v.version, v.key_version, v.ciphertext
               FROM secret s
               JOIN secret_version v
-                ON v.project_id = s.project_id AND v.name = s.name AND v.version = s.current_version
-              WHERE s.project_id = ${environmentId} ORDER BY v.name`,
+                ON v.environment_id = s.environment_id AND v.name = s.name AND v.version = s.current_version
+              WHERE s.environment_id = ${environmentId} ORDER BY v.name`,
       });
 
       const sealedVersion = SqlSchema.findAll({
@@ -235,7 +235,7 @@ export class Secrets extends Context.Service<
         }),
         execute: ({ environmentId, name, version }) =>
           sql`SELECT version, key_version, ciphertext FROM secret_version
-              WHERE project_id = ${environmentId} AND name = ${name} AND version = ${version}`,
+              WHERE environment_id = ${environmentId} AND name = ${name} AND version = ${version}`,
       });
 
       const pasteRows = SqlSchema.findAll({
@@ -246,13 +246,13 @@ export class Secrets extends Context.Service<
         }),
         Result: PasteRowSchema,
         execute: ({ accountId, createdBy, id }) =>
-          sql`SELECT r.id, r.account_id, r.project_id AS environment_id, p.name AS environment_name,
-                p.public_key AS environment_public_key, p.key_version, r.name, r.reason, r.hint,
+          sql`SELECT r.id, r.account_id, r.environment_id, e.name AS environment_name,
+                e.public_key AS environment_public_key, e.key_version, r.name, r.reason, r.hint,
                 r.token_hash, r.status, r.created_by, r.created_at, r.link_expires_at,
                 (SELECT s.latest_version FROM secret s
-                  WHERE s.project_id = r.project_id AND s.name = r.name) AS latest_version
-              FROM paste_request r JOIN project p ON p.id = r.project_id
-              WHERE p.archived_at IS NULL
+                  WHERE s.environment_id = r.environment_id AND s.name = r.name) AS latest_version
+              FROM paste_request r JOIN environment e ON e.id = r.environment_id
+              WHERE e.deleted_at IS NULL
                 AND (${accountId} IS NULL OR r.account_id = ${accountId})
                 AND (${id} IS NOT NULL OR r.status = 'pending')
                 AND (${id} IS NULL OR r.id = ${id})
@@ -295,20 +295,20 @@ export class Secrets extends Context.Service<
         const by = encodeActor(actor);
         const writeId = crypto.randomUUID();
         const took = sql`EXISTS (SELECT 1 FROM secret
-          WHERE project_id = ${environmentId} AND name = ${name} AND write_id = ${writeId})`;
+          WHERE environment_id = ${environmentId} AND name = ${name} AND write_id = ${writeId})`;
         const statements = [
           sql`INSERT INTO secret
-                (project_id, name, account_id, current_version, latest_version, updated_at,
+                (environment_id, name, account_id, current_version, latest_version, updated_at,
                  updated_by, write_id)
               SELECT ${environmentId}, ${name}, ${accountId}, ${version}, ${version}, ${now}, ${by},
                 ${writeId}
-              WHERE EXISTS (SELECT 1 FROM project
+              WHERE EXISTS (SELECT 1 FROM environment
                             WHERE id = ${environmentId} AND key_version = ${keyVersion}
-                              AND archived_at IS NULL)
+                              AND deleted_at IS NULL)
                 AND (${version} = 1 OR EXISTS (SELECT 1 FROM secret
-                                              WHERE project_id = ${environmentId} AND name = ${name}))
+                                              WHERE environment_id = ${environmentId} AND name = ${name}))
                 AND ${alsoIf ?? sql`1 = 1`}
-              ON CONFLICT (project_id, name) DO UPDATE
+              ON CONFLICT (environment_id, name) DO UPDATE
                 SET current_version = excluded.current_version,
                     latest_version = excluded.latest_version,
                     updated_at = excluded.updated_at, updated_by = excluded.updated_by,
@@ -316,7 +316,7 @@ export class Secrets extends Context.Service<
                 WHERE secret.latest_version = excluded.latest_version - 1
               RETURNING latest_version`,
           sql`INSERT INTO secret_version
-                (project_id, name, version, account_id, key_version, ciphertext, created_by,
+                (environment_id, name, version, account_id, key_version, ciphertext, created_by,
                  created_at)
               SELECT ${environmentId}, ${name}, ${version}, ${accountId}, ${keyVersion}, ${ciphertext},
                 ${by}, ${now}
@@ -342,7 +342,7 @@ export class Secrets extends Context.Service<
         }
         if (version !== 1) return;
         const [row] = yield* sql`SELECT COUNT(*) AS held FROM secret
-          WHERE project_id = ${environmentId}`.pipe(Effect.orDie);
+          WHERE environment_id = ${environmentId}`.pipe(Effect.orDie);
         if (Number(row?.held ?? 0) >= LIMITS.secretsPerEnvironment) {
           return yield* new LimitReachedError({
             limit: LIMITS.secretsPerEnvironment,
@@ -353,9 +353,9 @@ export class Secrets extends Context.Service<
 
       const conflict = Effect.fnUntraced(function* ({ environmentId, name }: Slot) {
         const [found] = yield* sql`SELECT
-            (SELECT latest_version FROM secret WHERE project_id = ${environmentId} AND name = ${name})
+            (SELECT latest_version FROM secret WHERE environment_id = ${environmentId} AND name = ${name})
               AS latest_version,
-            (SELECT key_version FROM project WHERE id = ${environmentId}) AS key_version`.pipe(
+            (SELECT key_version FROM environment WHERE id = ${environmentId}) AS key_version`.pipe(
           Effect.orDie,
         );
         const latestVersion = Number(found?.latestVersion ?? 0);
@@ -394,11 +394,11 @@ export class Secrets extends Context.Service<
             sql`UPDATE secret
                 SET current_version = ${to}, updated_at = ${now}, updated_by = ${by},
                     write_id = ${writeId}, purge_at = ${to === null ? now + BIN_MS : null}
-                WHERE project_id = ${environmentId} AND name = ${name}
+                WHERE environment_id = ${environmentId} AND name = ${name}
                   AND (${to} IS NOT NULL OR current_version IS NOT NULL)
                   AND (${fromBin ? 1 : 0} = 0 OR current_version IS NULL)
                   AND (${to} IS NULL OR EXISTS (SELECT 1 FROM secret_version
-                                               WHERE project_id = ${environmentId} AND name = ${name}
+                                               WHERE environment_id = ${environmentId} AND name = ${name}
                                                  AND version = ${to}))
                 RETURNING name`,
             yield* audit.entry(
@@ -412,7 +412,7 @@ export class Secrets extends Context.Service<
                 version: to,
                 detail: to !== null && before?.currentVersion === null ? 'from the bin' : null,
               },
-              sql`EXISTS (SELECT 1 FROM secret WHERE project_id = ${environmentId} AND name = ${name}
+              sql`EXISTS (SELECT 1 FROM secret WHERE environment_id = ${environmentId} AND name = ${name}
                            AND write_id = ${writeId})`,
             ),
           ])
@@ -599,7 +599,7 @@ export class Secrets extends Context.Service<
           const [inserted] = yield* sql
             .batch([
               sql`INSERT OR IGNORE INTO paste_request
-                    (id, account_id, project_id, name, reason, hint, token_hash, status,
+                    (id, account_id, environment_id, name, reason, hint, token_hash, status,
                      created_by, created_at, link_expires_at)
                   VALUES (${paste.id}, ${actor.accountId}, ${paste.environmentId}, ${paste.name},
                     ${paste.reason}, ${paste.hint}, ${paste.tokenHash}, 'pending',
@@ -607,7 +607,7 @@ export class Secrets extends Context.Service<
                   RETURNING id`,
               // Asking again replaces the earlier request for the same name: the owner sees one.
               sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
-                  WHERE project_id = ${paste.environmentId} AND name = ${paste.name}
+                  WHERE environment_id = ${paste.environmentId} AND name = ${paste.name}
                     AND status = 'pending' AND id != ${paste.id} AND ${took}`,
               yield* audit.entry(
                 {
@@ -696,7 +696,7 @@ export class Secrets extends Context.Service<
                   WHERE id = ${id} AND status = 'pending' AND ${took}`,
               // The value is in: any other request for the same name has nothing left to ask.
               sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
-                  WHERE project_id = ${slot.environmentId} AND name = ${slot.name}
+                  WHERE environment_id = ${slot.environmentId} AND name = ${slot.name}
                     AND status = 'pending' AND ${took}`,
             ])
             .pipe(Effect.orDie);

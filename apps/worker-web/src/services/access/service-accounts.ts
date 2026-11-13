@@ -102,12 +102,12 @@ export const serviceAccounts = ({
       canRead: Schema.Finite,
     }),
     execute: accountId =>
-      sql`SELECT g.credential_id, g.project_id AS environment_id, p.name AS environment_name,
+      sql`SELECT g.credential_id, g.environment_id, e.name AS environment_name,
             g.can_write,
             g.read_wrap IS NOT NULL AS can_read
-          FROM project_grant g JOIN project p ON p.id = g.project_id
-          WHERE g.account_id = ${accountId} AND p.archived_at IS NULL
-          ORDER BY p.name`,
+          FROM environment_grant g JOIN environment e ON e.id = g.environment_id
+          WHERE g.account_id = ${accountId} AND e.deleted_at IS NULL
+          ORDER BY e.name`,
   });
 
   const accountOf = SqlSchema.findOne({
@@ -313,14 +313,14 @@ export const serviceAccounts = ({
           insert(actor.accountId, serviceAccount, now)({ endorsement, welcome }),
           ...grants.map(
             grant =>
-              sql`INSERT INTO project_grant
-                    (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
+              sql`INSERT INTO environment_grant
+                    (environment_id, credential_id, account_id, can_write, read_wrap, key_proof,
                      key_version, created_at)
                   SELECT id, ${serviceAccount.id}, account_id, 1, ${grant.readWrap},
                     ${grant.keyProof}, ${grant.keyVersion}, ${now}
-                  FROM project
+                  FROM environment
                   WHERE id = ${grant.environmentId} AND account_id = ${actor.accountId}
-                    AND archived_at IS NULL AND ${made}`,
+                    AND deleted_at IS NULL AND ${made}`,
           ),
           yield* audit.entry(
             {
@@ -392,8 +392,8 @@ export const serviceAccounts = ({
             const keyVersion =
               held.find(({ environment }) => environment.id === grant.environmentId)?.environment
                 .keyVersion ?? 0;
-            return sql`INSERT INTO project_grant
-                (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
+            return sql`INSERT INTO environment_grant
+                (environment_id, credential_id, account_id, can_write, read_wrap, key_proof,
                  key_version, created_at)
               SELECT ${grant.environmentId}, ${serviceAccount.id}, ${actor.accountId},
                 ${grant.canWrite ? 1 : 0}, ${grant.readWrap}, ${grant.keyProof}, ${keyVersion},
@@ -460,8 +460,8 @@ export const serviceAccounts = ({
       const [held] = yield* sql<{
         readonly readWrap: string | null;
         readonly keyProof: string;
-      }>`SELECT read_wrap, key_proof FROM project_grant
-          WHERE project_id = ${environmentId} AND credential_id = ${id}
+      }>`SELECT read_wrap, key_proof FROM environment_grant
+          WHERE environment_id = ${environmentId} AND credential_id = ${id}
             AND key_version = ${environment.keyVersion}`.pipe(Effect.orDie);
       // A read it gains is a wrap only a holder of the environment key can make, and an environment it
       // gains comes with a proof of its key: the store keeps either, and makes neither.
@@ -518,8 +518,8 @@ export const serviceAccounts = ({
       if (listed === undefined) {
         return yield* new NotFoundError({ message: 'No environment has this id.' });
       }
-      const held = sql`EXISTS (SELECT 1 FROM project_grant
-        WHERE project_id = ${environmentId} AND credential_id = ${id})`;
+      const held = sql`EXISTS (SELECT 1 FROM environment_grant
+        WHERE environment_id = ${environmentId} AND credential_id = ${id})`;
       yield* sql
         .batch([
           // Logged only when there was access to remove, so before the delete.
@@ -534,7 +534,7 @@ export const serviceAccounts = ({
             },
             held,
           ),
-          sql`DELETE FROM project_grant WHERE project_id = ${environmentId} AND credential_id = ${id}`,
+          sql`DELETE FROM environment_grant WHERE environment_id = ${environmentId} AND credential_id = ${id}`,
         ])
         .pipe(Effect.orDie);
       return yield* one(actor, id);
@@ -598,7 +598,7 @@ export const serviceAccounts = ({
         .batch([
           sql`UPDATE credential SET revoked_at = ${now}, bearer_hash = ''
               WHERE id IN (${revokedIds}) AND revoked_at IS NULL RETURNING id`,
-          sql`DELETE FROM project_grant WHERE credential_id IN (${revokedIds})`,
+          sql`DELETE FROM environment_grant WHERE credential_id IN (${revokedIds})`,
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
