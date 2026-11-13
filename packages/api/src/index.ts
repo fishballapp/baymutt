@@ -7,6 +7,5 @@ export * from './environments.ts';
 export * from './errors.ts';
 export * from './fields.ts';
 export * from './guards.ts';
-export * from './legacy.ts';
 export * from './requests.ts';
 export * from './secrets.ts';

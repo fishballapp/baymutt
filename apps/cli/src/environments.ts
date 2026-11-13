@@ -1,44 +1,33 @@
 // Environments from this service account's side: finding one by name, knowing which public key is really its
 // own, and opening it. The store's answers are checked against a proof the store cannot make.
 import type { Environment } from '@baymutt/api';
-import { createEnvironmentKey, unwrapEnvironmentKey, vouchedEnvironmentKey } from '@baymutt/keys';
+import {
+  createEnvironmentKey,
+  openValue,
+  unwrapEnvironmentKey,
+  vouchedEnvironmentKey,
+} from '@baymutt/keys';
 import * as Effect from 'effect/Effect';
 import { crypto_, usage } from './errors.ts';
 import { ServiceAccount } from './service-account.ts';
 
-/** What a command asks the store for: the environments this service account holds, and one's bundle. */
-export const currentSource = {
-  list: Effect.gen(function* () {
-    const { api } = yield* ServiceAccount;
-    return (yield* api.environments.list()).environments;
-  }),
-  bundle: Effect.fnUntraced(function* (environment: Environment) {
-    const { api } = yield* ServiceAccount;
-    return yield* api.secrets.bundle({ params: { environmentId: environment.id } });
-  }),
-};
-export type Source = typeof currentSource;
-
-/** An environment by its name (or id), among those `source` lists: the ones this service account holds a grant on. */
-export const resolveEnvironmentFrom = (source: Source) =>
-  Effect.fn('environments.resolve')(function* (name: string) {
-    const { key } = yield* ServiceAccount;
-    const environments = yield* source.list;
-    const found = environments.find(
-      environment => environment.name === name || environment.id === name,
+/** An environment by its name (or id), among those this service account holds a grant on. */
+export const resolveEnvironment = Effect.fn('environments.resolve')(function* (name: string) {
+  const { api, key } = yield* ServiceAccount;
+  const { environments } = yield* api.environments.list();
+  const found = environments.find(
+    environment => environment.name === name || environment.id === name,
+  );
+  if (found === undefined) {
+    return yield* usage(
+      isLogin(key)
+        ? `This account has no environment named ${name}. See what it has with \`baymutt environments\`, or create it with \`baymutt environments create ${name}\`.`
+        : `No environment named ${name} is granted to this service account. See what is with \`baymutt environments\`. The login that made it, or the owner, can hand it one.`,
+      'notFound',
     );
-    if (found === undefined) {
-      return yield* usage(
-        isLogin(key)
-          ? `This account has no environment named ${name}. See what it has with \`baymutt environments\`, or create it with \`baymutt environments create ${name}\`.`
-          : `No environment named ${name} is granted to this service account. See what is with \`baymutt environments\`. The login that made it, or the owner, can hand it one.`,
-        'notFound',
-      );
-    }
-    return found;
-  });
-
-export const resolveEnvironment = resolveEnvironmentFrom(currentSource);
+  }
+  return found;
+});
 
 /** A login: made by `baymutt login`, so its key names no maker. It is meant to hold every environment. */
 const isLogin = (key: { readonly issuerPublicKey: string | null }) => key.issuerPublicKey === null;
@@ -104,27 +93,48 @@ export const trustedKey = Effect.fn('environments.trustedKey')(function* (
 });
 
 /** The environment's ciphertexts and its private key, unwrapped with this service account's. Needs a read grant. */
-export const openEnvironmentFrom = (source: Source) =>
-  Effect.fn('environments.open')(function* (environment: Environment) {
-    const serviceAccount = yield* ServiceAccount;
-    const { publicKey, binding } = yield* trustedKey(environment);
-    const bundle = yield* source.bundle(environment);
-    const { key, encoded } = yield* crypto_(() =>
-      unwrapEnvironmentKey({
-        wrap: bundle.wrap,
-        readerKey: serviceAccount.key.privateKey,
-        // Its own id, never the one the store names: the wrap opens only if it was sealed for this
-        // service account. And it must open to the pair of the key that was vouched for: anyone can seal a
-        // key pair of their own making to this service account.
-        readerId: serviceAccount.key.credentialId,
-        binding,
-        environmentPublicKey: publicKey,
-      }),
-    );
-    return { bundle, binding, publicKey, environmentKey: key, encodedEnvironmentKey: encoded };
+export const openEnvironment = Effect.fn('environments.open')(function* (environment: Environment) {
+  const serviceAccount = yield* ServiceAccount;
+  const { publicKey, binding } = yield* trustedKey(environment);
+  const bundle = yield* serviceAccount.api.secrets.bundle({
+    params: { environmentId: environment.id },
   });
+  const { key, encoded } = yield* crypto_(() =>
+    unwrapEnvironmentKey({
+      wrap: bundle.wrap,
+      readerKey: serviceAccount.key.privateKey,
+      // Its own id, never the one the store names: the wrap opens only if it was sealed for this
+      // service account. And it must open to the pair of the key that was vouched for: anyone can seal a
+      // key pair of their own making to this service account.
+      readerId: serviceAccount.key.credentialId,
+      binding,
+      environmentPublicKey: publicKey,
+    }),
+  );
+  return { bundle, binding, publicKey, environmentKey: key, encodedEnvironmentKey: encoded };
+});
 
-export const openEnvironment = openEnvironmentFrom(currentSource);
+/** Every current value of an environment, opened here. The caller must not print them. */
+export const loadValues = Effect.fn('environments.load')(function* (name: string) {
+  const environment = yield* resolveEnvironment(name);
+  const { bundle, binding, environmentKey } = yield* openEnvironment(environment);
+  const values = yield* Effect.forEach(
+    bundle.secrets,
+    ({ name, version, keyVersion, ciphertext }) =>
+      Effect.map(
+        crypto_(() =>
+          openValue({
+            environmentKey,
+            slot: { ...binding, keyVersion, name, version },
+            ciphertext,
+          }),
+        ),
+        value => [name, value] as const,
+      ),
+    { concurrency: 8 },
+  );
+  return { environment, values: Object.fromEntries(values) };
+});
 
 /** A new environment, its key made here, wrapped to the owner's account and to this service account, and vouched for to both. */
 export const createEnvironment = Effect.fn('environments.create')(function* (name: string) {

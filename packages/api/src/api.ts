@@ -9,7 +9,6 @@ import { BinGroup } from './bin.ts';
 import { CredentialsGroup } from './credentials.ts';
 import { EnvironmentsGroup } from './environments.ts';
 import { RequestValidation } from './guards.ts';
-import { LegacyLoadGroup } from './legacy.ts';
 import { PasteGroup, PasteRequestsGroup, RetiredGroup } from './requests.ts';
 import { SecretsGroup } from './secrets.ts';
 
@@ -23,7 +22,6 @@ export class Api extends HttpApi.make('baymutt')
   .add(BinGroup)
   .add(AuditGroup)
   .add(RetiredGroup)
-  .add(LegacyLoadGroup)
   .middleware(RequestValidation)
   .prefix('/api/v1')
   .annotateMerge(

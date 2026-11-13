@@ -6,9 +6,9 @@ import * as Effect from 'effect/Effect';
 import * as FetchHttpClient from 'effect/http/FetchHttpClient';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
+import { loadValues } from './environments.ts';
 import { describeFailure } from './errors.ts';
 import { KeyStore } from './key-store.ts';
-import { loadValues } from './legacy-load.ts';
 import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 

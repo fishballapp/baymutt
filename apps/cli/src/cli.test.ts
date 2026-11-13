@@ -37,9 +37,9 @@ import * as Stream from 'effect/Stream';
 import * as TestClock from 'effect/testing/TestClock';
 import * as TestConsole from 'effect/testing/TestConsole';
 import { CliLayer, cli } from './app.ts';
+import { loadValues } from './environments.ts';
 import { Reported } from './errors.ts';
 import { KeyStore, Platform } from './key-store.ts';
-import { loadValues } from './legacy-load.ts';
 import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 
@@ -763,8 +763,8 @@ layer(NodeServices.layer)(it => {
     );
 
     // The deploy loads baymutt's own secrets with the plugin it has just built, from the Worker that
-    // is still live and knows only these routes. Gone with `legacy-load.ts`.
-    it.effect('load through the three routes a 0.5.0 store answers, and no others', () =>
+    // is still live: the load may ask only for routes that Worker already has.
+    it.effect('load through the three routes the last release answers, and no others', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
@@ -789,7 +789,7 @@ layer(NodeServices.layer)(it => {
         };
 
         const asked: string[] = [];
-        const store050: TestWorld = {
+        const lastRelease: TestWorld = {
           ...world,
           fetch: async (input, init) => {
             const request = new Request(input, init);
@@ -797,7 +797,7 @@ layer(NodeServices.layer)(it => {
               .replace('/api/v1', '')
               .replace(/[0-9a-f]{8}-[0-9a-f-]{27}/, ':id')}`;
             asked.push(route);
-            return ['GET /me', 'GET /projects', 'GET /projects/:id/bundle'].includes(route)
+            return ['GET /me', 'GET /environments', 'GET /environments/:id/bundle'].includes(route)
               ? world.fetch(request)
               : new Response(JSON.stringify({ code: 'NotFoundError', message: 'No such route.' }), {
                   status: 404,
@@ -806,12 +806,14 @@ layer(NodeServices.layer)(it => {
           },
         };
 
-        expect(yield* load(store050, laptop, 'app/production')).toEqual({
+        expect(yield* load(lastRelease, laptop, 'app/production')).toEqual({
           API_KEY: 'for the deploy',
         });
-        expect(yield* load(store050, ci, 'app/production')).toEqual({ API_KEY: 'for the deploy' });
+        expect(yield* load(lastRelease, ci, 'app/production')).toEqual({
+          API_KEY: 'for the deploy',
+        });
         expect(new Set(asked)).toEqual(
-          new Set(['GET /me', 'GET /projects', 'GET /projects/:id/bundle']),
+          new Set(['GET /me', 'GET /environments', 'GET /environments/:id/bundle']),
         );
       }),
     );
