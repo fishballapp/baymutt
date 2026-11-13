@@ -25,8 +25,8 @@ import {
 import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const CredentialGrantSchema = Schema.Struct({
-  projectId: Schema.String,
-  projectName: Schema.String,
+  environmentId: Schema.String,
+  environmentName: Schema.String,
   canRead: Schema.Boolean,
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
@@ -45,7 +45,7 @@ export const ServiceAccountSchema = Schema.Struct({
   publicKey: PublicKeySchema,
   /**
    * The service account that made this one. Null for a login: one `baymutt login` made and the
-   * owner approved, which holds read and write on every project of the account.
+   * owner approved, which holds read and write on every environment of the account.
    */
   parentId: Schema.NullOr(Schema.String),
   description: Schema.NullOr(DescriptionSchema),
@@ -85,25 +85,25 @@ export const ServiceAccountVouchersSchema = Schema.Struct({
   keyToOwner: VoucherSchema,
   /** Its public key, vouched for to its maker: what the maker trusts later. */
   keyToMaker: VoucherSchema,
-  /** The account's public key, vouched for to it: so it takes the owner's proof of a project's key. */
+  /** The account's public key, vouched for to it: so it takes the owner's proof of an environment's key. */
   accountKey: VoucherSchema,
 }).annotate({ identifier: 'ServiceAccountVouchers' });
 export type ServiceAccountVouchers = typeof ServiceAccountVouchersSchema.Type;
 
-/** The access a service account holds on one project, as it is to become. */
+/** The access a service account holds on one environment, as it is to become. */
 export const SetAccessPayloadSchema = Schema.Struct({
   canRead: Schema.Boolean,
   canWrite: Schema.Boolean,
-  /** The project key wrapped to it: needed when it gains read, and kept from before otherwise. */
+  /** The environment key wrapped to it: needed when it gains read, and kept from before otherwise. */
   readWrap: Schema.optionalKey(WrapSchema),
-  /** The granter's proof of the project's public key: needed when it gains the project, kept otherwise. */
+  /** The granter's proof of the environment's public key: needed when it gains the environment, kept otherwise. */
   keyProof: Schema.optionalKey(KeyProofSchema),
 }).annotate({ identifier: 'SetAccessPayload' });
 export type SetAccessPayload = typeof SetAccessPayloadSchema.Type;
 
-/** Read and write on one project for a login, as the owner's vault wraps and vouches for it. */
+/** Read and write on one environment for a login, as the owner's vault wraps and vouches for it. */
 export const LoginGrantSchema = Schema.Struct({
-  projectId: Schema.String,
+  environmentId: Schema.String,
   readWrap: WrapSchema,
   keyProof: KeyProofSchema,
   keyVersion: Schema.Int,
@@ -158,7 +158,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
         ...aboutNewCredential,
         endorsement: SealedSchema,
         welcome: SealedSchema,
-        /** Read and write on every project, written in the same batch as the approval. */
+        /** Read and write on every environment, written in the same batch as the approval. */
         grants: Schema.optionalKey(Schema.Array(LoginGrantSchema)),
       }),
       success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
@@ -167,7 +167,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Approve a service account',
         description:
-          'The owner’s approval of the link `baymutt login` prints. A login holds read and write on every project: the owner’s browser wraps each project key to it in the same request, and to every project made later.',
+          'The owner’s approval of the link `baymutt login` prints. A login holds read and write on every environment: the owner’s browser wraps each environment key to it in the same request, and to every environment made later.',
       }),
     ),
     HttpApiEndpoint.post('create', '/credentials', {
@@ -176,11 +176,11 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
         ...aboutNewCredential,
         grants: Schema.Array(
           Schema.Struct({
-            projectId: Schema.String,
+            environmentId: Schema.String,
             canWrite: Schema.Boolean,
-            /** The project key wrapped to the new service account by its maker, or null for no read. */
+            /** The environment key wrapped to the new service account by its maker, or null for no read. */
             readWrap: Schema.NullOr(WrapSchema),
-            /** Its maker's proof of the project's public key. */
+            /** Its maker's proof of the environment's public key. */
             keyProof: KeyProofSchema,
           }),
         ),
@@ -202,25 +202,25 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
           'A service account hands part of its own access to a new one. It cannot grant what it does not hold, and a service account made this way can make no others.',
       }),
     ),
-    HttpApiEndpoint.put('setAccess', '/credentials/:id/grants/:projectId', {
-      params: { id: Schema.String, projectId: Schema.String },
+    HttpApiEndpoint.put('setAccess', '/credentials/:id/grants/:environmentId', {
+      params: { id: Schema.String, environmentId: Schema.String },
       payload: SetAccessPayloadSchema,
       success: ServiceAccountSchema,
       error: [coded(NotFoundError), coded(OwnerRequiredError), coded(NoAccessError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Change a service account’s access to a project',
+        summary: 'Change a service account’s access to an environment',
         description:
-          'For a service account a login made, by that login or by the owner. It keeps its key. A read is the project key wrapped to it, which only a holder of the key can make; it cannot change its own access.',
+          'For a service account a login made, by that login or by the owner. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make; it cannot change its own access.',
       }),
     ),
-    HttpApiEndpoint.delete('removeAccess', '/credentials/:id/grants/:projectId', {
-      params: { id: Schema.String, projectId: Schema.String },
+    HttpApiEndpoint.delete('removeAccess', '/credentials/:id/grants/:environmentId', {
+      params: { id: Schema.String, environmentId: Schema.String },
       success: ServiceAccountSchema,
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Take a project away from a service account',
+        summary: 'Take an environment away from a service account',
         description:
           'For a service account a login made, by that login or by the owner. What it already read stays read.',
       }),

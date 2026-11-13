@@ -4,9 +4,9 @@
 //   # @initBaymutt(key=$BAYMUTT_KEY)
 //   # @setValuesBulk(baymuttLoad("app/production"))
 //
-// `key` is the service account key where the environment holds one (CI). Left unset or empty, the key is
+// `key` is the service account key where the process holds one (CI). Left unset or empty, the key is
 // read from where `baymutt login` put it: the login keychain on a Mac, an owner-only file elsewhere.
-import { loadProject } from '@baymutt/cli/load';
+import { loadEnvironment } from '@baymutt/cli/load';
 import { plugin } from 'varlock/plugin-lib';
 
 const { SchemaError, ResolutionError } = plugin.ERRORS;
@@ -42,26 +42,26 @@ plugin.registerRootDecorator({
 
 plugin.registerResolverFunction({
   name: 'baymuttLoad',
-  label: 'Load every value of a baymutt project',
+  label: 'Load every value of a baymutt environment',
   argsSchema: { type: 'array', arrayMinLength: 1, arrayMaxLength: 1 },
   process() {
-    return { projectResolver: this.arrArgs?.[0] };
+    return { environmentResolver: this.arrArgs?.[0] };
   },
-  async resolve({ projectResolver }) {
+  async resolve({ environmentResolver }) {
     if (connection === undefined) {
       throw new SchemaError('baymuttLoad() needs @initBaymutt first', {
         tip: 'Add `# @initBaymutt(key=$BAYMUTT_KEY)` above it.',
       });
     }
-    const project = await projectResolver?.resolve();
-    if (typeof project !== 'string') {
-      throw new SchemaError('Expected the project name to resolve to a string');
+    const environment = await environmentResolver?.resolve();
+    if (typeof environment !== 'string') {
+      throw new SchemaError('Expected the environment name to resolve to a string');
     }
     try {
-      return JSON.stringify(await loadProject(project, connection));
+      return JSON.stringify(await loadEnvironment(environment, connection));
     } catch (error) {
       throw new ResolutionError(
-        `baymutt could not load ${project}: ${error instanceof Error ? error.message : String(error)}`,
+        `baymutt could not load ${environment}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   },

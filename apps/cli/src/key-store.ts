@@ -71,12 +71,12 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
           write: () =>
             Effect.fail(
               usage(
-                'BAYMUTT_KEY is set, so this service account’s key comes from the environment. Unset it to log in.',
+                'BAYMUTT_KEY is set, so this service account’s key comes from it. Unset it to log in.',
               ),
             ),
           remove: Effect.fail(
             usage(
-              'BAYMUTT_KEY is set, so this key belongs to the environment, not to this computer. Revoke it with `baymutt service-accounts revoke <id>` or in the dashboard, and remove it from where it is kept.',
+              'BAYMUTT_KEY is set, so this key belongs to whatever set it, not to this computer. Revoke it with `baymutt service-accounts revoke <id>` or in the dashboard, and remove it from where it is kept.',
             ),
           ),
         });

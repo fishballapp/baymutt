@@ -6,11 +6,11 @@ import * as Command from 'effect/cli/Command';
 import * as Flag from 'effect/cli/Flag';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
+import { resolveEnvironment } from '../environments.ts';
 import { report, usage } from '../errors.ts';
 import { print } from '../output.ts';
-import { resolveProject } from '../projects.ts';
 import { ServiceAccount } from '../service-account.ts';
-import { projectArgument } from './projects.ts';
+import { environmentArgument } from './environments.ts';
 
 const listCommand = Command.make(
   'list',
@@ -21,7 +21,7 @@ const listCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Deleted projects and secrets, newest first, with when each is removed for good (`purgeAt`)',
+    'Deleted environments and secrets, newest first, with when each is removed for good (`purgeAt`)',
   ),
   Command.withAlias('ls'),
 );
@@ -29,7 +29,7 @@ const listCommand = Command.make(
 const restoreCommand = Command.make(
   'restore',
   {
-    project: projectArgument,
+    environment: environmentArgument,
     name: Argument.String('name').pipe(
       Argument.withDescription('The deleted secret’s name'),
       Argument.withSchema(SecretNameSchema),
@@ -40,20 +40,20 @@ const restoreCommand = Command.make(
       Flag.optional,
     ),
   },
-  Effect.fn('bin.restore')(function* ({ project, name, to }) {
+  Effect.fn('bin.restore')(function* ({ environment, name, to }) {
     const { api } = yield* ServiceAccount;
-    const { id } = yield* resolveProject(project);
+    const { id } = yield* resolveEnvironment(environment);
     const { secrets } = yield* api.bin.list();
-    const binned = secrets.find(secret => secret.projectId === id && secret.name === name);
+    const binned = secrets.find(secret => secret.environmentId === id && secret.name === name);
     if (binned === undefined) {
       return yield* usage(
-        `${name} is not in the bin of ${project}. See what is with \`baymutt bin list\`.`,
+        `${name} is not in the bin of ${environment}. See what is with \`baymutt bin list\`.`,
         'notFound',
       );
     }
     yield* print(
       yield* api.secrets.rollback({
-        params: { projectId: id, name },
+        params: { environmentId: id, name },
         payload: {
           version: Option.getOrElse(to, () => binned.latestVersion),
           // Refused if something set it again since the list above.
@@ -64,7 +64,7 @@ const restoreCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Bring a deleted secret back, with every version. A deleted project is restored by the owner, in the dashboard',
+    'Bring a deleted secret back, with every version. A deleted environment is restored by the owner, in the dashboard',
   ),
 );
 

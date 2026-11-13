@@ -1,4 +1,4 @@
-// The bin: deleted projects and secrets, kept for 30 days and then removed for good. Restoring is
+// The bin: deleted environments and secrets, kept for 30 days and then removed for good. Restoring is
 // for whoever could delete it; removing one for good early is the owner's alone.
 
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -7,7 +7,7 @@ import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
 import {
   ActorSchema,
-  ProjectNameSchema,
+  EnvironmentNameSchema,
   SecretNameSchema,
   TimestampSchema,
   VersionSchema,
@@ -17,18 +17,18 @@ import { Authenticated, Credentials } from './guards.ts';
 /** How long something deleted stays in the bin before the store removes it for good. */
 export const BIN_DAYS = 30;
 
-export const BinProjectSchema = Schema.Struct({
+export const BinEnvironmentSchema = Schema.Struct({
   id: Schema.String,
-  name: ProjectNameSchema,
+  name: EnvironmentNameSchema,
   deletedAt: TimestampSchema,
   /** When it is removed for good, with its secrets, versions and grants. */
   purgeAt: TimestampSchema,
-}).annotate({ identifier: 'BinProject' });
-export type BinProject = typeof BinProjectSchema.Type;
+}).annotate({ identifier: 'BinEnvironment' });
+export type BinEnvironment = typeof BinEnvironmentSchema.Type;
 
 export const BinSecretSchema = Schema.Struct({
-  projectId: Schema.String,
-  projectName: ProjectNameSchema,
+  environmentId: Schema.String,
+  environmentName: EnvironmentNameSchema,
   name: SecretNameSchema,
   /** The newest version: what restoring it makes current, unless another is named. */
   latestVersion: VersionSchema,
@@ -43,15 +43,15 @@ export class BinGroup extends HttpApiGroup.make('bin')
   .add(
     HttpApiEndpoint.get('list', '/bin', {
       success: Schema.Struct({
-        projects: Schema.Array(BinProjectSchema),
-        /** Deleted secrets of projects that are not in the bin themselves. */
+        environments: Schema.Array(BinEnvironmentSchema),
+        /** Deleted secrets of environments that are not in the bin themselves. */
         secrets: Schema.Array(BinSecretSchema),
       }),
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'What is in the bin',
         description:
-          'Newest first. The owner and a login see the whole account; any other service account sees what is in the projects it holds a grant on. A secret is restored with a rollback; a project, by the owner.',
+          'Newest first. The owner and a login see the whole account; any other service account sees what is in the environments it holds a grant on. A secret is restored with a rollback; an environment, by the owner.',
       }),
     ),
   )

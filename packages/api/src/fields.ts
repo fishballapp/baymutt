@@ -37,7 +37,7 @@ export const DescriptionSchema = Schema.String.check(
     'What it is for, 1 to 140 characters with no space at either end. Stored readable, like the name: never a secret.',
 });
 
-export const ProjectNameSchema = Schema.String.check(
+export const EnvironmentNameSchema = Schema.String.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/u),
   Schema.isMaxLength(120),
 ).annotate({
@@ -46,7 +46,10 @@ export const ProjectNameSchema = Schema.String.check(
 
 export const SecretNameSchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u),
-).annotate({ description: 'An environment variable name, such as `STRIPE_SECRET_KEY`.' });
+).annotate({
+  description:
+    'Letters, digits and underscores, not starting with a digit, such as `STRIPE_SECRET_KEY`.',
+});
 
 /** A value may be 64 KiB; a box adds 60 bytes, and base64 a third. */
 export const MAX_VALUE_BYTES = 65_536;
@@ -58,12 +61,12 @@ const base64 = (maxBytes: number) =>
   );
 
 export const CiphertextSchema = base64(MAX_VALUE_BYTES + 60).annotate({
-  description: 'A value sealed to the project’s public key, base64. The store cannot open it.',
+  description: 'A value sealed to the environment’s public key, base64. The store cannot open it.',
 });
 
-/** A project private key (PKCS #8, base64url) in a box. */
+/** An environment private key (PKCS #8, base64url) in a box. */
 export const WrapSchema = base64(256).annotate({
-  description: 'The project’s private key sealed to one reader’s public key, base64.',
+  description: 'The environment’s private key sealed to one reader’s public key, base64.',
 });
 
 /** Something the owner’s vault sealed: a wrapped data key, the account key, an endorsement, a pairing welcome. */
@@ -72,10 +75,10 @@ export const SealedSchema = base64(512).annotate({
     'Sealed by the owner’s vault or for one service account, base64. The store cannot open it.',
 });
 
-/** A project's public key, vouched for to one reader by a party that reader trusts. */
+/** An environment's public key, vouched for to one reader by a party that reader trusts. */
 export const KeyProofSchema = base64(128).annotate({
   description:
-    'The project’s public key as the owner, or the service account that made the reader, vouches for it to that reader, base64. The store cannot make one.',
+    'The environment’s public key as the owner, or the service account that made the reader, vouches for it to that reader, base64. The store cannot make one.',
 });
 
 /** A public key one party vouches for to another: a service account's, or the account's. */

@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// An account, its service accounts and a project, set up through the API as a client would.
+// An account, its service accounts and an environment, set up through the API as a client would.
 import { tokenHash } from '@baymutt/keys/wire';
 import { json } from '@internal/effect-worker/testing';
 import { expect } from 'vitest';
@@ -68,17 +68,17 @@ export const storeWorld = async (userId = 'user-1') => {
   );
 
   /**
-   * A login the owner approved. `projects` are the ones the owner's browser wrapped to it in the
+   * A login the owner approved. `environments` are the ones the owner's browser wrapped to it in the
    * approval; with none given it holds nothing yet, as one approved before logins held every
-   * project.
+   * environment.
    */
   const pair = async (
     name = `service-account-${++serviceAccountCount}`,
     {
-      projects = [],
+      environments = [],
       ...about
     }: {
-      readonly projects?: ReadonlyArray<string>;
+      readonly environments?: ReadonlyArray<string>;
       readonly description?: string;
       readonly expiresAt?: number;
     } = {},
@@ -98,11 +98,11 @@ export const storeWorld = async (userId = 'user-1') => {
         bearerHash: await tokenHash(secret),
         endorsement: sealedLike('endorsement'),
         welcome: sealedLike('welcome'),
-        ...(projects.length === 0
+        ...(environments.length === 0
           ? {}
           : {
-              grants: projects.map(projectId => ({
-                projectId,
+              grants: environments.map(environmentId => ({
+                environmentId,
                 readWrap: sealedLike('login-wrap'),
                 keyProof: sealedLike('key-proof'),
                 keyVersion: 1,
@@ -114,13 +114,13 @@ export const storeWorld = async (userId = 'user-1') => {
     return { id, name, headers: { authorization: `Bearer baymutt_${id}_${secret}` } };
   };
 
-  /** A project; the owner wraps it to each of `logins` in the same request, as the dashboard does. */
-  const project = async (name: string, headers = owner, logins: ReadonlyArray<string> = []) => {
+  /** An environment; the owner wraps it to each of `logins` in the same request, as the dashboard does. */
+  const environment = async (name: string, headers = owner, logins: ReadonlyArray<string> = []) => {
     const id = crypto.randomUUID();
     await ok(
       w,
       'POST',
-      '/projects',
+      '/environments',
       headers,
       {
         id,
@@ -146,25 +146,25 @@ export const storeWorld = async (userId = 'user-1') => {
   };
 
   const grant = (
-    projectId: string,
+    environmentId: string,
     serviceAccountId: string,
     { read = false, write = false }: { readonly read?: boolean; readonly write?: boolean },
   ) =>
-    ok(w, 'PUT', `/projects/${projectId}/grants/${serviceAccountId}`, owner, {
+    ok(w, 'PUT', `/environments/${environmentId}/grants/${serviceAccountId}`, owner, {
       canWrite: write,
       readWrap: read ? sealedLike('read-wrap') : null,
       keyProof: sealedLike('key-proof'),
       keyVersion: 1,
     });
 
-  const write = (projectId: string, name: string, version: number, headers = owner) =>
-    call(w, 'PUT', `/projects/${projectId}/secrets/${name}`, headers, {
+  const write = (environmentId: string, name: string, version: number, headers = owner) =>
+    call(w, 'PUT', `/environments/${environmentId}/secrets/${name}`, headers, {
       version,
       keyVersion: 1,
       ciphertext: sealedLike(`${name}-v${version}`, 96),
     });
 
-  return { w, user, owner, locked, accountId, pair, project, grant, write };
+  return { w, user, owner, locked, accountId, pair, environment, grant, write };
 };
 
 export type StoreWorld = Awaited<ReturnType<typeof storeWorld>>;

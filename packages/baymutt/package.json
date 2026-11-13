@@ -1,6 +1,6 @@
 {
   "name": "baymutt",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "type": "module",
   "description": "The baymutt CLI under its short name: the same bin as @baymutt/cli, so `npx baymutt` works.",

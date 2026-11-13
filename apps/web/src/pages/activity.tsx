@@ -6,7 +6,7 @@ import { auditAtom } from '../lib/data.ts';
 import { clockTime, dayLabel, dayOf, exactTime } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-const project = ({ projectName }: AuditEvent) => <Code>{projectName}</Code>;
+const environment = ({ environmentName }: AuditEvent) => <Code>{environmentName}</Code>;
 const secret = ({ secretName, version }: AuditEvent) => (
   <>
     <Code>{secretName}</Code>
@@ -45,81 +45,81 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
       </>
     );
   },
-  'project.create': event => <>created {project(event)}</>,
-  'project.archive': event => <>deleted {project(event)}</>,
-  'project.delete': event => <>deleted {project(event)}</>,
-  'project.restore': event => <>restored {project(event)} from the bin</>,
-  'project.purge': event => (
+  'environment.create': event => <>created {environment(event)}</>,
+  'environment.archive': event => <>deleted {environment(event)}</>,
+  'environment.delete': event => <>deleted {environment(event)}</>,
+  'environment.restore': event => <>restored {environment(event)} from the bin</>,
+  'environment.purge': event => (
     <>
-      removed {project(event)} for good{event.detail !== null && `, ${event.detail}`}
+      removed {environment(event)} for good{event.detail !== null && `, ${event.detail}`}
     </>
   ),
-  'project.load': event => <>loaded {project(event)}</>,
+  'environment.load': event => <>loaded {environment(event)}</>,
   'secret.write': event => (
     <>
-      wrote {secret(event)} in {project(event)}
+      wrote {secret(event)} in {environment(event)}
     </>
   ),
   'secret.delete': event => (
     <>
-      deleted {secret(event)} in {project(event)}
+      deleted {secret(event)} in {environment(event)}
     </>
   ),
   'secret.rollback': event =>
     event.detail === 'from the bin' ? (
       <>
-        restored {secret(event)} in {project(event)} from the bin
+        restored {secret(event)} in {environment(event)} from the bin
       </>
     ) : (
       <>
-        rolled {secret(event)} back in {project(event)}
+        rolled {secret(event)} back in {environment(event)}
       </>
     ),
   'secret.purge': event => (
     <>
-      removed {secret(event)} in {project(event)} for good
+      removed {secret(event)} in {environment(event)} for good
       {event.detail !== null && `, ${event.detail}`}
     </>
   ),
   'secret.reveal': event => (
     <>
-      revealed or copied {secret(event)} in {project(event)}
+      revealed or copied {secret(event)} in {environment(event)}
     </>
   ),
   'grant.set': event => (
     <>
-      set {grantDetail(event)} on {project(event)}
+      set {grantDetail(event)} on {environment(event)}
     </>
   ),
   'grant.remove': event => (
     <>
-      removed {event.detail}’s access to {project(event)}
+      removed {event.detail}’s access to {environment(event)}
     </>
   ),
-  'access.request': event => <>asked for access to {project(event)}</>,
+  'access.request': event => <>asked for access to {environment(event)}</>,
   'access.approve': event => (
     <>
-      approved {grantDetail(event)} on {project(event)}
+      approved {grantDetail(event)} on {environment(event)}
     </>
   ),
   'access.deny': event => (
     <>
-      denied {event.detail} access to {project(event)}
+      denied {event.detail} access to {environment(event)}
     </>
   ),
   'paste.request': event => (
     <>
-      asked for {secret(event)} in {project(event)}
+      asked for {secret(event)} in {environment(event)}
     </>
   ),
   'paste.fulfil': event => (
     <>
-      pasted {secret(event)} into {project(event)}
+      pasted {secret(event)} into {environment(event)}
     </>
   ),
   'paste.cancel': event => (
     <>
-      dismissed the request for {secret(event)} in {project(event)}
+      dismissed the request for {secret(event)} in {environment(event)}
     </>
   ),
 };

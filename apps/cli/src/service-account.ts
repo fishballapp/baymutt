@@ -98,21 +98,21 @@ export class ServiceAccount extends Context.Service<
     readonly key: ServiceAccountKey;
     readonly api: HttpApiClient.ForApi<typeof Api>;
     /**
-     * The public keys whose word this service account takes for which key is a project's: its own (for a
-     * project it created), the account's it belongs to, and the service account's that made it.
+     * The public keys whose word this service account takes for which key is an environment's: its own (for an
+     * environment it created), the account's it belongs to, and the service account's that made it.
      */
     readonly vouchers: ReadonlyArray<string>;
     /**
      * The account's public key as the login that made this service account vouched for it, or
      * null: a login, or a service account made before its maker wrote one. With it, this service
-     * account also takes the owner's proof, for a project the owner handed it from the dashboard.
+     * account also takes the owner's proof, for an environment the owner handed it from the dashboard.
      */
     readonly vouchedAccount: Effect.Effect<string | null>;
     /**
      * The account this service account belongs to. A service account made by `baymutt login` keeps it; one whose key comes from
-     * the environment (a CI job) has no state and takes the store's word, which is enough to open
-     * what was sealed to it and not enough to wrap a new project's key to. Which key is a
-     * project's never rests on it: that is `vouchers`'.
+     * `BAYMUTT_KEY` (a CI job) has no state and takes the store's word, which is enough to open
+     * what was sealed to it and not enough to wrap a new environment's key to. Which key is an
+     * environment's never rests on it: that is `vouchers`'.
      */
     readonly account: Effect.Effect<Account, ReturnType<typeof usage>>;
   }

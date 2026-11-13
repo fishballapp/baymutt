@@ -132,7 +132,7 @@ const followLink = async (page: Page, from: '/signup' | '/recover', email: strin
   await page.getByRole('heading', { name: 'Check your inbox' }).waitFor();
   const answer = await fetch(`${WEB}/api/dev/magic-link?email=${encodeURIComponent(email)}`);
   const { token } = (await answer.json()) as { token: string };
-  const landOn = from === '/signup' ? '/projects' : '/recover';
+  const landOn = from === '/signup' ? '/environments' : '/recover';
   await page.goto(`${WEB}/api/auth/magic-link/verify?token=${token}&callbackURL=${landOn}`);
 };
 
@@ -168,15 +168,15 @@ const main = async (browser: Browser) => {
   );
   await shoot(page, '03-recovery-key');
   await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByText('No projects yet').waitFor();
-  await shoot(page, '04-projects-empty');
+  await page.getByText('No environments yet').waitFor();
+  await shoot(page, '04-environments-empty');
 
-  // --- a project and a secret, from the dashboard -------------------------------------------
-  await page.getByLabel('New project').fill('app/production');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  // --- an environment and a secret, from the dashboard -------------------------------------------
+  await page.getByLabel('New environment').fill('app/production');
+  await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByRole('heading', { name: 'app/production' }).waitFor();
-  await shoot(page, '05-project-empty');
+  await shoot(page, '05-environment-empty');
   await page.getByRole('button', { name: 'Add a secret' }).click();
   await page.getByLabel('Name').fill('SIGNING_KEY');
   await page.getByLabel('Value').fill('-----BEGIN KEY-----\nmade-up-line-two\n-----END KEY-----');
@@ -192,7 +192,7 @@ const main = async (browser: Browser) => {
   await page.getByLabel('Value').fill(LONG_VALUE);
   await page.getByRole('button', { name: 'Seal and save' }).click();
   await page.getByText('SERVICE_ACCOUNT_JSON').waitFor();
-  await shoot(page, '06a-project-masked');
+  await shoot(page, '06a-environment-masked');
 
   // --- reveal, hide and copy: opened in this browser, logged by the store -------------------
   const signingRow = page.getByRole('listitem').filter({ hasText: 'SIGNING_KEY' });
@@ -210,8 +210,8 @@ const main = async (browser: Browser) => {
     'a long value wraps inside its row',
     await longRow.evaluate(row => row.scrollWidth <= row.clientWidth),
   );
-  await shoot(page, '06b-project-revealed');
-  await shootPhone(page, '06c-project-revealed-phone');
+  await shoot(page, '06b-environment-revealed');
+  await shootPhone(page, '06c-environment-revealed-phone');
   await signingRow.getByRole('button', { name: 'Hide' }).click();
   await longRow.getByRole('button', { name: 'Hide' }).click();
   check('Hide masks it again', !(await page.content()).includes('made-up-line-two'));
@@ -236,7 +236,7 @@ const main = async (browser: Browser) => {
   await page.goBack();
   await page.getByRole('button', { name: 'Add a secret' }).waitFor();
 
-  // --- log in: approving gives every project -------------------------------------------------
+  // --- log in: approving gives every environment -------------------------------------------------
   const laptop = serviceAccount('laptop');
   const pending = laptop.cli([
     'login',
@@ -268,8 +268,8 @@ const main = async (browser: Browser) => {
       (await page.getByLabel('Expires').inputValue()) === 'kept',
   );
   check(
-    'the approval page says a login reads and writes every project',
-    (await page.getByText(/read and write every project/).count()) === 1,
+    'the approval page says a login reads and writes every environment',
+    (await page.getByText(/read and write every environment/).count()) === 1,
   );
   await shoot(page, '07-approve');
   await shootPhone(page, '07b-approve-phone');
@@ -280,12 +280,12 @@ const main = async (browser: Browser) => {
     laptop.cli(['login', '--wait', '0']).json?.status === 'loggedIn',
   );
   check(
-    'a login approved after a project was made reads and writes it',
+    'a login approved after an environment was made reads and writes it',
     laptop
-      .cli(['projects', 'list'])
-      .json?.projects.some(
-        (project: { name: string; canRead: boolean; canWrite: boolean }) =>
-          project.name === 'app/production' && project.canRead && project.canWrite,
+      .cli(['environments', 'list'])
+      .json?.environments.some(
+        (environment: { name: string; canRead: boolean; canWrite: boolean }) =>
+          environment.name === 'app/production' && environment.canRead && environment.canWrite,
       ) === true,
   );
 
@@ -297,7 +297,7 @@ const main = async (browser: Browser) => {
   const generated = laptop.cli(['generate', 'app/production', 'SESSION_SECRET']);
   check('the service account generates a value without showing it', generated.json?.length === 43);
 
-  // The varlock plugin loads the project and gives the values to a child process only.
+  // The varlock plugin loads the environment and gives the values to a child process only.
   const schemaDir = mkdtempSync(join(tmpdir(), 'baymutt-drive-schema-'));
   copyFileSync(pluginFile, join(schemaDir, 'plugin.cjs'));
   writeFileSync(
@@ -312,7 +312,7 @@ const main = async (browser: Browser) => {
     encoding: 'utf8',
   });
   check(
-    `varlock loads the project through the plugin${loaded.status === 0 ? '' : `: ${loaded.stderr}`}`,
+    `varlock loads the environment through the plugin${loaded.status === 0 ? '' : `: ${loaded.stderr}`}`,
     loaded.status === 0,
   );
   check(
@@ -344,11 +344,11 @@ const main = async (browser: Browser) => {
   check('a paste link works once', true);
   await stranger.close();
   check(
-    'the pasted value is the project’s',
+    'the pasted value is the environment’s',
     laptop.cli(['secrets', 'app/production']).json?.secrets.length === 5,
   );
 
-  // --- a second login; a project one login makes reaches the other through the dashboard ------
+  // --- a second login; an environment one login makes reaches the other through the dashboard ------
   const server = serviceAccount('server');
   const serverPending = server.cli(['login', '--name', 'Build server', '--wait', '0']);
   await page.goto(serverPending.json.url);
@@ -356,14 +356,14 @@ const main = async (browser: Browser) => {
   await page.getByRole('button', { name: 'The codes match: approve it' }).click();
   await page.getByRole('heading', { name: /is approved/ }).waitFor();
   server.cli(['login', '--wait', '0']);
-  laptop.cli(['projects', 'create', 'app/staging']);
+  laptop.cli(['environments', 'create', 'app/staging']);
   laptop.cli(['set', 'app/staging', 'API_KEY'], 'staging-value');
   const waiting = server.cli(['secrets', 'app/staging']);
   check(
-    'another login waits for the dashboard on a project a login made, and is told so',
+    'another login waits for the dashboard on an environment a login made, and is told so',
     waiting.status === 4 && waiting.stderr.includes('open the baymutt dashboard'),
   );
-  await page.goto(`${WEB}/projects`);
+  await page.goto(`${WEB}/environments`);
   await page.getByRole('link', { name: /app\/staging/ }).waitFor();
   let toppedUp = false;
   for (let attempt = 0; attempt < 20 && !toppedUp; attempt++) {
@@ -372,12 +372,12 @@ const main = async (browser: Browser) => {
   }
   check('opening the dashboard grants it to every login', toppedUp);
 
-  await page.getByLabel('New project').fill('app/preview');
-  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByLabel('New environment').fill('app/preview');
+  await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/preview/ }).waitFor();
   laptop.cli(['set', 'app/preview', 'API_KEY'], 'preview-value');
   check(
-    'a project made in the dashboard reaches every login at once',
+    'an environment made in the dashboard reaches every login at once',
     laptop.cli(['secrets', 'app/preview']).status === 0 &&
       server.cli(['secrets', 'app/preview']).status === 0,
   );
@@ -414,13 +414,13 @@ const main = async (browser: Browser) => {
   });
   check('the CI service account reaches nothing it was not handed', ciAsked.status === 5);
 
-  /** Whether the CI service account, with the key it was made with, loads `API_KEY` of a project through varlock. */
-  const ciLoads = (project: string, value: string) => {
+  /** Whether the CI service account, with the key it was made with, loads `API_KEY` of an environment through varlock. */
+  const ciLoads = (environment: string, value: string) => {
     const dir = mkdtempSync(join(tmpdir(), 'baymutt-drive-ci-'));
     copyFileSync(pluginFile, join(dir, 'plugin.cjs'));
     writeFileSync(
       join(dir, '.env.schema'),
-      `# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("${project}"))\n# ---\nAPI_KEY=\n`,
+      `# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("${environment}"))\n# ---\nAPI_KEY=\n`,
     );
     return (
       spawnSync(
@@ -439,7 +439,7 @@ const main = async (browser: Browser) => {
   const ciId: string = created.json.id;
   const handedOn = laptop.cli(['service-accounts', 'access', ciId, '--read', 'app/staging']);
   check(
-    'its login hands it another project from the CLI, and it loads it with the key it already had',
+    'its login hands it another environment from the CLI, and it loads it with the key it already had',
     handedOn.status === 0 && ciLoads('app/staging', 'staging-value'),
   );
   check(
@@ -450,7 +450,7 @@ const main = async (browser: Browser) => {
     }).status !== 0 && !ciLoads('app/preview', 'preview-value'),
   );
 
-  // A secret an agent deleted: it is in the bin, not in the project's list.
+  // A secret an agent deleted: it is in the bin, not in the environment's list.
   laptop.cli(['set', 'app/production', 'OLD_TOKEN'], 'old-value');
   const binned = laptop.cli(['delete', 'app/production', 'OLD_TOKEN']);
   check(
@@ -460,18 +460,33 @@ const main = async (browser: Browser) => {
   );
 
   // --- the dashboard after all that -----------------------------------------------------------
-  await page.goto(`${WEB}/projects`);
+  await page.goto(`${WEB}/environments`);
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByText('STRIPE_SECRET_KEY').waitFor();
-  await shoot(page, '10-project');
-  check('the project lists no deleted secret', (await page.getByText('OLD_TOKEN').count()) === 0);
+  await shoot(page, '10-environment');
+  check(
+    'the environment lists no deleted secret',
+    (await page.getByText('OLD_TOKEN').count()) === 0,
+  );
   await page.getByRole('button', { name: 'History' }).first().click();
   await page.getByText(/^v1$/).waitFor();
-  await shoot(page, '10b-project-history');
-  await shootPhone(page, '10c-project-phone');
-  await page.goto(`${WEB}/projects`);
+  await shoot(page, '10b-environment-history');
+  await shootPhone(page, '10c-environment-phone');
+  await page.goto(`${WEB}/environments`);
   await page.getByRole('link', { name: /app\/production/ }).waitFor();
-  await shootPhone(page, '10d-projects-phone');
+  await page.setViewportSize(PHONE);
+  const navWraps = await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link')
+    .evaluateAll(links =>
+      links.some(
+        link => link.scrollWidth > link.clientWidth || link.getBoundingClientRect().height > 40,
+      ),
+    );
+  check('the phone navigation keeps every label on one line', !navWraps);
+  await page.setViewportSize(DESKTOP);
+  await shoot(page, '10d-environments');
+  await shootPhone(page, '10d-environments-phone');
   await page.goto(`${WEB}/service-accounts`);
   await page.getByText('CI deploy').waitFor();
   check(
@@ -484,7 +499,7 @@ const main = async (browser: Browser) => {
   await shoot(page, '11-service-accounts');
   await shootPhone(page, '11b-service-accounts-phone');
 
-  // The owner hands the CI service account a project from the dashboard, under its old key.
+  // The owner hands the CI service account an environment from the dashboard, under its old key.
   await page.getByRole('button', { name: 'Access' }).click();
   const accessDialog = page.getByRole('alertdialog');
   await accessDialog.waitFor();
@@ -503,7 +518,7 @@ const main = async (browser: Browser) => {
   await accessDialog.waitFor({ state: 'hidden' });
   await page.getByText('app/preview', { exact: true }).waitFor();
   check(
-    'the owner hands it a project from the dashboard, and it loads it with the key it already had',
+    'the owner hands it an environment from the dashboard, and it loads it with the key it already had',
     ciLoads('app/preview', 'preview-value'),
   );
   await shoot(page, '11g-service-accounts-after-access');
@@ -521,12 +536,12 @@ const main = async (browser: Browser) => {
   );
   await shoot(page, '11d-service-accounts-after-expiry');
   // --- the bin ---------------------------------------------------------------------------------
-  laptop.cli(['projects', 'create', 'app/old']);
-  await page.goto(`${WEB}/projects`);
+  laptop.cli(['environments', 'create', 'app/old']);
+  await page.goto(`${WEB}/environments`);
   await page.getByRole('link', { name: /app\/old/ }).click();
-  await page.getByRole('button', { name: 'Delete project' }).click();
-  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete project' }).click();
-  await page.waitForURL(`${WEB}/projects`);
+  await page.getByRole('button', { name: 'Delete environment' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete environment' }).click();
+  await page.waitForURL(`${WEB}/environments`);
   await page.getByRole('link', { name: 'Bin' }).first().click();
   await page.getByText('OLD_TOKEN').waitFor();
   await page.getByText('app/old').waitFor();
@@ -541,16 +556,16 @@ const main = async (browser: Browser) => {
       .cli(['secrets', 'app/production'])
       .json?.secrets?.some((secret: { name: string }) => secret.name === 'OLD_TOKEN') === true,
   );
-  const projectRow = page.getByRole('listitem').filter({ hasText: 'app/old' });
-  await projectRow.getByRole('button', { name: 'Delete for good' }).click();
+  const environmentRow = page.getByRole('listitem').filter({ hasText: 'app/old' });
+  await environmentRow.getByRole('button', { name: 'Delete for good' }).click();
   await page.getByRole('alertdialog').waitFor();
   await page.waitForTimeout(300);
   await shoot(page, '11i-bin-delete-for-good');
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete for good' }).click();
   await page.getByText('The bin is empty').waitFor();
   check(
-    'the owner deletes a project in the bin for good, and its name is free again',
-    laptop.cli(['projects', 'create', 'app/old']).status === 0,
+    'the owner deletes an environment in the bin for good, and its name is free again',
+    laptop.cli(['environments', 'create', 'app/old']).status === 0,
   );
 
   await page.goto(`${WEB}/activity`);
@@ -573,7 +588,10 @@ const main = async (browser: Browser) => {
     '`baymutt logout` revokes the login and what it made',
     loggedOut.json?.status === 'loggedOut' && loggedOut.json?.revoked.length === 2,
   );
-  check('a logged-out computer is not logged in', laptop.cli(['projects', 'list']).status === 3);
+  check(
+    'a logged-out computer is not logged in',
+    laptop.cli(['environments', 'list']).status === 3,
+  );
   await page.goto(`${WEB}/service-accounts`);
   await page.getByText('Build server').waitFor();
   await page.getByRole('button', { name: 'Revoke' }).first().click();
@@ -581,7 +599,7 @@ const main = async (browser: Browser) => {
   await page.getByRole('button', { name: 'Revoke service account' }).click();
   await page.getByText('No service accounts yet').waitFor();
   await shoot(page, '14b-service-accounts-empty');
-  check('a revoked service account is refused', server.cli(['projects', 'list']).status === 3);
+  check('a revoked service account is refused', server.cli(['environments', 'list']).status === 3);
   await page.goto(`${WEB}/requests`);
   await page.getByText('Nothing is waiting on you').waitFor();
   await shoot(page, '14c-requests-empty');
@@ -593,9 +611,9 @@ const main = async (browser: Browser) => {
   await page.goto(`${WEB}/signin`);
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByText('STRIPE_SECRET_KEY').waitFor();
-  await shoot(page, '15-project-dark');
+  await shoot(page, '15-environment-dark');
   await page.setViewportSize(PHONE);
-  await shoot(page, '16-project-dark-phone');
+  await shoot(page, '16-environment-dark-phone');
   await page.setViewportSize(DESKTOP);
   await page.goto(`${WEB}/service-accounts`);
   await page.getByText('No service accounts yet').waitFor();
@@ -612,7 +630,7 @@ const main = async (browser: Browser) => {
   await otherPage.getByRole('button', { name: 'Use this password' }).click();
   await keepRecoveryKey(otherPage);
   await otherPage.getByRole('button', { name: 'Continue' }).click();
-  await otherPage.getByText('No projects yet').waitFor();
+  await otherPage.getByText('No environments yet').waitFor();
   check('an email link and a password make a vault, and one account sees nothing of another', true);
   await otherPage.goto(`${WEB}/account`);
   await otherPage.getByRole('heading', { name: 'Password' }).waitFor();
@@ -627,7 +645,7 @@ const main = async (browser: Browser) => {
   await shoot(otherPage, '18b-sign-in-error');
   await otherPage.getByLabel('Password').fill('a long made-up password');
   await otherPage.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await otherPage.getByRole('heading', { name: 'Projects' }).waitFor();
+  await otherPage.getByRole('heading', { name: 'Environments' }).waitFor();
   check('email and password sign in and unlock; a wrong password does neither', true);
   await other.close();
 

@@ -28,7 +28,7 @@ const PasteRow = ({ request }: { readonly request: PasteRequest }) => {
         <div className="min-w-0 flex-1">
           <p>
             <span className="font-medium">{request.createdBy.name}</span> asks you to paste{' '}
-            <Code>{request.name}</Code> into <Code>{request.projectName}</Code>
+            <Code>{request.name}</Code> into <Code>{request.environmentName}</Code>
           </p>
           <Reason>{request.reason}</Reason>
           {request.hint !== '' && (

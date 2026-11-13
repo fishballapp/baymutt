@@ -1,4 +1,4 @@
-import { ProjectNameSchema } from '@baymutt/api';
+import { EnvironmentNameSchema } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { CaretRightIcon } from '@phosphor-icons/react';
 import { Link } from '@tanstack/react-router';
@@ -18,17 +18,17 @@ import {
 } from '../components/parts.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { TextField } from '../components/ui/field.tsx';
-import { createProjectAtom, projectsAtom } from '../lib/data.ts';
+import { createEnvironmentAtom, environmentsAtom } from '../lib/data.ts';
 import { counted } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-const isProjectName = Schema.is(ProjectNameSchema);
+const isEnvironmentName = Schema.is(EnvironmentNameSchema);
 
-const NewProject = () => {
+const NewEnvironment = () => {
   const owner = useOwner();
-  const [creation, create] = useAtom(createProjectAtom, { mode: 'promiseExit' });
+  const [creation, create] = useAtom(createEnvironmentAtom, { mode: 'promiseExit' });
   const [name, setName] = useState('');
-  const isValid = isProjectName(name);
+  const isValid = isEnvironmentName(name);
   return (
     <form
       className="mb-8"
@@ -39,7 +39,7 @@ const NewProject = () => {
       }}
     >
       <TextField
-        label="New project"
+        label="New environment"
         isCode
         placeholder="app/production"
         hint="Lower-case segments joined by /."
@@ -52,7 +52,7 @@ const NewProject = () => {
         onChange={event => setName(event.target.value)}
         action={
           <Button type="submit" intent="primary" disabled={!isValid || creation.waiting}>
-            {creation.waiting ? 'Creating…' : 'Create project'}
+            {creation.waiting ? 'Creating…' : 'Create environment'}
           </Button>
         }
       />
@@ -60,41 +60,41 @@ const NewProject = () => {
   );
 };
 
-export const ProjectsPage = () => {
-  const result = useAtomValue(projectsAtom);
-  const projects = latest(result);
+export const EnvironmentsPage = () => {
+  const result = useAtomValue(environmentsAtom);
+  const environments = latest(result);
   return (
     <>
       <PageHeader
-        title="Projects"
-        lede="A project is the unit of access. Every CLI login reads and writes each one; a service account a login made holds only the ones it was handed."
+        title="Environments"
+        lede="An environment is the unit of access. Every CLI login reads and writes each one; a service account a login made holds only the ones it was handed."
       />
-      <NewProject />
+      <NewEnvironment />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {projects === null && !failureMessage(result) && <Skeleton />}
-      {projects?.length === 0 && (
-        <Empty title="No projects yet">
+      {environments === null && !failureMessage(result) && <Skeleton />}
+      {environments?.length === 0 && (
+        <Empty title="No environments yet">
           <p>
-            Create one above, or let an agent create it from a service account. A project an agent
-            creates shows up here, and you can read it.
+            Create one above, or let an agent create it from a service account. An environment an
+            agent creates shows up here, and you can read it.
           </p>
-          <CommandLine>baymutt projects create app/production</CommandLine>
+          <CommandLine>baymutt environments create app/production</CommandLine>
         </Empty>
       )}
-      {projects !== null && projects.length > 0 && (
+      {environments !== null && environments.length > 0 && (
         <Rows>
-          {projects.map(project => (
-            <Row key={project.id} className="p-0">
+          {environments.map(environment => (
+            <Row key={environment.id} className="p-0">
               <Link
-                to="/projects/$id"
-                params={{ id: project.id }}
+                to="/environments/$id"
+                params={{ id: environment.id }}
                 className="group flex items-center gap-4 px-4 py-3 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:-outline-offset-2"
               >
                 <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-6 gap-y-0.5">
-                  <Code className="text-base font-medium">{project.name}</Code>
+                  <Code className="text-base font-medium">{environment.name}</Code>
                   <span className="text-sm text-muted">
-                    {counted(project.secretCount, 'secret')} · made by {project.createdBy.name}{' '}
-                    <Time at={project.createdAt} />
+                    {counted(environment.secretCount, 'secret')} · made by{' '}
+                    {environment.createdBy.name} <Time at={environment.createdAt} />
                   </span>
                 </span>
                 <CaretRightIcon

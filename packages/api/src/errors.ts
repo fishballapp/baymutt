@@ -16,14 +16,14 @@ export class AlreadyExistsError extends Schema.TaggedError<AlreadyExistsError>()
   { httpApiStatus: 409 },
 ) {}
 
-/** The credential is real and lacks the grant this needs on the project. */
+/** The credential is real and lacks the grant this needs on the environment. */
 export class NoAccessError extends Schema.TaggedError<NoAccessError>()(
   'NoAccessError',
   { message: ErrorMessageSchema, need: Schema.Literals(['read', 'write']) },
   { httpApiStatus: 403 },
 ) {}
 
-/** Someone wrote first, or the project's key changed: read again and seal for the slot named here. */
+/** Someone wrote first, or the environment's key changed: read again and seal for the slot named here. */
 export class VersionConflictError extends Schema.TaggedError<VersionConflictError>()(
   'VersionConflictError',
   { message: ErrorMessageSchema, latestVersion: Schema.Int, keyVersion: Schema.Int },
@@ -39,9 +39,9 @@ export class LimitReachedError extends Schema.TaggedError<LimitReachedError>()(
 
 /** What one account may hold while baymutt is in beta. */
 export const LIMITS = {
-  projects: 100,
+  environments: 100,
   serviceAccounts: 200,
-  secretsPerProject: 500,
+  secretsPerEnvironment: 500,
   versionsPerSecret: 1000,
 } as const;
 

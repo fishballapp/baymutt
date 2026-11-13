@@ -16,7 +16,7 @@ export const SignUpPage = () => {
       lede="Secrets your agents can use, sealed so that baymutt cannot read one."
     >
       <LinkByEmail
-        landOn="/projects"
+        landOn="/environments"
         action="Email me a link to get started"
         sent="It takes you to setting up your vault, with a passkey or a password."
       />

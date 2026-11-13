@@ -4,9 +4,9 @@ import { cn } from 'cn';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { createContext, type ReactNode, use, useEffect, useState } from 'react';
 import {
+  environmentsAtom,
   isLogin,
   pasteRequestsAtom,
-  projectsAtom,
   resumeAtom,
   serviceAccountsAtom,
   signOutAtom,
@@ -58,7 +58,7 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
 };
 
 const NAV = [
-  { to: '/projects', label: 'Projects' },
+  { to: '/environments', label: 'Environments' },
   { to: '/service-accounts', label: 'Service accounts' },
   { to: '/requests', label: 'Requests' },
   { to: '/activity', label: 'Activity' },
@@ -84,7 +84,7 @@ const PendingCount = () => {
 };
 
 /**
- * Keeps every login holding every project. A project a service account made reaches the other
+ * Keeps every login holding every environment. An environment a service account made reaches the other
  * logins only through the owner's vault, so whenever it is open and a login lacks one, this grants
  * it. Keyed on what is missing: a grant that fails is not retried until the lists change.
  */
@@ -92,19 +92,19 @@ const LoginTopUp = () => {
   const owner = useOwner();
   const [toppingUp, topUp] = useAtom(topUpLoginsAtom);
   const serviceAccounts = latest(useAtomValue(serviceAccountsAtom));
-  const projects = latest(useAtomValue(projectsAtom));
+  const environments = latest(useAtomValue(environmentsAtom));
   const missing =
-    serviceAccounts === null || projects === null
+    serviceAccounts === null || environments === null
       ? ''
       : serviceAccounts
           .filter(isLogin)
           .flatMap(login =>
-            projects
-              .filter(project => {
-                const held = login.grants.find(grant => grant.projectId === project.id);
+            environments
+              .filter(environment => {
+                const held = login.grants.find(grant => grant.environmentId === environment.id);
                 return !(held?.canRead && held.canWrite);
               })
-              .map(project => `${login.id}/${project.id}`),
+              .map(environment => `${login.id}/${environment.id}`),
           )
           .join(' ');
   useEffect(() => {
@@ -113,8 +113,8 @@ const LoginTopUp = () => {
   const failure = failureMessage(toppingUp);
   return failure === null ? null : (
     <Notice className="mb-6">
-      Could not give every login the projects it lacks: {failure} It is tried again when you next
-      open the dashboard.
+      Could not give every login the environments it lacks: {failure} It is tried again when you
+      next open the dashboard.
     </Notice>
   );
 };
@@ -126,8 +126,9 @@ const navItem = (isCurrent: boolean) =>
   );
 
 /**
- * The side nav and one column of content. Under 48rem the nav is a bar across the top, with
- * Account beside the wordmark so the other five fit a phone's width.
+ * The side nav and one column of content. Under 48rem the nav is a bar across the top: the
+ * wordmark, then the six items in three columns over two rows, which gives "Service accounts" and
+ * "Environments" room to stay on one line at 390px.
  */
 export const Shell = () => {
   const owner = useOwner();
@@ -138,27 +139,20 @@ export const Shell = () => {
       <aside className="border-line border-b bg-surface md:border-r md:border-b-0">
         <div className="flex flex-col md:sticky md:top-0 md:h-dvh">
           <div className="flex items-center justify-between gap-4 px-4 pt-3 md:px-5 md:pt-7 md:pb-2">
-            <Link to="/projects" className="-mx-1 rounded-control px-1 py-1">
+            <Link to="/environments" className="-mx-1 rounded-control px-1 py-1">
               <Wordmark />
-            </Link>
-            <Link
-              to="/account"
-              aria-current={current === '/account' ? 'page' : undefined}
-              className={cn(navItem(current === '/account'), 'px-2.5 md:hidden')}
-            >
-              Account
             </Link>
           </div>
           <nav
             aria-label="Main"
-            className="grid grid-cols-5 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:py-4"
+            className="grid grid-cols-3 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:py-4"
           >
             {NAV.map(({ to, label }) => (
               <Link
                 key={to}
                 to={to}
                 aria-current={current === to ? 'page' : undefined}
-                className={cn(navItem(current === to), to === '/account' && 'hidden md:flex')}
+                className={navItem(current === to)}
               >
                 {label}
                 {to === '/requests' && <PendingCount />}

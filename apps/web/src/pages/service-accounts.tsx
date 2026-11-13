@@ -1,4 +1,4 @@
-import type { Project, ServiceAccount } from '@baymutt/api';
+import type { Environment, ServiceAccount } from '@baymutt/api';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { RobotIcon, TerminalWindowIcon } from '@phosphor-icons/react';
 import * as Atom from 'effect/reactivity/Atom';
@@ -24,9 +24,9 @@ import { Confirm } from '../components/ui/confirm.tsx';
 import {
   type AccessChange,
   changeAccessAtom,
+  environmentsAtom,
   isLogin,
   isVouched,
-  projectsAtom,
   revokeServiceAccountAtom,
   serviceAccountsAtom,
   setExpiryAtom,
@@ -90,8 +90,8 @@ const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: ServiceAcco
 
 type Held = { readonly canRead: boolean; readonly canWrite: boolean };
 
-const heldOn = (serviceAccount: ServiceAccount, projectId: string): Held => {
-  const grant = serviceAccount.grants.find(held => held.projectId === projectId);
+const heldOn = (serviceAccount: ServiceAccount, environmentId: string): Held => {
+  const grant = serviceAccount.grants.find(held => held.environmentId === environmentId);
   return { canRead: grant?.canRead ?? false, canWrite: grant?.canWrite ?? false };
 };
 
@@ -120,8 +120,8 @@ const AccessBox = ({
 
 /**
  * What a scoped service account can reach, changed here under the key it already has. A read or
- * a project it gains needs its key as its maker vouched for it; one made by a CLI before 0.4.0 has
- * no such voucher, so it can only lose access, and gain write on a project it holds.
+ * an environment it gains needs its key as its maker vouched for it; one made by a CLI before 0.4.0 has
+ * no such voucher, so it can only lose access, and gain write on an environment it holds.
  */
 const ChangeAccess = ({
   serviceAccount,
@@ -131,20 +131,21 @@ const ChangeAccess = ({
   readonly maker: ServiceAccount | undefined;
 }) => {
   const owner = useOwner();
-  const projects = latest(useAtomValue(projectsAtom)) ?? [];
+  const environments = latest(useAtomValue(environmentsAtom)) ?? [];
   const [saving, save] = useAtom(changeAccessAtom, { mode: 'promiseExit' });
   // One atom serves every row, so an earlier row's failure is cleared when this dialog opens.
   const forget = useAtomSet(changeAccessAtom);
   const [isOpen, setIsOpen] = useState(false);
   const [chosen, setChosen] = useState<Readonly<Record<string, Held>>>({});
   const vouched = isVouched(serviceAccount) && maker !== undefined;
-  const accessOn = (project: Project) => chosen[project.id] ?? heldOn(serviceAccount, project.id);
-  const changes: ReadonlyArray<AccessChange> = projects.flatMap(project => {
-    const before = heldOn(serviceAccount, project.id);
-    const after = accessOn(project);
+  const accessOn = (environment: Environment) =>
+    chosen[environment.id] ?? heldOn(serviceAccount, environment.id);
+  const changes: ReadonlyArray<AccessChange> = environments.flatMap(environment => {
+    const before = heldOn(serviceAccount, environment.id);
+    const after = accessOn(environment);
     return before.canRead === after.canRead && before.canWrite === after.canWrite
       ? []
-      : [{ projectId: project.id, ...after }];
+      : [{ environmentId: environment.id, ...after }];
   });
   return (
     <Confirm
@@ -176,13 +177,14 @@ const ChangeAccess = ({
       }}
     >
       <ul className="max-h-72 divide-y divide-line overflow-y-auto border-line border-y">
-        {projects.map(project => {
-          const before = heldOn(serviceAccount, project.id);
-          const after = accessOn(project);
-          const set = (next: Held) => setChosen(current => ({ ...current, [project.id]: next }));
+        {environments.map(environment => {
+          const before = heldOn(serviceAccount, environment.id);
+          const after = accessOn(environment);
+          const set = (next: Held) =>
+            setChosen(current => ({ ...current, [environment.id]: next }));
           return (
-            <li key={project.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
-              <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">{project.name}</Code>
+            <li key={environment.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
+              <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">{environment.name}</Code>
               <AccessBox
                 label="read"
                 checked={after.canRead}
@@ -200,35 +202,35 @@ const ChangeAccess = ({
         })}
       </ul>
       {vouched ? (
-        <p>A read wraps the project key to it. What it reads cannot be unread.</p>
+        <p>A read wraps the environment key to it. What it reads cannot be unread.</p>
       ) : (
         <p>
           A CLI before 0.4.0 made it, so nothing vouches for its key: it can lose access here, and
-          gain only write on a project it holds.
+          gain only write on an environment it holds.
         </p>
       )}
     </Confirm>
   );
 };
 
-/** What it can reach: every project for a login, what it was handed for any other. */
+/** What it can reach: every environment for a login, what it was handed for any other. */
 const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) => {
   if (isLogin(serviceAccount)) {
     return (
       <p className="mt-2 text-sm">
-        <span className="text-muted">can read + write</span> every project
+        <span className="text-muted">can read + write</span> every environment
       </p>
     );
   }
   if (serviceAccount.grants.length === 0) {
-    return <p className="mt-2 text-sm text-muted">No access to any project.</p>;
+    return <p className="mt-2 text-sm text-muted">No access to any environment.</p>;
   }
   return (
     <ul className="mt-2 space-y-0.5 text-sm">
       {serviceAccount.grants.map(grant => (
-        <li key={grant.projectId}>
+        <li key={grant.environmentId}>
           <span className="text-muted">can {grantWords(grant)}</span>{' '}
-          <Code>{grant.projectName}</Code>
+          <Code>{grant.environmentName}</Code>
         </li>
       ))}
     </ul>
@@ -323,7 +325,7 @@ export const ServiceAccountsPage = () => {
     <>
       <PageHeader
         title="Service accounts"
-        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every project; a service account a login made reaches only what it was handed, by that login or by you."
+        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every environment; a service account a login made reaches only what it was handed, by that login or by you."
       />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
       {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
@@ -334,8 +336,8 @@ export const ServiceAccountsPage = () => {
           <CommandLine>baymutt login</CommandLine>
           <p>
             It prints a link and a code. Open the link here and approve it if the codes match. The
-            login can then read and write every project, and make service accounts that hold part of
-            its access.
+            login can then read and write every environment, and make service accounts that hold
+            part of its access.
           </p>
         </Empty>
       )}

@@ -1,4 +1,4 @@
-// The page a paste link opens: one box, for one name in one project. It works for whoever holds
+// The page a paste link opens: one box, for one name in one environment. It works for whoever holds
 // the link, signed in or not, and for the owner from the dashboard.
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
@@ -69,7 +69,7 @@ export const PastePage = ({ id }: { readonly id: string }) => {
         </h1>
         <p className="mt-2 text-muted">
           <span className="text-foreground">{request.createdBy.name}</span> asks for it in{' '}
-          <Code className="text-foreground">{request.projectName}</Code>.
+          <Code className="text-foreground">{request.environmentName}</Code>.
         </p>
       </div>
       {(request.reason !== '' || request.hint !== '') && (
@@ -93,7 +93,7 @@ export const PastePage = ({ id }: { readonly id: string }) => {
         isCode
         rows={6}
         autoFocus
-        hint="Sealed in this browser to the project’s key before it is sent. baymutt cannot read it, and this page will not show it again. Several lines are fine."
+        hint="Sealed in this browser to the environment’s key before it is sent. baymutt cannot read it, and this page will not show it again. Several lines are fine."
         error={failureMessage(saving)}
         value={value}
         onChange={event => setValue(event.target.value)}

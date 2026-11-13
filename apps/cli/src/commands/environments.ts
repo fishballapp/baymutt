@@ -1,26 +1,26 @@
-import { ProjectNameSchema } from '@baymutt/api';
+import { EnvironmentNameSchema } from '@baymutt/api';
 import * as Argument from 'effect/cli/Argument';
 import * as Command from 'effect/cli/Command';
 import * as Effect from 'effect/Effect';
+import { createEnvironment } from '../environments.ts';
 import { report } from '../errors.ts';
 import { print } from '../output.ts';
-import { createProject } from '../projects.ts';
 import { ServiceAccount } from '../service-account.ts';
 
-export const projectArgument = Argument.String('project').pipe(
-  Argument.withDescription('The project’s name, such as app/production'),
+export const environmentArgument = Argument.String('environment').pipe(
+  Argument.withDescription('The environment’s name, such as app/production'),
 );
 
 const listCommand = Command.make(
   'list',
   {},
-  Effect.fn('projects.list')(function* () {
+  Effect.fn('environments.list')(function* () {
     const { api } = yield* ServiceAccount;
-    yield* print(yield* api.projects.list());
+    yield* print(yield* api.environments.list());
   }, report),
 ).pipe(
   Command.withDescription(
-    'The projects this service account holds a grant on, and what it may do in each. Deleted ones are in `baymutt bin list`',
+    'The environments this service account holds a grant on, and what it may do in each. Deleted ones are in `baymutt bin list`',
   ),
   Command.withAlias('ls'),
 );
@@ -30,20 +30,21 @@ const createCommand = Command.make(
   {
     name: Argument.String('name').pipe(
       Argument.withDescription('Lower-case segments joined by /, such as app/production'),
-      Argument.withSchema(ProjectNameSchema),
+      Argument.withSchema(EnvironmentNameSchema),
     ),
   },
-  Effect.fn('projects.create')(function* ({ name }) {
-    yield* print(yield* createProject(name));
+  Effect.fn('environments.create')(function* ({ name }) {
+    yield* print(yield* createEnvironment(name));
   }, report),
 ).pipe(
   Command.withDescription(
-    'Create a project. Its key is made here; this service account gets read and write, and the owner can read it.',
+    'Create an environment. Its key is made here; this service account gets read and write, and the owner can read it.',
   ),
 );
 
-export const projectsCommand = Command.make('projects').pipe(
-  Command.withDescription('List and create projects'),
+export const environmentsCommand = Command.make('environments').pipe(
+  Command.withDescription('List and create environments'),
+  Command.withAlias('envs'),
   Command.withSubcommands([listCommand, createCommand]),
   Command.provide(ServiceAccount.layer),
 );

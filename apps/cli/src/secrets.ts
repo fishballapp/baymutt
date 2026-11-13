@@ -1,17 +1,17 @@
-// Writing a value: sealed here to the project's public key, for the one slot it will fill.
-import { MAX_VALUE_BYTES, type Project } from '@baymutt/api';
+// Writing a value: sealed here to the environment's public key, for the one slot it will fill.
+import { type Environment, MAX_VALUE_BYTES } from '@baymutt/api';
 import { sealValue } from '@baymutt/keys';
 import * as Effect from 'effect/Effect';
+import { trustedKey } from './environments.ts';
 import { crypto_, usage } from './errors.ts';
-import { trustedKey } from './projects.ts';
 import { ServiceAccount } from './service-account.ts';
 
 export const writeValue = Effect.fn('secrets.write')(function* ({
-  project,
+  environment,
   name,
   value,
 }: {
-  readonly project: Project;
+  readonly environment: Environment;
   readonly name: string;
   readonly value: string;
 }) {
@@ -20,21 +20,21 @@ export const writeValue = Effect.fn('secrets.write')(function* ({
     return yield* usage(`${name} is ${bytes} bytes; a value may be ${MAX_VALUE_BYTES}.`);
   }
   const { api } = yield* ServiceAccount;
-  const { publicKey: projectPublicKey, binding } = yield* trustedKey(project);
-  const { secrets } = yield* api.secrets.list({ params: { projectId: project.id } });
+  const { publicKey: environmentPublicKey, binding } = yield* trustedKey(environment);
+  const { secrets } = yield* api.secrets.list({ params: { environmentId: environment.id } });
   const latest = secrets.find(secret => secret.name === name)?.latestVersion ?? 0;
 
   const writeAs = Effect.fnUntraced(function* (version: number) {
     const ciphertext = yield* crypto_(() =>
       sealValue({
-        projectPublicKey,
+        environmentPublicKey,
         slot: { ...binding, name, version },
         value,
       }),
     );
     return yield* api.secrets.write({
-      params: { projectId: project.id, name },
-      payload: { version, keyVersion: project.keyVersion, ciphertext },
+      params: { environmentId: environment.id, name },
+      payload: { version, keyVersion: environment.keyVersion, ciphertext },
     });
   });
 
@@ -42,7 +42,7 @@ export const writeValue = Effect.fn('secrets.write')(function* ({
   // one, once. A second loss is reported, with the slot the store names.
   return yield* writeAs(latest + 1).pipe(
     Effect.catchTag('VersionConflictError', conflict =>
-      conflict.keyVersion === project.keyVersion
+      conflict.keyVersion === environment.keyVersion
         ? writeAs(conflict.latestVersion + 1)
         : Effect.fail(conflict),
     ),
@@ -51,11 +51,11 @@ export const writeValue = Effect.fn('secrets.write')(function* ({
 
 /** What a command reports of a value: never the value. */
 export const describeWrite = (
-  project: Project,
+  environment: Environment,
   secret: { readonly name: string; readonly currentVersion: number | null },
   value: string,
 ) => ({
-  project: project.name,
+  environment: environment.name,
   name: secret.name,
   version: secret.currentVersion,
   length: value.length,

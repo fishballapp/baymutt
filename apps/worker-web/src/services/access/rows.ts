@@ -1,11 +1,11 @@
 // The rows `Access` reads, and the lookups its sub-domains share.
 import {
   type ActorIdentity,
+  type Environment,
   LIMITS,
   LimitReachedError,
   NoAccessError,
   NotFoundError,
-  type Project,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
 import * as Effect from 'effect/Effect';
@@ -32,7 +32,7 @@ export const ServiceAccountRowSchema = Schema.Struct({
 });
 export type ServiceAccountRow = typeof ServiceAccountRowSchema.Type;
 
-export const ProjectRowSchema = Schema.Struct({
+export const EnvironmentRowSchema = Schema.Struct({
   id: Schema.String,
   accountId: Schema.String,
   name: Schema.String,
@@ -48,43 +48,43 @@ export const ProjectRowSchema = Schema.Struct({
   readWrap: Schema.NullOr(Schema.String),
   keyProof: Schema.NullOr(Schema.String),
 });
-export type ProjectRow = typeof ProjectRowSchema.Type;
+export type EnvironmentRow = typeof EnvironmentRowSchema.Type;
 
-/** What a caller may do with a project, and the wrap it reads with. */
-export type ProjectAccess = {
-  readonly project: Project;
+/** What a caller may do with an environment, and the wrap it reads with. */
+export type EnvironmentAccess = {
+  readonly environment: Environment;
   readonly ownerProof: string;
-  /** The project key wrapped to the caller, and the reader id the wrap is bound to. */
+  /** The environment key wrapped to the caller, and the reader id the wrap is bound to. */
   readonly wrap: string | null;
   readonly readerId: string;
-  /** The caller is a login, which is meant to hold every project: one it lacks waits on the owner's dashboard. */
+  /** The caller is a login, which is meant to hold every environment: one it lacks waits on the owner's dashboard. */
   readonly readerIsLogin: boolean;
 };
 
-/** A login: made by `baymutt login` and approved by the owner, so it has no parent. It holds every project. */
+/** A login: made by `baymutt login` and approved by the owner, so it has no parent. It holds every environment. */
 export const isLogin = (actor: ActorIdentity): boolean =>
   actor._tag === 'ServiceAccount' && actor.parentId === null;
 
-/** What a login is told when the owner's dashboard has not wrapped a project to it yet. */
-const awaitingDashboard = (projectName: string) =>
-  `This login has full access, but ${projectName} was made by another service account and is not wrapped to this login yet: only the owner's browser can do that. Ask the owner to open the baymutt dashboard once; it grants every project a login lacks.`;
+/** What a login is told when the owner's dashboard has not wrapped an environment to it yet. */
+const awaitingDashboard = (environmentName: string) =>
+  `This login has full access, but ${environmentName} was made by another service account and is not wrapped to this login yet: only the owner's browser can do that. Ask the owner to open the baymutt dashboard once; it grants every environment a login lacks.`;
 
 export const lookups = (sql: D1Client.D1Client) => {
   /**
-   * Live projects of an account with the caller's grant joined on. `credentialId` null is the
-   * owner, who sees every project; a login sees every project too (one it lacks a grant on is
+   * Live environments of an account with the caller's grant joined on. `credentialId` null is the
+   * owner, who sees every environment; a login sees every environment too (one it lacks a grant on is
    * waiting for the owner's dashboard); any other service account sees only those it holds a
    * grant on.
    */
-  const projectRows = SqlSchema.findAll({
+  const environmentRows = SqlSchema.findAll({
     Request: Schema.Struct({
       accountId: Schema.String,
       credentialId: Schema.NullOr(Schema.String),
       seesAll: Schema.Boolean,
-      projectId: Schema.NullOr(Schema.String),
+      environmentId: Schema.NullOr(Schema.String),
     }),
-    Result: ProjectRowSchema,
-    execute: ({ accountId, credentialId, seesAll, projectId }) =>
+    Result: EnvironmentRowSchema,
+    execute: ({ accountId, credentialId, seesAll, environmentId }) =>
       sql`SELECT p.id, p.account_id, p.name, p.public_key, p.key_version, p.owner_wrap,
             p.owner_proof, p.created_by, p.created_at, g.can_write, g.read_wrap, g.key_proof,
             (SELECT COUNT(*) FROM secret s
@@ -92,15 +92,15 @@ export const lookups = (sql: D1Client.D1Client) => {
           FROM project p
           LEFT JOIN project_grant g ON g.project_id = p.id AND g.credential_id = ${credentialId}
           WHERE p.account_id = ${accountId} AND p.archived_at IS NULL
-            AND (${projectId} IS NULL OR p.id = ${projectId})
+            AND (${environmentId} IS NULL OR p.id = ${environmentId})
             AND (${seesAll ? 1 : 0} = 1 OR g.credential_id IS NOT NULL)
           ORDER BY p.name`,
   });
 
-  const toAccess = (actor: ActorIdentity, row: ProjectRow): ProjectAccess => {
+  const toAccess = (actor: ActorIdentity, row: EnvironmentRow): EnvironmentAccess => {
     const isOwner = actor._tag === 'Owner';
     return {
-      project: {
+      environment: {
         id: row.id,
         accountId: row.accountId,
         name: row.name,
@@ -120,55 +120,55 @@ export const lookups = (sql: D1Client.D1Client) => {
     };
   };
 
-  const projectsOf = (actor: ActorIdentity, projectId: string | null = null) =>
-    projectRows({
+  const environmentsOf = (actor: ActorIdentity, environmentId: string | null = null) =>
+    environmentRows({
       accountId: actor.accountId,
       credentialId: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
       seesAll: actor._tag === 'Owner' || isLogin(actor),
-      projectId,
+      environmentId,
     }).pipe(
       Effect.orDie,
       Effect.map(rows => rows.map(row => toAccess(actor, row))),
     );
 
   /**
-   * A project the caller holds a grant on, or the owner. One a scoped service account holds no
+   * An environment the caller holds a grant on, or the owner. One a scoped service account holds no
    * grant on reads as not found: its name is not the caller's to learn. A login is listed every
-   * project, and is refused one it holds nothing on yet: listed is not granted.
+   * environment, and is refused one it holds nothing on yet: listed is not granted.
    */
-  const projectFor = Effect.fnUntraced(function* (actor: ActorIdentity, projectId: string) {
-    const [access] = yield* projectsOf(actor, projectId);
-    if (access?.readerIsLogin && !access.project.canRead && !access.project.canWrite) {
+  const environmentFor = Effect.fnUntraced(function* (actor: ActorIdentity, environmentId: string) {
+    const [access] = yield* environmentsOf(actor, environmentId);
+    if (access?.readerIsLogin && !access.environment.canRead && !access.environment.canWrite) {
       return yield* new NoAccessError({
         need: 'read',
-        message: awaitingDashboard(access.project.name),
+        message: awaitingDashboard(access.environment.name),
       });
     }
     if (access === undefined) {
       return yield* new NotFoundError({
         message:
           actor._tag === 'Owner' || isLogin(actor)
-            ? 'No project has this id.'
-            : 'No project with this id is granted to this service account. List what it holds with `baymutt projects`; the login that made it, or the owner, can hand it one.',
+            ? 'No environment has this id.'
+            : 'No environment with this id is granted to this service account. List what it holds with `baymutt environments`; the login that made it, or the owner, can hand it one.',
       });
     }
     return access;
   });
 
-  /** A project for a caller already checked to be the owner, who holds every project: never a refusal for access. */
-  const ownersProject = (actor: ActorIdentity, projectId: string) =>
-    projectFor(actor, projectId).pipe(Effect.catchTag('NoAccessError', Effect.die));
+  /** An environment for a caller already checked to be the owner, who holds every environment: never a refusal for access. */
+  const ownersEnvironment = (actor: ActorIdentity, environmentId: string) =>
+    environmentFor(actor, environmentId).pipe(Effect.catchTag('NoAccessError', Effect.die));
 
-  const needing = (access: ProjectAccess, need: 'read' | 'write') => {
-    const holds = need === 'read' ? access.project.canRead : access.project.canWrite;
+  const needing = (access: EnvironmentAccess, need: 'read' | 'write') => {
+    const holds = need === 'read' ? access.environment.canRead : access.environment.canWrite;
     return holds
       ? Effect.succeed(access)
       : Effect.fail(
           new NoAccessError({
             need,
             message: access.readerIsLogin
-              ? awaitingDashboard(access.project.name)
-              : `This service account has no ${need} access to ${access.project.name}. The login that made it can hand that on with \`baymutt service-accounts access\`, or the owner from the dashboard.`,
+              ? awaitingDashboard(access.environment.name)
+              : `This service account has no ${need} access to ${access.environment.name}. The login that made it can hand that on with \`baymutt service-accounts access\`, or the owner from the dashboard.`,
           }),
         );
   };
@@ -198,10 +198,10 @@ export const lookups = (sql: D1Client.D1Client) => {
    */
   const underLimit = Effect.fnUntraced(function* (
     accountId: string,
-    what: 'projects' | 'serviceAccounts',
+    what: 'environments' | 'serviceAccounts',
   ) {
     const [row] = yield* (
-      what === 'projects'
+      what === 'environments'
         ? sql`SELECT COUNT(*) AS held FROM project
             WHERE account_id = ${accountId} AND archived_at IS NULL`
         : sql`SELECT COUNT(*) AS held FROM credential
@@ -210,12 +210,19 @@ export const lookups = (sql: D1Client.D1Client) => {
     if (Number(row?.held ?? 0) >= LIMITS[what]) {
       return yield* new LimitReachedError({
         limit: LIMITS[what],
-        message: `An account holds up to ${LIMITS[what]} ${what === 'projects' ? 'projects' : 'service accounts'} while baymutt is in beta. ${what === 'projects' ? 'Delete one in the dashboard' : 'Revoke one with `baymutt service-accounts revoke`'} to make room.`,
+        message: `An account holds up to ${LIMITS[what]} ${what === 'environments' ? 'environments' : 'service accounts'} while baymutt is in beta. ${what === 'environments' ? 'Delete one in the dashboard' : 'Revoke one with `baymutt service-accounts revoke`'} to make room.`,
       });
     }
   });
 
-  return { projectsOf, projectFor, ownersProject, needing, serviceAccountIn, underLimit };
+  return {
+    environmentsOf,
+    environmentFor,
+    ownersEnvironment,
+    needing,
+    serviceAccountIn,
+    underLimit,
+  };
 };
 
 export type Lookups = ReturnType<typeof lookups>;

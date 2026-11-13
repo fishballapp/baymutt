@@ -90,7 +90,7 @@ export const LinkByEmail = ({
   action,
   sent,
 }: {
-  readonly landOn: '/projects' | '/recover';
+  readonly landOn: '/environments' | '/recover';
   readonly action: string;
   /** What to tell them once the link is on its way. */
   readonly sent: string;

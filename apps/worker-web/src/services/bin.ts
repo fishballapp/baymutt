@@ -1,5 +1,5 @@
 // The bin: what was deleted, until it is removed for good. A deleted secret is a `secret` row with
-// no current version, a deleted project a `project` row with `archived_at`; each is removed for good
+// no current version, a deleted environment a `environment` row with `archived_at`; each is removed for good
 // at its `purge_at`, by the daily sweep, or earlier by the owner. Removing one for good is the only
 // thing in the store that cannot be undone, so nothing a service account can call reaches it.
 //
@@ -9,7 +9,7 @@ import {
   type Actor,
   type ActorIdentity,
   BIN_DAYS,
-  type BinProject,
+  type BinEnvironment,
   type BinSecret,
   NotFoundError,
   OwnerRequiredError,
@@ -49,24 +49,24 @@ const ownerOnly = (actor: ActorIdentity) =>
 export class Bin extends Context.Service<
   Bin,
   {
-    /** Newest first. The owner and a login see the account's; a scoped service account, its projects'. */
+    /** Newest first. The owner and a login see the account's; a scoped service account, its environments'. */
     readonly list: (actor: ActorIdentity) => Effect.Effect<{
-      readonly projects: ReadonlyArray<BinProject>;
+      readonly environments: ReadonlyArray<BinEnvironment>;
       readonly secrets: ReadonlyArray<BinSecret>;
     }>;
-    /** The owner's: a deleted project, its secrets, versions, grants and requests, for good. */
-    readonly purgeProject: (request: {
+    /** The owner's: a deleted environment, its secrets, versions, grants and requests, for good. */
+    readonly purgeEnvironment: (request: {
       readonly actor: ActorIdentity;
       readonly id: string;
     }) => Effect.Effect<void, NotFoundError | OwnerRequiredError>;
     /** The owner's: a deleted secret and every version of it, for good. */
     readonly purgeSecret: (request: {
       readonly actor: ActorIdentity;
-      readonly projectId: string;
+      readonly environmentId: string;
       readonly name: string;
     }) => Effect.Effect<void, NotFoundError | OwnerRequiredError>;
     /** Removes for good everything whose time in the bin is up. Run daily by the Cron Trigger. */
-    readonly sweep: Effect.Effect<{ readonly projects: number; readonly secrets: number }>;
+    readonly sweep: Effect.Effect<{ readonly environments: number; readonly secrets: number }>;
   }
 >()('@baymutt/worker-web/services/Bin') {
   static readonly layer = Layer.effect(
@@ -76,10 +76,10 @@ export class Bin extends Context.Service<
       const access = yield* Access;
       const audit = yield* Audit;
 
-      const projectPurgeAt = sql`COALESCE(p.purge_at, p.archived_at + ${BIN_MS})`;
+      const environmentPurgeAt = sql`COALESCE(p.purge_at, p.archived_at + ${BIN_MS})`;
       const secretPurgeAt = sql`COALESCE(s.purge_at, s.updated_at + ${BIN_MS})`;
 
-      const binnedProjects = SqlSchema.findAll({
+      const binnedEnvironments = SqlSchema.findAll({
         Request: Schema.Struct({
           accountId: Schema.NullOr(Schema.String),
           grantee: Schema.NullOr(Schema.String),
@@ -95,12 +95,12 @@ export class Bin extends Context.Service<
         }),
         execute: ({ accountId, grantee, id, dueBy }) =>
           sql`SELECT p.id, p.account_id, p.name, p.archived_at AS deleted_at,
-                ${projectPurgeAt} AS purge_at
+                ${environmentPurgeAt} AS purge_at
               FROM project p
               WHERE p.archived_at IS NOT NULL
                 AND (${accountId} IS NULL OR p.account_id = ${accountId})
                 AND (${id} IS NULL OR p.id = ${id})
-                AND (${dueBy} IS NULL OR ${projectPurgeAt} <= ${dueBy})
+                AND (${dueBy} IS NULL OR ${environmentPurgeAt} <= ${dueBy})
                 AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM project_grant g
                       WHERE g.project_id = p.id AND g.credential_id = ${grantee}))
               ORDER BY p.archived_at DESC`,
@@ -110,31 +110,31 @@ export class Bin extends Context.Service<
         Request: Schema.Struct({
           accountId: Schema.NullOr(Schema.String),
           grantee: Schema.NullOr(Schema.String),
-          slot: Schema.NullOr(Schema.Struct({ projectId: Schema.String, name: Schema.String })),
+          slot: Schema.NullOr(Schema.Struct({ environmentId: Schema.String, name: Schema.String })),
           dueBy: Schema.NullOr(Schema.Finite),
         }),
         Result: Schema.Struct({
-          projectId: Schema.String,
+          environmentId: Schema.String,
           accountId: Schema.String,
-          projectName: Schema.String,
+          environmentName: Schema.String,
           name: Schema.String,
           latestVersion: Schema.Finite,
           deletedAt: Schema.Finite,
           deletedBy: ActorJsonSchema,
           purgeAt: Schema.Finite,
         }),
-        // The list shows deleted secrets of live projects; a deleted project's go with it. The
-        // sweep (`dueBy`) takes every one that is due, its project deleted or not.
+        // The list shows deleted secrets of live environments; a deleted environment's go with it. The
+        // sweep (`dueBy`) takes every one that is due, its environment deleted or not.
         execute: ({ accountId, grantee, slot, dueBy }) =>
-          sql`SELECT s.project_id, s.account_id, p.name AS project_name, s.name, s.latest_version,
+          sql`SELECT s.project_id AS environment_id, s.account_id, p.name AS environment_name, s.name, s.latest_version,
                 s.updated_at AS deleted_at, s.updated_by AS deleted_by,
                 ${secretPurgeAt} AS purge_at
               FROM secret s JOIN project p ON p.id = s.project_id
               WHERE s.current_version IS NULL
                 AND (${dueBy} IS NOT NULL OR p.archived_at IS NULL)
                 AND (${accountId} IS NULL OR s.account_id = ${accountId})
-                AND (${slot?.projectId ?? null} IS NULL
-                     OR (s.project_id = ${slot?.projectId ?? null} AND s.name = ${slot?.name ?? null}))
+                AND (${slot?.environmentId ?? null} IS NULL
+                     OR (s.project_id = ${slot?.environmentId ?? null} AND s.name = ${slot?.name ?? null}))
                 AND (${dueBy} IS NULL OR ${secretPurgeAt} <= ${dueBy})
                 AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM project_grant g
                       WHERE g.project_id = s.project_id AND g.credential_id = ${grantee}))
@@ -142,10 +142,10 @@ export class Bin extends Context.Service<
       });
 
       /**
-       * Everything of a project, for good, and the log entry first: all only while `stillBinned`
+       * Everything of an environment, for good, and the log entry first: all only while `stillBinned`
        * holds, so a restore that lands first keeps it whole.
        */
-      const projectGone = (id: string, stillBinned: Statement.Fragment) => [
+      const environmentGone = (id: string, stillBinned: Statement.Fragment) => [
         sql`DELETE FROM secret_version WHERE project_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM secret WHERE project_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM project_grant WHERE project_id = ${id} AND ${stillBinned}`,
@@ -154,48 +154,48 @@ export class Bin extends Context.Service<
         sql`DELETE FROM project WHERE id = ${id} AND ${stillBinned}`,
       ];
 
-      const secretGone = (projectId: string, name: string, stillBinned: Statement.Fragment) => [
+      const secretGone = (environmentId: string, name: string, stillBinned: Statement.Fragment) => [
         sql`DELETE FROM secret_version
-            WHERE project_id = ${projectId} AND name = ${name} AND ${stillBinned}`,
-        sql`DELETE FROM secret WHERE project_id = ${projectId} AND name = ${name} AND ${stillBinned}`,
+            WHERE project_id = ${environmentId} AND name = ${name} AND ${stillBinned}`,
+        sql`DELETE FROM secret WHERE project_id = ${environmentId} AND name = ${name} AND ${stillBinned}`,
       ];
 
-      const purgeProjectNow = Effect.fnUntraced(function* (
-        project: { readonly id: string; readonly accountId: string; readonly name: string },
+      const purgeEnvironmentNow = Effect.fnUntraced(function* (
+        environment: { readonly id: string; readonly accountId: string; readonly name: string },
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
       ) {
         const stillBinned = sql`EXISTS (SELECT 1 FROM project p
-          WHERE p.id = ${project.id} AND p.archived_at IS NOT NULL
-            AND (${dueBy} IS NULL OR ${projectPurgeAt} <= ${dueBy}))`;
+          WHERE p.id = ${environment.id} AND p.archived_at IS NOT NULL
+            AND (${dueBy} IS NULL OR ${environmentPurgeAt} <= ${dueBy}))`;
         yield* sql
           .batch([
             yield* audit.entry(
               {
-                accountId: project.accountId,
+                accountId: environment.accountId,
                 actor,
-                action: 'project.purge',
-                projectId: project.id,
-                projectName: project.name,
+                action: 'environment.purge',
+                environmentId: environment.id,
+                environmentName: environment.name,
                 detail: dueBy === null ? null : SWEEP_DETAIL,
               },
               stillBinned,
             ),
-            ...projectGone(project.id, stillBinned),
+            ...environmentGone(environment.id, stillBinned),
           ])
           .pipe(Effect.orDie);
       });
 
       const purgeSecretNow = Effect.fnUntraced(function* (
         secret: {
-          readonly projectId: string;
+          readonly environmentId: string;
           readonly accountId: string;
-          readonly projectName: string;
+          readonly environmentName: string;
           readonly name: string;
         },
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
       ) {
         const stillBinned = sql`EXISTS (SELECT 1 FROM secret s
-          WHERE s.project_id = ${secret.projectId} AND s.name = ${secret.name}
+          WHERE s.project_id = ${secret.environmentId} AND s.name = ${secret.name}
             AND s.current_version IS NULL
             AND (${dueBy} IS NULL OR ${secretPurgeAt} <= ${dueBy}))`;
         yield* sql
@@ -205,14 +205,14 @@ export class Bin extends Context.Service<
                 accountId: secret.accountId,
                 actor,
                 action: 'secret.purge',
-                projectId: secret.projectId,
-                projectName: secret.projectName,
+                environmentId: secret.environmentId,
+                environmentName: secret.environmentName,
                 secretName: secret.name,
                 detail: dueBy === null ? null : SWEEP_DETAIL,
               },
               stillBinned,
             ),
-            ...secretGone(secret.projectId, secret.name, stillBinned),
+            ...secretGone(secret.environmentId, secret.name, stillBinned),
           ])
           .pipe(Effect.orDie);
       });
@@ -224,41 +224,41 @@ export class Bin extends Context.Service<
             grantee: actor._tag === 'Owner' || isLogin(actor) ? null : actor.credentialId,
             dueBy: null,
           };
-          const [projects, secrets] = yield* Effect.all(
-            [binnedProjects({ ...query, id: null }), binnedSecrets({ ...query, slot: null })],
+          const [environments, secrets] = yield* Effect.all(
+            [binnedEnvironments({ ...query, id: null }), binnedSecrets({ ...query, slot: null })],
             { concurrency: 2 },
           ).pipe(Effect.orDie);
           return {
-            projects: projects.map(({ accountId: _, ...project }) => project),
+            environments: environments.map(({ accountId: _, ...environment }) => environment),
             secrets: secrets.map(({ accountId: _, ...secret }) => secret),
           };
         }),
 
-        purgeProject: Effect.fn('Bin.purgeProject')(function* ({ actor, id }) {
+        purgeEnvironment: Effect.fn('Bin.purgeEnvironment')(function* ({ actor, id }) {
           yield* ownerOnly(actor);
-          const [project] = yield* binnedProjects({
+          const [environment] = yield* binnedEnvironments({
             accountId: actor.accountId,
             grantee: null,
             id,
             dueBy: null,
           }).pipe(Effect.orDie);
-          if (project === undefined) {
+          if (environment === undefined) {
             return yield* new NotFoundError({
               message:
-                'No project in the bin has this id. Delete a project before removing it for good.',
+                'No environment in the bin has this id. Delete an environment before removing it for good.',
             });
           }
-          yield* purgeProjectNow(project, { actor: actorOf(actor), dueBy: null });
+          yield* purgeEnvironmentNow(environment, { actor: actorOf(actor), dueBy: null });
         }),
 
-        purgeSecret: Effect.fn('Bin.purgeSecret')(function* ({ actor, projectId, name }) {
+        purgeSecret: Effect.fn('Bin.purgeSecret')(function* ({ actor, environmentId, name }) {
           yield* ownerOnly(actor);
-          // A live project's: one in the bin is removed for good whole.
-          yield* access.ownersProject(actor, projectId);
+          // A live environment's: one in the bin is removed for good whole.
+          yield* access.ownersEnvironment(actor, environmentId);
           const [secret] = yield* binnedSecrets({
             accountId: actor.accountId,
             grantee: null,
-            slot: { projectId, name },
+            slot: { environmentId, name },
             dueBy: null,
           }).pipe(Effect.orDie);
           if (secret === undefined) {
@@ -272,25 +272,29 @@ export class Bin extends Context.Service<
         sweep: Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           const due = { accountId: null, grantee: null, dueBy: now };
-          // Projects first: their secrets go with them, so the secrets left are other projects'.
-          const projects = yield* binnedProjects({ ...due, id: null }).pipe(Effect.orDie);
+          // Environments first: their secrets go with them, so the secrets left are other environments'.
+          const environments = yield* binnedEnvironments({ ...due, id: null }).pipe(Effect.orDie);
           yield* eachIsolated({
-            sweep: 'bin project',
-            rows: projects,
-            run: project => purgeProjectNow(project, { actor: SWEEP_ACTOR, dueBy: now }),
+            sweep: 'bin environment',
+            rows: environments,
+            run: environment =>
+              purgeEnvironmentNow(environment, { actor: SWEEP_ACTOR, dueBy: now }),
           });
           const secrets = yield* binnedSecrets({ ...due, slot: null }).pipe(Effect.orDie);
           // One that fails is logged and left for tomorrow, so it never holds up the rest.
           yield* eachIsolated({
             sweep: 'bin secret',
-            rows: secrets.map(secret => ({ ...secret, id: `${secret.projectId}/${secret.name}` })),
+            rows: secrets.map(secret => ({
+              ...secret,
+              id: `${secret.environmentId}/${secret.name}`,
+            })),
             run: secret => purgeSecretNow(secret, { actor: SWEEP_ACTOR, dueBy: now }),
           });
           yield* Effect.logInfo('bin swept', {
-            projects: projects.length,
+            environments: environments.length,
             secrets: secrets.length,
           });
-          return { projects: projects.length, secrets: secrets.length };
+          return { environments: environments.length, secrets: secrets.length };
         }).pipe(Effect.withSpan('Bin.sweep')),
       });
     }),

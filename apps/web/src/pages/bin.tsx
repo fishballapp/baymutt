@@ -1,4 +1,4 @@
-import type { BinProject, BinSecret } from '@baymutt/api';
+import type { BinEnvironment, BinSecret } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
 import {
@@ -17,9 +17,9 @@ import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
 import {
   binAtom,
-  purgeProjectAtom,
+  purgeEnvironmentAtom,
   purgeSecretAtom,
-  restoreProjectAtom,
+  restoreEnvironmentAtom,
   restoreSecretAtom,
 } from '../lib/data.ts';
 import { exactDay, exactTime } from '../lib/format.ts';
@@ -91,27 +91,27 @@ const BinRow = ({
   </Row>
 );
 
-const ProjectRow = ({ project }: { readonly project: BinProject }) => {
-  const [restoring, restore] = useAtom(restoreProjectAtom(project.id));
-  const [purging, purge] = useAtom(purgeProjectAtom(project.id));
+const EnvironmentRow = ({ environment }: { readonly environment: BinEnvironment }) => {
+  const [restoring, restore] = useAtom(restoreEnvironmentAtom(environment.id));
+  const [purging, purge] = useAtom(purgeEnvironmentAtom(environment.id));
   return (
     <BinRow
-      name={<Code className="text-base font-medium">{project.name}</Code>}
+      name={<Code className="text-base font-medium">{environment.name}</Code>}
       deleted={
         <>
-          deleted <Time at={project.deletedAt} />
+          deleted <Time at={environment.deletedAt} />
         </>
       }
-      purgeAt={project.purgeAt}
+      purgeAt={environment.purgeAt}
       restore={{
-        onClick: () => restore(project.id),
+        onClick: () => restore(environment.id),
         waiting: restoring.waiting,
         error: failureMessage(restoring),
       }}
       purge={{
-        title: `Delete ${project.name} for good?`,
+        title: `Delete ${environment.name} for good?`,
         body: 'Its secrets, every version of each, and who could reach it are removed from baymutt.',
-        onConfirm: () => purge(project.id),
+        onConfirm: () => purge(environment.id),
         waiting: purging.waiting,
         error: failureMessage(purging),
       }}
@@ -120,16 +120,16 @@ const ProjectRow = ({ project }: { readonly project: BinProject }) => {
 };
 
 const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
-  const slot = `${secret.projectId}/${secret.name}`;
+  const slot = `${secret.environmentId}/${secret.name}`;
   const [restoring, restore] = useAtom(restoreSecretAtom(slot));
   const [purging, purge] = useAtom(purgeSecretAtom(slot));
-  const key = { projectId: secret.projectId, name: secret.name };
+  const key = { environmentId: secret.environmentId, name: secret.name };
   return (
     <BinRow
       name={
         <p>
           <Code className="text-base font-medium">{secret.name}</Code>{' '}
-          <span className="text-muted">in</span> <Code>{secret.projectName}</Code>
+          <span className="text-muted">in</span> <Code>{secret.environmentName}</Code>
         </p>
       }
       deleted={
@@ -158,25 +158,25 @@ export const BinPage = () => {
   const result = useAtomValue(binAtom);
   const bin = latest(result);
   const failure = failureMessage(result);
-  const isEmpty = bin !== null && bin.projects.length === 0 && bin.secrets.length === 0;
+  const isEmpty = bin !== null && bin.environments.length === 0 && bin.secrets.length === 0;
   return (
     <>
       <PageHeader
         title="Bin"
-        lede="Deleted projects and secrets. Each can be restored for 30 days, then it is removed for good."
+        lede="Deleted environments and secrets. Each can be restored for 30 days, then it is removed for good."
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
       {bin === null && !failure && <Skeleton rows={2} />}
       {isEmpty && (
         <Empty title="The bin is empty">
-          <p>A project or secret you or a service account deletes stays here for 30 days.</p>
+          <p>An environment or secret you or a service account deletes stays here for 30 days.</p>
         </Empty>
       )}
-      {bin !== null && bin.projects.length > 0 && (
-        <Section title="Projects">
+      {bin !== null && bin.environments.length > 0 && (
+        <Section title="Environments">
           <Rows>
-            {bin.projects.map(project => (
-              <ProjectRow key={project.id} project={project} />
+            {bin.environments.map(environment => (
+              <EnvironmentRow key={environment.id} environment={environment} />
             ))}
           </Rows>
         </Section>
@@ -185,7 +185,7 @@ export const BinPage = () => {
         <Section title="Secrets">
           <Rows>
             {bin.secrets.map(secret => (
-              <SecretRow key={`${secret.projectId}/${secret.name}`} secret={secret} />
+              <SecretRow key={`${secret.environmentId}/${secret.name}`} secret={secret} />
             ))}
           </Rows>
         </Section>

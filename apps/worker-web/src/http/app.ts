@@ -18,12 +18,16 @@ import { Auth } from '../platform/auth.ts';
 import { BaymuttConfig } from '../platform/config.ts';
 import { AccessHandlers } from './api/access.ts';
 import { AccountHandlers } from './api/account.ts';
+import { LegacyLoadHandlers } from './api/legacy.ts';
 import { SecretsHandlers } from './api/secrets.ts';
 import { GuardsLive } from './guards.ts';
 
-export const ApiHandlers = Layer.mergeAll(AccountHandlers, AccessHandlers, SecretsHandlers).pipe(
-  Layer.provideMerge(GuardsLive),
-);
+export const ApiHandlers = Layer.mergeAll(
+  AccountHandlers,
+  AccessHandlers,
+  SecretsHandlers,
+  LegacyLoadHandlers,
+).pipe(Layer.provideMerge(GuardsLive));
 
 const ApiLive = HttpApiBuilder.layer(Api).pipe(Layer.provide(ApiHandlers));
 

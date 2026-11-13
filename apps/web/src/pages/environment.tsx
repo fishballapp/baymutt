@@ -1,4 +1,4 @@
-import { type Grant, type Project, type Secret, SecretNameSchema } from '@baymutt/api';
+import { type Environment, type Grant, type Secret, SecretNameSchema } from '@baymutt/api';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { CaretLeftIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from '@tanstack/react-router';
@@ -27,10 +27,10 @@ import { Confirm } from '../components/ui/confirm.tsx';
 import { TextArea, TextField } from '../components/ui/field.tsx';
 import { copyWhenReady } from '../lib/clipboard.ts';
 import {
-  deleteProjectAtom,
+  deleteEnvironmentAtom,
+  environmentAtom,
   grantsAtom,
   isLogin,
-  projectAtom,
   removeGrantAtom,
   removeSecretAtom,
   revealSecretAtom,
@@ -44,17 +44,17 @@ import { failureMessage, latest } from '../lib/result.ts';
 
 const isSecretName = Schema.is(SecretNameSchema);
 
-const SEALED_NOTE = 'Sealed in this browser to the project’s key: baymutt cannot read it.';
+const SEALED_NOTE = 'Sealed in this browser to the environment’s key: baymutt cannot read it.';
 
 const OPEN_FAILED = 'Something went wrong on our side; try again.';
 
 /** Name and value in; a sealed version out. `name` fixed means replacing that secret. */
 const ValueForm = ({
-  project,
+  environment,
   name: fixedName,
   onDone,
 }: {
-  readonly project: Project;
+  readonly environment: Environment;
   readonly name?: string;
   readonly onDone?: () => void;
 }) => {
@@ -68,7 +68,7 @@ const ValueForm = ({
       className="space-y-3"
       onSubmit={async event => {
         event.preventDefault();
-        const exit = await write({ owner, project, name, value });
+        const exit = await write({ owner, environment, name, value });
         if (exit._tag !== 'Success') return;
         setValue('');
         if (fixedName === undefined) setName('');
@@ -82,7 +82,7 @@ const ValueForm = ({
           placeholder="STRIPE_SECRET_KEY"
           error={
             name !== '' && !isSecretName(name)
-              ? 'An environment variable name: letters, digits and underscores, not starting with a digit.'
+              ? 'Letters, digits and underscores, not starting with a digit.'
               : null
           }
           value={name}
@@ -107,8 +107,14 @@ const ValueForm = ({
   );
 };
 
-const History = ({ projectId, name }: { readonly projectId: string; readonly name: string }) => {
-  const versions = latest(useAtomValue(versionsAtom({ projectId, name })));
+const History = ({
+  environmentId,
+  name,
+}: {
+  readonly environmentId: string;
+  readonly name: string;
+}) => {
+  const versions = latest(useAtomValue(versionsAtom({ environmentId, name })));
   const [rolling, rollback] = useAtom(rollbackSecretAtom);
   if (versions === null) return <p className="text-sm text-muted">Loading its versions…</p>;
   return (
@@ -131,7 +137,7 @@ const History = ({ projectId, name }: { readonly projectId: string; readonly nam
                   size="sm"
                   intent="subtle"
                   disabled={rolling.waiting}
-                  onClick={() => rollback({ projectId, name, version: version.version })}
+                  onClick={() => rollback({ environmentId, name, version: version.version })}
                 >
                   Make v{version.version} current
                 </Button>
@@ -150,17 +156,17 @@ const History = ({ projectId, name }: { readonly projectId: string; readonly nam
  * it; either is logged. Nothing keeps it: Hide, leaving the page and locking the vault drop it.
  */
 const SecretValue = ({
-  project,
+  environment,
   name,
   version,
 }: {
-  readonly project: Project;
+  readonly environment: Environment;
   readonly name: string;
   readonly version: number;
 }) => {
   const owner = useOwner();
   // The version is part of the slot, so a replaced value never shows under the new version.
-  const slot = `${project.id}/${name}/${version}`;
+  const slot = `${environment.id}/${name}/${version}`;
   const [shown, reveal] = useAtom(revealSecretAtom(`${slot}:show`));
   const [copying, open] = useAtom(revealSecretAtom(`${slot}:copy`), { mode: 'promiseExit' });
   // A plain setter for resets: in `promiseExit` mode a reset would wait on a result that never comes.
@@ -174,7 +180,7 @@ const SecretValue = ({
     [reveal, forgetCopy],
   );
   const value = AsyncResult.isSuccess(shown) ? shown.value : null;
-  const request = { owner, projectId: project.id, name, version };
+  const request = { owner, environmentId: environment.id, name, version };
   const revealLabel = value === null ? 'Reveal' : 'Hide';
 
   const copy = async () => {
@@ -239,7 +245,13 @@ const SecretValue = ({
   );
 };
 
-const SecretRow = ({ project, secret }: { readonly project: Project; readonly secret: Secret }) => {
+const SecretRow = ({
+  environment,
+  secret,
+}: {
+  readonly environment: Environment;
+  readonly secret: Secret;
+}) => {
   const [panel, setPanel] = useState<'replace' | 'history' | null>(null);
   const [removing, remove] = useAtom(removeSecretAtom, { mode: 'promiseExit' });
   const [isConfirming, setIsConfirming] = useState(false);
@@ -288,7 +300,7 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
             isPending={removing.waiting}
             error={failureMessage(removing)}
             onConfirm={async () => {
-              const exit = await remove({ projectId: project.id, name: secret.name });
+              const exit = await remove({ environmentId: environment.id, name: secret.name });
               if (exit._tag === 'Success') setIsConfirming(false);
             }}
           >
@@ -300,14 +312,14 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
         </RowActions>
       </div>
       {secret.currentVersion !== null && (
-        <SecretValue project={project} name={secret.name} version={secret.currentVersion} />
+        <SecretValue environment={environment} name={secret.name} version={secret.currentVersion} />
       )}
       {panel !== null && (
         <div className="mt-3 border-line border-t pt-3">
           {panel === 'replace' ? (
-            <ValueForm project={project} name={secret.name} onDone={() => setPanel(null)} />
+            <ValueForm environment={environment} name={secret.name} onDone={() => setPanel(null)} />
           ) : (
-            <History projectId={project.id} name={secret.name} />
+            <History environmentId={environment.id} name={secret.name} />
           )}
         </div>
       )}
@@ -315,15 +327,15 @@ const SecretRow = ({ project, secret }: { readonly project: Project; readonly se
   );
 };
 
-const Secrets = ({ project }: { readonly project: Project }) => {
-  const result = useAtomValue(secretsAtom(project.id));
+const Secrets = ({ environment }: { readonly environment: Environment }) => {
+  const result = useAtomValue(secretsAtom(environment.id));
   // A deleted secret is in the Bin, not here.
   const secrets = latest(result)?.filter(secret => secret.currentVersion !== null) ?? null;
   const [isAdding, setIsAdding] = useState(false);
   return (
     <Section
       title="Secrets"
-      lede="Each value is sealed to the project’s key and masked here. Reveal and Copy open it in this browser, and Activity records each time."
+      lede="Each value is sealed to the environment’s key and masked here. Reveal and Copy open it in this browser, and Activity records each time."
       action={
         !isAdding && (
           <Button intent="primary" onClick={() => setIsAdding(true)}>
@@ -334,7 +346,7 @@ const Secrets = ({ project }: { readonly project: Project }) => {
     >
       {isAdding && (
         <div className="mb-4 rounded-panel border border-line bg-surface p-4">
-          <ValueForm project={project} onDone={() => setIsAdding(false)} />
+          <ValueForm environment={environment} onDone={() => setIsAdding(false)} />
         </div>
       )}
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
@@ -344,7 +356,7 @@ const Secrets = ({ project }: { readonly project: Project }) => {
           <p>
             Add one here, or from a service account that can write here, with the value on stdin:
           </p>
-          <CommandLine>{`baymutt set ${project.name} NAME < file`}</CommandLine>
+          <CommandLine>{`baymutt set ${environment.name} NAME < file`}</CommandLine>
           <p>
             For a value only you can fetch, an agent runs <Code>baymutt request</Code> and you paste
             it from the link it prints, or from Requests.
@@ -356,7 +368,7 @@ const Secrets = ({ project }: { readonly project: Project }) => {
           {secrets.map(secret => (
             <SecretRow
               key={`${secret.name}:${secret.updatedAt}`}
-              project={project}
+              environment={environment}
               secret={secret}
             />
           ))}
@@ -366,7 +378,13 @@ const Secrets = ({ project }: { readonly project: Project }) => {
   );
 };
 
-const GrantRow = ({ project, grant }: { readonly project: Project; readonly grant: Grant }) => {
+const GrantRow = ({
+  environment,
+  grant,
+}: {
+  readonly environment: Environment;
+  readonly grant: Grant;
+}) => {
   const [removing, remove] = useAtom(removeGrantAtom);
   return (
     <Row>
@@ -376,18 +394,18 @@ const GrantRow = ({ project, grant }: { readonly project: Project; readonly gran
           <p className="mt-0.5 text-sm text-muted">
             can {grantWords(grant)}
             {isLogin(grant)
-              ? ' · a CLI login, which holds every project'
+              ? ' · a CLI login, which holds every environment'
               : ' · made by a login; its access changes under Service accounts'}
           </p>
         </div>
-        {/* A login holds every project: revoking it, under Service accounts, is the way to end that. */}
+        {/* A login holds every environment: revoking it, under Service accounts, is the way to end that. */}
         {!isLogin(grant) && (
           <RowActions>
             <Button
               size="sm"
               intent="subtleDanger"
               disabled={removing.waiting}
-              onClick={() => remove({ id: project.id, credentialId: grant.credentialId })}
+              onClick={() => remove({ id: environment.id, credentialId: grant.credentialId })}
             >
               {removing.waiting ? 'Removing…' : 'Remove'}
             </Button>
@@ -399,8 +417,8 @@ const GrantRow = ({ project, grant }: { readonly project: Project; readonly gran
   );
 };
 
-const Access = ({ project }: { readonly project: Project }) => {
-  const grants = latest(useAtomValue(grantsAtom(project.id)));
+const Access = ({ environment }: { readonly environment: Environment }) => {
+  const grants = latest(useAtomValue(grantsAtom(environment.id)));
   return (
     <Section
       title="Who can reach it"
@@ -411,14 +429,14 @@ const Access = ({ project }: { readonly project: Project }) => {
         <Empty title="Only you, so far">
           <p>
             Run <Code>baymutt login</Code> and approve it here: a login reads and writes every
-            project.
+            environment.
           </p>
         </Empty>
       )}
       {grants !== null && grants.length > 0 && (
         <Rows>
           {grants.map(grant => (
-            <GrantRow key={grant.credentialId} project={project} grant={grant} />
+            <GrantRow key={grant.credentialId} environment={environment} grant={grant} />
           ))}
         </Rows>
       )}
@@ -426,9 +444,9 @@ const Access = ({ project }: { readonly project: Project }) => {
   );
 };
 
-const DeleteProject = ({ project }: { readonly project: Project }) => {
+const DeleteEnvironment = ({ environment }: { readonly environment: Environment }) => {
   const navigate = useNavigate();
-  const [deleting, remove] = useAtom(deleteProjectAtom, { mode: 'promiseExit' });
+  const [deleting, remove] = useAtom(deleteEnvironmentAtom, { mode: 'promiseExit' });
   return (
     <Section
       title="Delete"
@@ -436,17 +454,17 @@ const DeleteProject = ({ project }: { readonly project: Project }) => {
       className="border-line border-t pt-8"
       action={
         <Confirm
-          trigger={<Button intent="danger">Delete project</Button>}
-          title={`Delete ${project.name}?`}
-          keepLabel="Keep project"
-          confirmLabel="Delete project"
+          trigger={<Button intent="danger">Delete environment</Button>}
+          title={`Delete ${environment.name}?`}
+          keepLabel="Keep environment"
+          confirmLabel="Delete environment"
           pendingLabel="Deleting…"
           isDangerous
           isPending={deleting.waiting}
           error={failureMessage(deleting)}
           onConfirm={async () => {
-            const exit = await remove(project.id);
-            if (exit._tag === 'Success') await navigate({ to: '/projects' });
+            const exit = await remove(environment.id);
+            if (exit._tag === 'Success') await navigate({ to: '/environments' });
           }}
         >
           <p>
@@ -459,16 +477,16 @@ const DeleteProject = ({ project }: { readonly project: Project }) => {
   );
 };
 
-export const ProjectPage = ({ id }: { readonly id: string }) => {
-  const result = useAtomValue(projectAtom(id));
-  const project = latest(result);
-  if (project === null) {
+export const EnvironmentPage = ({ id }: { readonly id: string }) => {
+  const result = useAtomValue(environmentAtom(id));
+  const environment = latest(result);
+  if (environment === null) {
     return failureMessage(result) ? (
       <>
         <Notice>{failureMessage(result)}</Notice>
         <p className="mt-4">
-          <Link to="/projects" className="underline">
-            Back to all projects
+          <Link to="/environments" className="underline">
+            Back to all environments
           </Link>
         </p>
       </>
@@ -479,19 +497,19 @@ export const ProjectPage = ({ id }: { readonly id: string }) => {
   return (
     <>
       <Link
-        to="/projects"
+        to="/environments"
         className="-ml-1 mb-3 inline-flex items-center gap-1 rounded-control px-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-foreground"
       >
         <CaretLeftIcon aria-hidden="true" className="size-3.5" />
-        Projects
+        Environments
       </Link>
       <PageHeader
-        title={<Code className="text-xl font-[650] tracking-tight">{project.name}</Code>}
-        lede={`Made by ${project.createdBy.name} on ${exactTime(project.createdAt)}.`}
+        title={<Code className="text-xl font-[650] tracking-tight">{environment.name}</Code>}
+        lede={`Made by ${environment.createdBy.name} on ${exactTime(environment.createdAt)}.`}
       />
-      <Secrets project={project} />
-      <Access project={project} />
-      <DeleteProject project={project} />
+      <Secrets environment={environment} />
+      <Access environment={environment} />
+      <DeleteEnvironment environment={environment} />
     </>
   );
 };

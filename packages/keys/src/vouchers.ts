@@ -14,7 +14,7 @@
  * The owner's browser trusts the login through the vault's endorsement, so it takes `keyToOwner`
  * from it; the login takes `keyToMaker` from itself. The service account already trusts its maker
  * (its key string names it), so it takes the account's key from `accountKey`, and with it the
- * owner's proof of a project's key. A login writes them only with an account key it learned at
+ * owner's proof of an environment's key. A login writes them only with an account key it learned at
  * pairing, never one the store served.
  */
 

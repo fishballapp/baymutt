@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "baymutt's key schedule over @internal/zk-vault: the owner's vault, service account keys, project keys and their wraps, sealed values, the recovery key and pairing. Plain TypeScript on WebCrypto; runs in the browser, Node and a Worker.",
+  "description": "baymutt's key schedule over @internal/zk-vault: the owner's vault, service account keys, environment keys and their wraps, sealed values, the recovery key and pairing. Plain TypeScript on WebCrypto; runs in the browser, Node and a Worker.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

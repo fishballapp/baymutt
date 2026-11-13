@@ -12,38 +12,38 @@ import * as Option from 'effect/Option';
 import * as Schedule from 'effect/Schedule';
 import * as Stdio from 'effect/Stdio';
 import * as Stream from 'effect/Stream';
+import { resolveEnvironment, trustedKey } from '../environments.ts';
 import { crypto_, report, usage } from '../errors.ts';
 import { print, say } from '../output.ts';
-import { resolveProject, trustedKey } from '../projects.ts';
 import { describeWrite, writeValue } from '../secrets.ts';
 import { ServiceAccount } from '../service-account.ts';
 import { Settings } from '../settings.ts';
-import { projectArgument } from './projects.ts';
+import { environmentArgument } from './environments.ts';
 
 const nameArgument = Argument.String('name').pipe(
   Argument.withDescription(
-    'The secret’s name: an environment variable name, such as STRIPE_SECRET_KEY',
+    'The secret’s name: letters, digits and underscores, not starting with a digit, such as STRIPE_SECRET_KEY',
   ),
   Argument.withSchema(SecretNameSchema),
 );
 
 const listCommand = Command.make(
   'secrets',
-  { project: projectArgument },
-  Effect.fn('secrets.list')(function* ({ project }) {
+  { environment: environmentArgument },
+  Effect.fn('secrets.list')(function* ({ environment }) {
     const { api } = yield* ServiceAccount;
-    const { id, name } = yield* resolveProject(project);
-    const { secrets } = yield* api.secrets.list({ params: { projectId: id } });
+    const { id, name } = yield* resolveEnvironment(environment);
+    const { secrets } = yield* api.secrets.list({ params: { environmentId: id } });
     // A deleted one is in the bin, listed by `baymutt bin list`.
     yield* print({
-      project: name,
+      environment: name,
       secrets: secrets.filter(secret => secret.currentVersion !== null),
     });
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'A project’s secrets: names, versions and sizes. Never a value. Deleted ones are in `baymutt bin list`',
+    'An environment’s secrets: names, versions and sizes. Never a value. Deleted ones are in `baymutt bin list`',
   ),
 );
 
@@ -51,7 +51,7 @@ const stdinValue = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   if (yield* stdio.stdinIsTerminal) {
     return yield* usage(
-      'The value comes from stdin, never an argument: `baymutt set <project> <NAME> < file`, or pipe it. To have the owner paste it, use `baymutt request`.',
+      'The value comes from stdin, never an argument: `baymutt set <environment> <NAME> < file`, or pipe it. To have the owner paste it, use `baymutt request`.',
     );
   }
   const value = yield* stdio.stdin.pipe(Stream.decodeText(), Stream.mkString, Effect.orDie);
@@ -62,7 +62,7 @@ const stdinValue = Effect.gen(function* () {
 const setCommand = Command.make(
   'set',
   {
-    project: projectArgument,
+    environment: environmentArgument,
     name: nameArgument,
     keepNewline: Flag.Boolean('keep-newline').pipe(
       Flag.withDescription(
@@ -71,12 +71,12 @@ const setCommand = Command.make(
       Flag.withDefault(false),
     ),
   },
-  Effect.fn('secrets.set')(function* ({ project, name, keepNewline }) {
-    const resolved = yield* resolveProject(project);
+  Effect.fn('secrets.set')(function* ({ environment, name, keepNewline }) {
+    const resolved = yield* resolveEnvironment(environment);
     const piped = yield* stdinValue;
     const value = keepNewline ? piped : piped.replace(/\r?\n$/, '');
     yield* print(
-      describeWrite(resolved, yield* writeValue({ project: resolved, name, value }), value),
+      describeWrite(resolved, yield* writeValue({ environment: resolved, name, value }), value),
     );
   }, report),
 ).pipe(
@@ -95,7 +95,7 @@ const FORMATS = {
 const generateCommand = Command.make(
   'generate',
   {
-    project: projectArgument,
+    environment: environmentArgument,
     name: nameArgument,
     bytes: Flag.Int('bytes').pipe(
       Flag.withDescription('How many random bytes (16 to 1024)'),
@@ -106,12 +106,12 @@ const generateCommand = Command.make(
       Flag.withDefault('base64url'),
     ),
   },
-  Effect.fn('secrets.generate')(function* ({ project, name, bytes, format }) {
+  Effect.fn('secrets.generate')(function* ({ environment, name, bytes, format }) {
     if (bytes < 16 || bytes > 1024) return yield* usage('--bytes is between 16 and 1024.');
-    const resolved = yield* resolveProject(project);
+    const resolved = yield* resolveEnvironment(environment);
     const value = FORMATS[format](crypto.getRandomValues(new Uint8Array(bytes)));
     yield* print(
-      describeWrite(resolved, yield* writeValue({ project: resolved, name, value }), value),
+      describeWrite(resolved, yield* writeValue({ environment: resolved, name, value }), value),
     );
   }, report),
 ).pipe(
@@ -123,11 +123,11 @@ const generateCommand = Command.make(
 
 const deleteCommand = Command.make(
   'delete',
-  { project: projectArgument, name: nameArgument },
-  Effect.fn('secrets.delete')(function* ({ project, name }) {
+  { environment: environmentArgument, name: nameArgument },
+  Effect.fn('secrets.delete')(function* ({ environment, name }) {
     const { api } = yield* ServiceAccount;
-    const { id } = yield* resolveProject(project);
-    yield* print(yield* api.secrets.remove({ params: { projectId: id, name } }));
+    const { id } = yield* resolveEnvironment(environment);
+    yield* print(yield* api.secrets.remove({ params: { environmentId: id, name } }));
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
@@ -139,18 +139,21 @@ const deleteCommand = Command.make(
 const rollbackCommand = Command.make(
   'rollback',
   {
-    project: projectArgument,
+    environment: environmentArgument,
     name: nameArgument,
     to: Flag.Int('to').pipe(
       Flag.withDescription('The version to make current (see `baymutt history`)'),
       Flag.withSchema(VersionSchema),
     ),
   },
-  Effect.fn('secrets.rollback')(function* ({ project, name, to }) {
+  Effect.fn('secrets.rollback')(function* ({ environment, name, to }) {
     const { api } = yield* ServiceAccount;
-    const { id } = yield* resolveProject(project);
+    const { id } = yield* resolveEnvironment(environment);
     yield* print(
-      yield* api.secrets.rollback({ params: { projectId: id, name }, payload: { version: to } }),
+      yield* api.secrets.rollback({
+        params: { environmentId: id, name },
+        payload: { version: to },
+      }),
     );
   }, report),
 ).pipe(
@@ -160,11 +163,11 @@ const rollbackCommand = Command.make(
 
 const historyCommand = Command.make(
   'history',
-  { project: projectArgument, name: nameArgument },
-  Effect.fn('secrets.history')(function* ({ project, name }) {
+  { environment: environmentArgument, name: nameArgument },
+  Effect.fn('secrets.history')(function* ({ environment, name }) {
     const { api } = yield* ServiceAccount;
-    const { id } = yield* resolveProject(project);
-    yield* print(yield* api.secrets.versions({ params: { projectId: id, name } }));
+    const { id } = yield* resolveEnvironment(environment);
+    yield* print(yield* api.secrets.versions({ params: { environmentId: id, name } }));
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
@@ -178,9 +181,9 @@ export const schemaNames = (schema: string): ReadonlyArray<string> =>
 const checkCommand = Command.make(
   'check',
   {
-    project: projectArgument,
+    environment: environmentArgument,
     schema: Flag.String('schema').pipe(
-      Flag.withDescription('The schema file whose names the project should hold'),
+      Flag.withDescription('The schema file whose names the environment should hold'),
       Flag.withDefault('.env.schema'),
     ),
     ignore: Flag.String('ignore').pipe(
@@ -188,10 +191,10 @@ const checkCommand = Command.make(
       Flag.atLeast(0),
     ),
   },
-  Effect.fn('secrets.check')(function* ({ project, schema, ignore }) {
+  Effect.fn('secrets.check')(function* ({ environment, schema, ignore }) {
     const fs = yield* FileSystem.FileSystem;
     const { api } = yield* ServiceAccount;
-    const { id, name } = yield* resolveProject(project);
+    const { id, name } = yield* resolveEnvironment(environment);
     const declared = new Set(
       schemaNames(
         yield* fs
@@ -205,13 +208,13 @@ const checkCommand = Command.make(
           ),
       ),
     ).difference(new Set(ignore));
-    const { secrets } = yield* api.secrets.list({ params: { projectId: id } });
+    const { secrets } = yield* api.secrets.list({ params: { environmentId: id } });
     const stored = new Set(
       secrets.filter(secret => secret.currentVersion !== null).map(secret => secret.name),
     );
     const missing = [...declared.difference(stored)].toSorted();
     yield* print({
-      project: name,
+      environment: name,
       schema,
       present: [...declared.intersection(stored)].toSorted(),
       missing,
@@ -227,14 +230,14 @@ const checkCommand = Command.make(
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Compare a .env.schema with what a project holds. Exits 9 when a declared name is missing',
+    'Compare a .env.schema with what an environment holds. Exits 9 when a declared name is missing',
   ),
 );
 
 const requestCommand = Command.make(
   'request',
   {
-    project: projectArgument,
+    environment: environmentArgument,
     name: nameArgument,
     reason: Flag.String('reason').pipe(
       Flag.withDescription('Why it is needed, for the owner to read'),
@@ -245,10 +248,10 @@ const requestCommand = Command.make(
       ),
     ),
   },
-  Effect.fn('secrets.request')(function* ({ project, name, reason, where }) {
+  Effect.fn('secrets.request')(function* ({ environment, name, reason, where }) {
     const { api } = yield* ServiceAccount;
     const { origin } = yield* Settings;
-    const resolved = yield* resolveProject(project);
+    const resolved = yield* resolveEnvironment(environment);
     const id = crypto.randomUUID();
     const token = randomToken();
     const { publicKey } = yield* trustedKey(resolved);
@@ -256,10 +259,10 @@ const requestCommand = Command.make(
       Promise.all([tokenHash(token), publicKeyFingerprint(publicKey)]),
     );
     const request = yield* api.pasteRequests.create({
-      payload: { id, projectId: resolved.id, name, reason, hint: where, tokenHash: hash },
+      payload: { id, environmentId: resolved.id, name, reason, hint: where, tokenHash: hash },
     });
     // The fragment never reaches the store: the token proves the link, and the fingerprint lets
-    // the page refuse a project key the store swapped.
+    // the page refuse an environment key the store swapped.
     const url = `${origin}/paste/${id}#${token}.${fingerprint}`;
     yield* say(
       `Ask the owner to open this link and paste ${name}. It works once, for 15 minutes; after that the request is in the dashboard.`,
@@ -269,7 +272,7 @@ const requestCommand = Command.make(
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Ask the owner to paste a value only they can fetch. Prints a single-use link for one project and name',
+    'Ask the owner to paste a value only they can fetch. Prints a single-use link for one environment and name',
   ),
 );
 
@@ -309,7 +312,7 @@ const waitCommand = Command.make(
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Wait until the owner has answered a paste request (pasted, or dismissed it). Exits 9 on timeout. Check the value arrived with `baymutt secrets <project>`',
+    'Wait until the owner has answered a paste request (pasted, or dismissed it). Exits 9 on timeout. Check the value arrived with `baymutt secrets <environment>`',
   ),
 );
 

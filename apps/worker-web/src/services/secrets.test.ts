@@ -6,23 +6,23 @@ import { keyLike, ORIGIN, sealedLike } from '../test-support.ts';
 
 const setup = async () => {
   const world = await storeWorld();
-  const projectId = await world.project('app/production');
+  const environmentId = await world.environment('app/production');
   const reader = await world.pair('reader');
   const writer = await world.pair('writer');
-  await world.grant(projectId, reader.id, { read: true });
-  await world.grant(projectId, writer.id, { write: true });
-  return { ...world, projectId, reader, writer };
+  await world.grant(environmentId, reader.id, { read: true });
+  await world.grant(environmentId, writer.id, { write: true });
+  return { ...world, environmentId, reader, writer };
 };
 
 describe('writing', () => {
   it('needs a write grant and no key, and a writer can never load', async () => {
-    const { w, projectId, reader, writer, write } = await setup();
+    const { w, environmentId, reader, writer, write } = await setup();
 
-    expect(await write(projectId, 'API_KEY', 1, reader.headers)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 1, reader.headers)).toMatchObject({
       status: 403,
       body: { code: 'NoAccessError', need: 'write' },
     });
-    expect(await write(projectId, 'API_KEY', 1, writer.headers)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 1, writer.headers)).toMatchObject({
       status: 200,
       body: {
         name: 'API_KEY',
@@ -32,27 +32,31 @@ describe('writing', () => {
         updatedBy: { kind: 'machine', name: 'writer' },
       },
     });
-    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, writer.headers)).toMatchObject({
+    expect(
+      await call(w, 'GET', `/environments/${environmentId}/bundle`, writer.headers),
+    ).toMatchObject({
       status: 403,
       body: { code: 'NoAccessError', need: 'read' },
     });
     // Either grant lists names and versions, which carry no value.
-    expect(await call(w, 'GET', `/projects/${projectId}/secrets`, writer.headers)).toMatchObject({
+    expect(
+      await call(w, 'GET', `/environments/${environmentId}/secrets`, writer.headers),
+    ).toMatchObject({
       status: 200,
       body: { secrets: [{ name: 'API_KEY', currentVersion: 1 }] },
     });
   });
 
   it('adds a version each time and keeps every one', async () => {
-    const { w, owner, projectId, writer, write } = await setup();
-    await write(projectId, 'API_KEY', 1, writer.headers);
+    const { w, owner, environmentId, writer, write } = await setup();
+    await write(environmentId, 'API_KEY', 1, writer.headers);
 
-    expect(await write(projectId, 'API_KEY', 2)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 2)).toMatchObject({
       status: 200,
       body: { currentVersion: 2, latestVersion: 2, updatedBy: { kind: 'owner' } },
     });
     expect(
-      await call(w, 'GET', `/projects/${projectId}/secrets/API_KEY/versions`, owner),
+      await call(w, 'GET', `/environments/${environmentId}/secrets/API_KEY/versions`, owner),
     ).toMatchObject({
       status: 200,
       body: {
@@ -71,15 +75,15 @@ describe('writing', () => {
   });
 
   it('refuses a version that is not one above the latest, saying which slot to seal for', async () => {
-    const { w, projectId, write } = await setup();
+    const { w, environmentId, write } = await setup();
 
-    expect(await write(projectId, 'API_KEY', 2)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 2)).toMatchObject({
       status: 409,
       body: { code: 'VersionConflictError', latestVersion: 0, keyVersion: 1 },
     });
-    await write(projectId, 'API_KEY', 1);
+    await write(environmentId, 'API_KEY', 1);
     for (const version of [1, 3]) {
-      expect(await write(projectId, 'API_KEY', version)).toMatchObject({
+      expect(await write(environmentId, 'API_KEY', version)).toMatchObject({
         status: 409,
         body: { code: 'VersionConflictError', latestVersion: 1 },
       });
@@ -89,11 +93,11 @@ describe('writing', () => {
     });
   });
 
-  it('refuses a value sealed under a key version the project no longer has', async () => {
-    const { w, owner, projectId } = await setup();
+  it('refuses a value sealed under a key version the environment no longer has', async () => {
+    const { w, owner, environmentId } = await setup();
 
     expect(
-      await call(w, 'PUT', `/projects/${projectId}/secrets/API_KEY`, owner, {
+      await call(w, 'PUT', `/environments/${environmentId}/secrets/API_KEY`, owner, {
         version: 1,
         keyVersion: 2,
         ciphertext: sealedLike('x', 96),
@@ -102,8 +106,8 @@ describe('writing', () => {
   });
 
   it('gives one of two writers of the same version the slot and the other a conflict', async () => {
-    const { w, projectId, writer, write } = await setup();
-    await write(projectId, 'API_KEY', 1);
+    const { w, environmentId, writer, write } = await setup();
+    await write(environmentId, 'API_KEY', 1);
     // The other writer lands between this request's checks and its batch.
     w.beforeStatement(/INSERT INTO secret\b/, () => {
       w.sqlite.exec(
@@ -114,7 +118,7 @@ describe('writing', () => {
       );
     });
 
-    expect(await write(projectId, 'API_KEY', 2, writer.headers)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 2, writer.headers)).toMatchObject({
       status: 409,
       body: { code: 'VersionConflictError', latestVersion: 2 },
     });
@@ -128,18 +132,18 @@ describe('writing', () => {
     ).toEqual({ logged: 1 });
   });
 
-  it('refuses a name that is not an environment variable’s, and a value over the limit', async () => {
-    const { w, owner, projectId } = await setup();
+  it('refuses a name of the wrong shape, and a value over the limit', async () => {
+    const { w, owner, environmentId } = await setup();
 
     expect(
-      await call(w, 'PUT', `/projects/${projectId}/secrets/not-a-name`, owner, {
+      await call(w, 'PUT', `/environments/${environmentId}/secrets/not-a-name`, owner, {
         version: 1,
         keyVersion: 1,
         ciphertext: sealedLike('x'),
       }),
     ).toMatchObject({ status: 400, body: { code: 'InvalidRequestError' } });
     expect(
-      await call(w, 'PUT', `/projects/${projectId}/secrets/API_KEY`, owner, {
+      await call(w, 'PUT', `/environments/${environmentId}/secrets/API_KEY`, owner, {
         version: 1,
         keyVersion: 1,
         ciphertext: 'A'.repeat(87_468),
@@ -150,12 +154,12 @@ describe('writing', () => {
 
 describe('loading', () => {
   it('answers every current value as ciphertext with the caller’s own wrap', async () => {
-    const { w, owner, accountId, projectId, reader, write } = await setup();
-    await write(projectId, 'B_KEY', 1);
-    await write(projectId, 'A_KEY', 1);
-    await write(projectId, 'A_KEY', 2);
-    const project = {
-      id: projectId,
+    const { w, owner, accountId, environmentId, reader, write } = await setup();
+    await write(environmentId, 'B_KEY', 1);
+    await write(environmentId, 'A_KEY', 1);
+    await write(environmentId, 'A_KEY', 2);
+    const environment = {
+      id: environmentId,
       accountId,
       name: 'app/production',
       publicKey: keyLike('p'),
@@ -166,44 +170,50 @@ describe('loading', () => {
       { name: 'B_KEY', version: 1, keyVersion: 1, ciphertext: sealedLike('B_KEY-v1', 96) },
     ];
 
-    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, reader.headers)).toEqual({
+    expect(await call(w, 'GET', `/environments/${environmentId}/bundle`, reader.headers)).toEqual({
       status: 200,
-      body: { project, wrap: sealedLike('read-wrap'), readerId: reader.id, secrets },
+      body: { environment, wrap: sealedLike('read-wrap'), readerId: reader.id, secrets },
     });
     // Values load through a paired service account: the dashboard reveals one at a time instead.
-    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, owner)).toMatchObject({
+    expect(await call(w, 'GET', `/environments/${environmentId}/bundle`, owner)).toMatchObject({
       status: 403,
       body: { code: 'NoAccessError' },
     });
   });
 
-  it('stops for a project in the bin, which only the owner deletes', async () => {
-    const { w, owner, projectId, reader, writer, write } = await setup();
+  it('stops for an environment in the bin, which only the owner deletes', async () => {
+    const { w, owner, environmentId, reader, writer, write } = await setup();
 
-    expect(await call(w, 'DELETE', `/projects/${projectId}`, reader.headers)).toMatchObject({
-      status: 403,
-      body: { code: 'OwnerRequiredError' },
-    });
-    await ok(w, 'DELETE', `/projects/${projectId}`, owner);
+    expect(await call(w, 'DELETE', `/environments/${environmentId}`, reader.headers)).toMatchObject(
+      {
+        status: 403,
+        body: { code: 'OwnerRequiredError' },
+      },
+    );
+    await ok(w, 'DELETE', `/environments/${environmentId}`, owner);
 
-    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, reader.headers)).toMatchObject({
+    expect(
+      await call(w, 'GET', `/environments/${environmentId}/bundle`, reader.headers),
+    ).toMatchObject({
       status: 404,
     });
-    expect(await write(projectId, 'API_KEY', 1, writer.headers)).toMatchObject({ status: 404 });
-    expect(await call(w, 'GET', '/projects', owner)).toEqual({
+    expect(await write(environmentId, 'API_KEY', 1, writer.headers)).toMatchObject({ status: 404 });
+    expect(await call(w, 'GET', '/environments', owner)).toEqual({
       status: 200,
-      body: { projects: [] },
+      body: { environments: [] },
     });
   });
 });
 
 describe('revealing in the dashboard', () => {
   it('answers the owner one version’s ciphertext with the vault open, and logs it', async () => {
-    const { w, owner, locked, projectId, reader, write } = await setup();
-    await write(projectId, 'API_KEY', 1);
-    await write(projectId, 'API_KEY', 2);
+    const { w, owner, locked, environmentId, reader, write } = await setup();
+    await write(environmentId, 'API_KEY', 1);
+    await write(environmentId, 'API_KEY', 2);
     const reveal = (version: number, headers = owner) =>
-      call(w, 'POST', `/projects/${projectId}/secrets/API_KEY/reveal`, headers, { version });
+      call(w, 'POST', `/environments/${environmentId}/secrets/API_KEY/reveal`, headers, {
+        version,
+      });
 
     expect(await reveal(1)).toEqual({
       status: 200,
@@ -231,24 +241,24 @@ describe('revealing in the dashboard', () => {
 
 describe('deleting and rolling back', () => {
   it('a delete hides the value from a load and keeps its versions; a rollback brings one back', async () => {
-    const { w, owner, projectId, reader, writer, write } = await setup();
-    await write(projectId, 'API_KEY', 1);
-    await write(projectId, 'API_KEY', 2);
+    const { w, owner, environmentId, reader, writer, write } = await setup();
+    await write(environmentId, 'API_KEY', 1);
+    await write(environmentId, 'API_KEY', 2);
     const loaded = async () =>
       (
         await ok<{ secrets: { version: number }[] }>(
           w,
           'GET',
-          `/projects/${projectId}/bundle`,
+          `/environments/${environmentId}/bundle`,
           reader.headers,
         )
       ).secrets.map(({ version }) => version);
 
     expect(
-      await call(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, reader.headers),
+      await call(w, 'DELETE', `/environments/${environmentId}/secrets/API_KEY`, reader.headers),
     ).toMatchObject({ status: 403, body: { code: 'NoAccessError' } });
     expect(
-      await call(w, 'DELETE', `/projects/${projectId}/secrets/API_KEY`, writer.headers),
+      await call(w, 'DELETE', `/environments/${environmentId}/secrets/API_KEY`, writer.headers),
     ).toMatchObject({ status: 200, body: { currentVersion: null, latestVersion: 2, size: null } });
     expect(await loaded()).toEqual([]);
     expect(w.sqlite.prepare('SELECT COUNT(*) AS versions FROM secret_version').get()).toEqual({
@@ -256,34 +266,46 @@ describe('deleting and rolling back', () => {
     });
 
     expect(
-      await call(w, 'POST', `/projects/${projectId}/secrets/API_KEY/rollback`, writer.headers, {
-        version: 1,
-      }),
+      await call(
+        w,
+        'POST',
+        `/environments/${environmentId}/secrets/API_KEY/rollback`,
+        writer.headers,
+        {
+          version: 1,
+        },
+      ),
     ).toMatchObject({ status: 200, body: { currentVersion: 1, latestVersion: 2 } });
     expect(await loaded()).toEqual([1]);
     // The next write is still one above the highest ever written, never over a kept version.
-    expect(await write(projectId, 'API_KEY', 3)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 3)).toMatchObject({
       status: 200,
       body: { currentVersion: 3, latestVersion: 3 },
     });
     expect(
-      await call(w, 'POST', `/projects/${projectId}/secrets/API_KEY/rollback`, owner, {
+      await call(w, 'POST', `/environments/${environmentId}/secrets/API_KEY/rollback`, owner, {
         version: 9,
       }),
     ).toMatchObject({ status: 404 });
-    expect(await call(w, 'DELETE', `/projects/${projectId}/secrets/MISSING`, owner)).toMatchObject({
+    expect(
+      await call(w, 'DELETE', `/environments/${environmentId}/secrets/MISSING`, owner),
+    ).toMatchObject({
       status: 404,
     });
   });
 });
 
 describe('a paste request', () => {
-  const request = async ({ w }: StoreWorld, projectId: string, headers: Record<string, string>) => {
+  const request = async (
+    { w }: StoreWorld,
+    environmentId: string,
+    headers: Record<string, string>,
+  ) => {
     const id = crypto.randomUUID();
     const token = keyLike('t');
     const answer = await call(w, 'POST', '/paste-requests', headers, {
       id,
-      projectId,
+      environmentId,
       name: 'STRIPE_SECRET_KEY',
       reason: 'to take payments',
       hint: 'Stripe dashboard, Developers, API keys',
@@ -299,13 +321,13 @@ describe('a paste request', () => {
 
   it('lets whoever holds the link seal one value into its one slot, once', async () => {
     const world = await setup();
-    const { w, owner, accountId, projectId, reader, writer } = world;
+    const { w, owner, accountId, environmentId, reader, writer } = world;
 
-    expect((await request(world, projectId, reader.headers)).answer).toMatchObject({
+    expect((await request(world, environmentId, reader.headers)).answer).toMatchObject({
       status: 403,
       body: { code: 'NoAccessError', need: 'write' },
     });
-    const { id, answer, link } = await request(world, projectId, writer.headers);
+    const { id, answer, link } = await request(world, environmentId, writer.headers);
 
     expect(answer).toMatchObject({ status: 201, body: { status: 'pending' } });
     expect(await call(w, 'GET', '/paste-requests', owner)).toMatchObject({
@@ -315,10 +337,10 @@ describe('a paste request', () => {
       status: 200,
       body: {
         accountId,
-        projectPublicKey: keyLike('p'),
+        environmentPublicKey: keyLike('p'),
         keyVersion: 1,
         nextVersion: 1,
-        request: { projectName: 'app/production', name: 'STRIPE_SECRET_KEY' },
+        request: { environmentName: 'app/production', name: 'STRIPE_SECRET_KEY' },
       },
     });
 
@@ -363,8 +385,8 @@ describe('a paste request', () => {
 
   it('answers to no other token, and to nobody once the link has expired, except the owner', async () => {
     const world = await setup();
-    const { w, owner, projectId, reader, writer } = world;
-    const { id, link } = await request(world, projectId, writer.headers);
+    const { w, owner, environmentId, reader, writer } = world;
+    const { id, link } = await request(world, environmentId, writer.headers);
 
     for (const headers of [
       { ...link, 'x-baymutt-paste-token': keyLike('x') },
@@ -392,9 +414,9 @@ describe('a paste request', () => {
 
   it('stays unspent when the pasted value loses its slot to another write', async () => {
     const world = await setup();
-    const { w, projectId, writer, write } = world;
-    const { id, link } = await request(world, projectId, writer.headers);
-    await write(projectId, 'STRIPE_SECRET_KEY', 1);
+    const { w, environmentId, writer, write } = world;
+    const { id, link } = await request(world, environmentId, writer.headers);
+    await write(environmentId, 'STRIPE_SECRET_KEY', 1);
 
     expect(await call(w, 'POST', `/paste/${id}`, link, pasted(1))).toMatchObject({
       status: 409,
@@ -409,9 +431,9 @@ describe('a paste request', () => {
 
   it('is one per name: asking again replaces the earlier one, and a paste closes the rest', async () => {
     const world = await setup();
-    const { w, owner, projectId, writer } = world;
-    const first = await request(world, projectId, writer.headers);
-    const second = await request(world, projectId, writer.headers);
+    const { w, owner, environmentId, writer } = world;
+    const first = await request(world, environmentId, writer.headers);
+    const second = await request(world, environmentId, writer.headers);
     const pending = async () =>
       (await ok<{ requests: { id: string }[] }>(w, 'GET', '/paste-requests', owner)).requests.map(
         ({ id }) => id,
@@ -422,7 +444,7 @@ describe('a paste request', () => {
     expect(
       await call(w, 'POST', '/paste-requests', writer.headers, {
         id: first.id,
-        projectId,
+        environmentId,
         name: 'STRIPE_SECRET_KEY',
         reason: 'to take payments',
         hint: 'Stripe dashboard, Developers, API keys',
@@ -446,8 +468,8 @@ describe('a paste request', () => {
 
   it('is cancelled by its maker or the owner, and not by another service account', async () => {
     const world = await setup();
-    const { w, projectId, reader, writer } = world;
-    const { id, link } = await request(world, projectId, writer.headers);
+    const { w, environmentId, reader, writer } = world;
+    const { id, link } = await request(world, environmentId, writer.headers);
 
     expect(await call(w, 'DELETE', `/paste-requests/${id}`, reader.headers)).toMatchObject({
       status: 404,

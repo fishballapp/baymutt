@@ -4,7 +4,7 @@
  *
  * ```
  * seed       = random 256 bits                                  → the service account's one secret
- * privateKey = HKDF(seed, info "baymutt-machine-key")           → X25519; project keys are wrapped to its public half
+ * privateKey = HKDF(seed, info "baymutt-machine-key")           → X25519; environment keys are wrapped to its public half
  * bearer     = HKDF(seed, info "baymutt-machine-bearer")        → sent with each request; the store keeps SHA-256(bearer)
  * token      = "baymutt_key_<credentialId>_<seed>[_<issuer>]"   → what the keychain or a CI secret holds
  * ```
@@ -13,7 +13,7 @@
  * derive neither its private key nor, from the hash, its bearer.
  *
  * `issuer` is the public key of the service account that made this one. It is how a service account with no state
- * of its own (a CI job) knows whose word to take for a project's public key.
+ * of its own (a CI job) knows whose word to take for an environment's public key.
  */
 
 import {

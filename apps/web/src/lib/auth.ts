@@ -45,7 +45,7 @@ export class SignIn extends Context.Service<
     readonly sendLink: (link: {
       readonly email: string;
       /** Where the link lands once it has signed in. */
-      readonly landOn: '/projects' | '/recover';
+      readonly landOn: '/environments' | '/recover';
     }) => Effect.Effect<void, AuthError>;
     /** `authValue` is what the browser derives from the password; the password is never sent. */
     readonly withPassword: (login: {

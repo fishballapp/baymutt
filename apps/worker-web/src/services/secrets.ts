@@ -1,4 +1,4 @@
-// Owns `secret`, `secret_version` and `paste_request`: a project's values as ciphertext. A write
+// Owns `secret`, `secret_version` and `paste_request`: an environment's values as ciphertext. A write
 // adds a version and never changes one, a delete only clears the pointer to the current version
 // (the secret is then in the bin, until `Bin` removes it for good), and none of it can be read here.
 import {
@@ -56,9 +56,9 @@ const VersionRowSchema = Schema.Struct({
 const PasteRowSchema = Schema.Struct({
   id: Schema.String,
   accountId: Schema.String,
-  projectId: Schema.String,
-  projectName: Schema.String,
-  projectPublicKey: Schema.String,
+  environmentId: Schema.String,
+  environmentName: Schema.String,
+  environmentPublicKey: Schema.String,
   keyVersion: Schema.Finite,
   name: Schema.String,
   reason: Schema.String,
@@ -75,7 +75,7 @@ type PasteRow = typeof PasteRowSchema.Type;
 /** How long a paste link works. The request stays answerable from the dashboard after it. */
 const PASTE_LINK_LIFETIME_MS = 15 * 60_000;
 
-type Slot = { readonly projectId: string; readonly name: string };
+type Slot = { readonly environmentId: string; readonly name: string };
 type Write = Slot & {
   readonly version: number;
   readonly keyVersion: number;
@@ -86,8 +86,8 @@ type Caller = { readonly actor: ActorIdentity | null; readonly token: string | u
 
 const toPasteRequest = (row: PasteRow): PasteRequest => ({
   id: row.id,
-  projectId: row.projectId,
-  projectName: row.projectName,
+  environmentId: row.environmentId,
+  environmentName: row.environmentName,
   name: row.name,
   reason: row.reason,
   hint: row.hint,
@@ -102,12 +102,12 @@ export class Secrets extends Context.Service<
   {
     readonly list: (request: {
       readonly actor: ActorIdentity;
-      readonly projectId: string;
+      readonly environmentId: string;
     }) => Effect.Effect<ReadonlyArray<Secret>, NotFoundError | NoAccessError>;
-    /** Every current value's ciphertext and the caller's wrap of the project key. Logged. */
+    /** Every current value's ciphertext and the caller's wrap of the environment key. Logged. */
     readonly bundle: (request: {
       readonly actor: ActorIdentity;
-      readonly projectId: string;
+      readonly environmentId: string;
     }) => Effect.Effect<Bundle, NotFoundError | NoAccessError>;
     /** Adds `version`, which must be one above the latest, and makes it current. */
     readonly write: (request: {
@@ -177,9 +177,12 @@ export class Secrets extends Context.Service<
       const audit = yield* Audit;
 
       const secretRows = SqlSchema.findAll({
-        Request: Schema.Struct({ projectId: Schema.String, name: Schema.NullOr(Schema.String) }),
+        Request: Schema.Struct({
+          environmentId: Schema.String,
+          name: Schema.NullOr(Schema.String),
+        }),
         Result: SecretRowSchema,
-        execute: ({ projectId, name }) =>
+        execute: ({ environmentId, name }) =>
           sql`SELECT s.name, s.current_version, s.latest_version, s.updated_at, s.updated_by,
                 CASE WHEN s.current_version IS NULL
                   THEN COALESCE(s.purge_at, s.updated_at + ${BIN_MS}) END AS purge_at,
@@ -187,19 +190,19 @@ export class Secrets extends Context.Service<
                   WHERE v.project_id = s.project_id AND v.name = s.name
                     AND v.version = s.current_version) AS size
               FROM secret s
-              WHERE s.project_id = ${projectId} AND (${name} IS NULL OR s.name = ${name})
+              WHERE s.project_id = ${environmentId} AND (${name} IS NULL OR s.name = ${name})
               ORDER BY s.name`,
       });
 
       const versionRows = SqlSchema.findAll({
-        Request: Schema.Struct({ projectId: Schema.String, name: Schema.String }),
+        Request: Schema.Struct({ environmentId: Schema.String, name: Schema.String }),
         Result: VersionRowSchema,
-        execute: ({ projectId, name }) =>
+        execute: ({ environmentId, name }) =>
           sql`SELECT v.version, v.key_version, length(v.ciphertext) * 3 / 4 AS size, v.created_at,
                 v.created_by, v.version IS s.current_version AS is_current
               FROM secret_version v
               JOIN secret s ON s.project_id = v.project_id AND s.name = v.name
-              WHERE v.project_id = ${projectId} AND v.name = ${name}
+              WHERE v.project_id = ${environmentId} AND v.name = ${name}
               ORDER BY v.version DESC`,
       });
 
@@ -211,17 +214,17 @@ export class Secrets extends Context.Service<
           keyVersion: Schema.Finite,
           ciphertext: Schema.String,
         }),
-        execute: projectId =>
+        execute: environmentId =>
           sql`SELECT v.name, v.version, v.key_version, v.ciphertext
               FROM secret s
               JOIN secret_version v
                 ON v.project_id = s.project_id AND v.name = s.name AND v.version = s.current_version
-              WHERE s.project_id = ${projectId} ORDER BY v.name`,
+              WHERE s.project_id = ${environmentId} ORDER BY v.name`,
       });
 
       const sealedVersion = SqlSchema.findAll({
         Request: Schema.Struct({
-          projectId: Schema.String,
+          environmentId: Schema.String,
           name: Schema.String,
           version: Schema.Finite,
         }),
@@ -230,9 +233,9 @@ export class Secrets extends Context.Service<
           keyVersion: Schema.Finite,
           ciphertext: Schema.String,
         }),
-        execute: ({ projectId, name, version }) =>
+        execute: ({ environmentId, name, version }) =>
           sql`SELECT version, key_version, ciphertext FROM secret_version
-              WHERE project_id = ${projectId} AND name = ${name} AND version = ${version}`,
+              WHERE project_id = ${environmentId} AND name = ${name} AND version = ${version}`,
       });
 
       const pasteRows = SqlSchema.findAll({
@@ -243,8 +246,8 @@ export class Secrets extends Context.Service<
         }),
         Result: PasteRowSchema,
         execute: ({ accountId, createdBy, id }) =>
-          sql`SELECT r.id, r.account_id, r.project_id, p.name AS project_name,
-                p.public_key AS project_public_key, p.key_version, r.name, r.reason, r.hint,
+          sql`SELECT r.id, r.account_id, r.project_id AS environment_id, p.name AS environment_name,
+                p.public_key AS environment_public_key, p.key_version, r.name, r.reason, r.hint,
                 r.token_hash, r.status, r.created_by, r.created_at, r.link_expires_at,
                 (SELECT s.latest_version FROM secret s
                   WHERE s.project_id = r.project_id AND s.name = r.name) AS latest_version
@@ -257,11 +260,11 @@ export class Secrets extends Context.Service<
               ORDER BY r.created_at DESC LIMIT 200`,
       });
 
-      const secret = Effect.fnUntraced(function* ({ projectId, name }: Slot) {
-        const [row] = yield* secretRows({ projectId, name }).pipe(Effect.orDie);
+      const secret = Effect.fnUntraced(function* ({ environmentId, name }: Slot) {
+        const [row] = yield* secretRows({ environmentId, name }).pipe(Effect.orDie);
         if (row === undefined) {
           return yield* new NotFoundError({
-            message: `This project has no secret named ${name}. List them with \`baymutt secrets <project>\`.`,
+            message: `This environment has no secret named ${name}. List them with \`baymutt secrets <environment>\`.`,
           });
         }
         return row satisfies Secret;
@@ -269,21 +272,21 @@ export class Secrets extends Context.Service<
 
       /**
        * The three statements of a write: the secret's row moves to `version` only from the one
-       * below it and only under the project's current key, the version row is added only if that
+       * below it and only under the environment's current key, the version row is added only if that
        * took, and so is the log entry. `alsoIf` is one more condition on the first.
        */
       const writeStatements = Effect.fnUntraced(function* (
-        { projectId, name, version, keyVersion, ciphertext }: Write,
+        { environmentId, name, version, keyVersion, ciphertext }: Write,
         {
           accountId,
           actor,
-          projectName,
+          environmentName,
           action,
           alsoIf,
         }: {
           readonly accountId: string;
           readonly actor: Actor;
-          readonly projectName: string;
+          readonly environmentName: string;
           readonly action: 'secret.write' | 'paste.fulfil';
           readonly alsoIf?: Statement.Fragment;
         },
@@ -292,18 +295,18 @@ export class Secrets extends Context.Service<
         const by = encodeActor(actor);
         const writeId = crypto.randomUUID();
         const took = sql`EXISTS (SELECT 1 FROM secret
-          WHERE project_id = ${projectId} AND name = ${name} AND write_id = ${writeId})`;
+          WHERE project_id = ${environmentId} AND name = ${name} AND write_id = ${writeId})`;
         const statements = [
           sql`INSERT INTO secret
                 (project_id, name, account_id, current_version, latest_version, updated_at,
                  updated_by, write_id)
-              SELECT ${projectId}, ${name}, ${accountId}, ${version}, ${version}, ${now}, ${by},
+              SELECT ${environmentId}, ${name}, ${accountId}, ${version}, ${version}, ${now}, ${by},
                 ${writeId}
               WHERE EXISTS (SELECT 1 FROM project
-                            WHERE id = ${projectId} AND key_version = ${keyVersion}
+                            WHERE id = ${environmentId} AND key_version = ${keyVersion}
                               AND archived_at IS NULL)
                 AND (${version} = 1 OR EXISTS (SELECT 1 FROM secret
-                                              WHERE project_id = ${projectId} AND name = ${name}))
+                                              WHERE project_id = ${environmentId} AND name = ${name}))
                 AND ${alsoIf ?? sql`1 = 1`}
               ON CONFLICT (project_id, name) DO UPDATE
                 SET current_version = excluded.current_version,
@@ -315,11 +318,11 @@ export class Secrets extends Context.Service<
           sql`INSERT INTO secret_version
                 (project_id, name, version, account_id, key_version, ciphertext, created_by,
                  created_at)
-              SELECT ${projectId}, ${name}, ${version}, ${accountId}, ${keyVersion}, ${ciphertext},
+              SELECT ${environmentId}, ${name}, ${version}, ${accountId}, ${keyVersion}, ${ciphertext},
                 ${by}, ${now}
               WHERE ${took}`,
           yield* audit.entry(
-            { accountId, actor, action, projectId, projectName, secretName: name, version },
+            { accountId, actor, action, environmentId, environmentName, secretName: name, version },
             took,
           ),
         ] as const;
@@ -328,9 +331,9 @@ export class Secrets extends Context.Service<
 
       /** Counted before the write: a cap on growth, which two writers at once can overshoot by one. */
       const underLimit = Effect.fnUntraced(function* ({
-        projectId,
+        environmentId,
         version,
-      }: Pick<Write, 'projectId' | 'version'>) {
+      }: Pick<Write, 'environmentId' | 'version'>) {
         if (version > LIMITS.versionsPerSecret) {
           return yield* new LimitReachedError({
             limit: LIMITS.versionsPerSecret,
@@ -339,20 +342,20 @@ export class Secrets extends Context.Service<
         }
         if (version !== 1) return;
         const [row] = yield* sql`SELECT COUNT(*) AS held FROM secret
-          WHERE project_id = ${projectId}`.pipe(Effect.orDie);
-        if (Number(row?.held ?? 0) >= LIMITS.secretsPerProject) {
+          WHERE project_id = ${environmentId}`.pipe(Effect.orDie);
+        if (Number(row?.held ?? 0) >= LIMITS.secretsPerEnvironment) {
           return yield* new LimitReachedError({
-            limit: LIMITS.secretsPerProject,
-            message: `A project holds up to ${LIMITS.secretsPerProject} secrets while baymutt is in beta. Split it into two projects.`,
+            limit: LIMITS.secretsPerEnvironment,
+            message: `An environment holds up to ${LIMITS.secretsPerEnvironment} secrets while baymutt is in beta.`,
           });
         }
       });
 
-      const conflict = Effect.fnUntraced(function* ({ projectId, name }: Slot) {
+      const conflict = Effect.fnUntraced(function* ({ environmentId, name }: Slot) {
         const [found] = yield* sql`SELECT
-            (SELECT latest_version FROM secret WHERE project_id = ${projectId} AND name = ${name})
+            (SELECT latest_version FROM secret WHERE project_id = ${environmentId} AND name = ${name})
               AS latest_version,
-            (SELECT key_version FROM project WHERE id = ${projectId}) AS key_version`.pipe(
+            (SELECT key_version FROM project WHERE id = ${environmentId}) AS key_version`.pipe(
           Effect.orDie,
         );
         const latestVersion = Number(found?.latestVersion ?? 0);
@@ -360,13 +363,13 @@ export class Secrets extends Context.Service<
         return new VersionConflictError({
           latestVersion,
           keyVersion,
-          message: `${name} is at version ${latestVersion} under project key ${keyVersion}. Seal the value again for version ${latestVersion + 1} and that key, then write it.`,
+          message: `${name} is at version ${latestVersion} under environment key ${keyVersion}. Seal the value again for version ${latestVersion + 1} and that key, then write it.`,
         });
       });
 
       /** Moves the current-version pointer and logs it, when the secret exists. */
       const point = Effect.fnUntraced(function* (
-        { actor, projectId, name }: { readonly actor: ActorIdentity } & Slot,
+        { actor, environmentId, name }: { readonly actor: ActorIdentity } & Slot,
         {
           to,
           action,
@@ -377,9 +380,12 @@ export class Secrets extends Context.Service<
           readonly fromBin?: boolean;
         },
       ) {
-        const { project } = yield* access.needing(yield* access.project(actor, projectId), 'write');
+        const { environment } = yield* access.needing(
+          yield* access.environment(actor, environmentId),
+          'write',
+        );
         // A rollback of a deleted secret is how it leaves the bin; the log says so.
-        const [before] = yield* secretRows({ projectId, name }).pipe(Effect.orDie);
+        const [before] = yield* secretRows({ environmentId, name }).pipe(Effect.orDie);
         const now = yield* Clock.currentTimeMillis;
         const by = encodeActor(actorOf(actor));
         const writeId = crypto.randomUUID();
@@ -388,11 +394,11 @@ export class Secrets extends Context.Service<
             sql`UPDATE secret
                 SET current_version = ${to}, updated_at = ${now}, updated_by = ${by},
                     write_id = ${writeId}, purge_at = ${to === null ? now + BIN_MS : null}
-                WHERE project_id = ${projectId} AND name = ${name}
+                WHERE project_id = ${environmentId} AND name = ${name}
                   AND (${to} IS NOT NULL OR current_version IS NOT NULL)
                   AND (${fromBin ? 1 : 0} = 0 OR current_version IS NULL)
                   AND (${to} IS NULL OR EXISTS (SELECT 1 FROM secret_version
-                                               WHERE project_id = ${projectId} AND name = ${name}
+                                               WHERE project_id = ${environmentId} AND name = ${name}
                                                  AND version = ${to}))
                 RETURNING name`,
             yield* audit.entry(
@@ -400,13 +406,13 @@ export class Secrets extends Context.Service<
                 accountId: actor.accountId,
                 actor: actorOf(actor),
                 action,
-                projectId,
-                projectName: project.name,
+                environmentId,
+                environmentName: environment.name,
                 secretName: name,
                 version: to,
                 detail: to !== null && before?.currentVersion === null ? 'from the bin' : null,
               },
-              sql`EXISTS (SELECT 1 FROM secret WHERE project_id = ${projectId} AND name = ${name}
+              sql`EXISTS (SELECT 1 FROM secret WHERE project_id = ${environmentId} AND name = ${name}
                            AND write_id = ${writeId})`,
             ),
           ])
@@ -414,7 +420,7 @@ export class Secrets extends Context.Service<
         if ((moved ?? []).length === 0) {
           if (to === null) {
             return yield* new NotFoundError({
-              message: `This project has no secret named ${name}, or it is already in the bin (\`baymutt bin list\`).`,
+              message: `This environment has no secret named ${name}, or it is already in the bin (\`baymutt bin list\`).`,
             });
           }
           return yield* new NotFoundError({
@@ -423,7 +429,7 @@ export class Secrets extends Context.Service<
               : `${name} has no version ${to}. See its history with \`baymutt secrets history\`.`,
           });
         }
-        return yield* secret({ projectId, name }).pipe(Effect.orDie);
+        return yield* secret({ environmentId, name }).pipe(Effect.orDie);
       });
 
       const pasteRow = Effect.fnUntraced(function* (id: string, accountId: string | null) {
@@ -465,40 +471,42 @@ export class Secrets extends Context.Service<
       });
 
       return Secrets.of({
-        list: Effect.fn('Secrets.list')(function* ({ actor, projectId }) {
-          yield* access.project(actor, projectId);
-          return yield* secretRows({ projectId, name: null }).pipe(Effect.orDie);
+        list: Effect.fn('Secrets.list')(function* ({ actor, environmentId }) {
+          yield* access.environment(actor, environmentId);
+          return yield* secretRows({ environmentId, name: null }).pipe(Effect.orDie);
         }),
 
-        bundle: Effect.fn('Secrets.bundle')(function* ({ actor, projectId }) {
-          const { project, wrap, readerId } = yield* access.needing(
-            yield* access.project(actor, projectId),
+        bundle: Effect.fn('Secrets.bundle')(function* ({ actor, environmentId }) {
+          const { environment, wrap, readerId } = yield* access.needing(
+            yield* access.environment(actor, environmentId),
             'read',
           );
-          // A project's values load through an approved service account; the dashboard reveals
+          // An environment's values load through an approved service account; the dashboard reveals
           // one value at a time, through `reveal`.
           if (actor._tag !== 'ServiceAccount') {
             return yield* new NoAccessError({
-              message: 'Only an approved service account loads a project’s values.',
+              message: 'Only an approved service account loads an environment’s values.',
               need: 'read',
             });
           }
-          if (wrap === null) return yield* Effect.die(`a read grant on ${projectId} has no wrap`);
-          const secrets = yield* currentCiphertexts(projectId).pipe(Effect.orDie);
+          if (wrap === null) {
+            return yield* Effect.die(`a read grant on ${environmentId} has no wrap`);
+          }
+          const secrets = yield* currentCiphertexts(environmentId).pipe(Effect.orDie);
           yield* (yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
-            action: 'project.load',
-            projectId,
-            projectName: project.name,
+            action: 'environment.load',
+            environmentId,
+            environmentName: environment.name,
           })).pipe(Effect.orDie);
           return {
-            project: {
-              id: project.id,
-              accountId: project.accountId,
-              name: project.name,
-              publicKey: project.publicKey,
-              keyVersion: project.keyVersion,
+            environment: {
+              id: environment.id,
+              accountId: environment.accountId,
+              name: environment.name,
+              publicKey: environment.publicKey,
+              keyVersion: environment.keyVersion,
             },
             wrap,
             readerId,
@@ -507,15 +515,15 @@ export class Secrets extends Context.Service<
         }),
 
         write: Effect.fn('Secrets.write')(function* ({ actor, write }) {
-          const { project } = yield* access.needing(
-            yield* access.project(actor, write.projectId),
+          const { environment } = yield* access.needing(
+            yield* access.environment(actor, write.environmentId),
             'write',
           );
           yield* underLimit(write);
           const { statements } = yield* writeStatements(write, {
             accountId: actor.accountId,
             actor: actorOf(actor),
-            projectName: project.name,
+            environmentName: environment.name,
             action: 'secret.write',
           });
           const [moved] = yield* sql.batch(statements).pipe(Effect.orDie);
@@ -531,18 +539,18 @@ export class Secrets extends Context.Service<
           return yield* point(request, { to: version, action: 'secret.rollback', fromBin });
         }),
 
-        versions: Effect.fn('Secrets.versions')(function* ({ actor, projectId, name }) {
-          yield* access.project(actor, projectId);
-          const rows = yield* versionRows({ projectId, name }).pipe(Effect.orDie);
+        versions: Effect.fn('Secrets.versions')(function* ({ actor, environmentId, name }) {
+          yield* access.environment(actor, environmentId);
+          const rows = yield* versionRows({ environmentId, name }).pipe(Effect.orDie);
           if (rows.length === 0) {
             return yield* new NotFoundError({
-              message: `This project has no secret named ${name}.`,
+              message: `This environment has no secret named ${name}.`,
             });
           }
           return rows.map(({ isCurrent, ...row }) => ({ ...row, isCurrent: isCurrent !== 0 }));
         }),
 
-        reveal: Effect.fn('Secrets.reveal')(function* ({ actor, projectId, name, version }) {
+        reveal: Effect.fn('Secrets.reveal')(function* ({ actor, environmentId, name, version }) {
           // A service account loads values through the bundle; this is the dashboard's, which
           // only the owner opens.
           if (actor._tag !== 'Owner') {
@@ -551,19 +559,19 @@ export class Secrets extends Context.Service<
                 'Only the owner reveals a value, in the dashboard. A service account loads values with `baymutt` through varlock.',
             });
           }
-          const { project } = yield* access.ownersProject(actor, projectId);
-          const [row] = yield* sealedVersion({ projectId, name, version }).pipe(Effect.orDie);
+          const { environment } = yield* access.ownersEnvironment(actor, environmentId);
+          const [row] = yield* sealedVersion({ environmentId, name, version }).pipe(Effect.orDie);
           if (row === undefined) {
             return yield* new NotFoundError({
-              message: `This project has no version ${version} of ${name}.`,
+              message: `This environment has no version ${version} of ${name}.`,
             });
           }
           yield* (yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
             action: 'secret.reveal',
-            projectId,
-            projectName: project.name,
+            environmentId,
+            environmentName: environment.name,
             secretName: name,
             version,
           })).pipe(Effect.orDie);
@@ -580,8 +588,8 @@ export class Secrets extends Context.Service<
         }),
 
         requestPaste: Effect.fn('Secrets.requestPaste')(function* ({ actor, paste }) {
-          const { project } = yield* access.needing(
-            yield* access.project(actor, paste.projectId),
+          const { environment } = yield* access.needing(
+            yield* access.environment(actor, paste.environmentId),
             'write',
           );
           const now = yield* Clock.currentTimeMillis;
@@ -593,21 +601,21 @@ export class Secrets extends Context.Service<
               sql`INSERT OR IGNORE INTO paste_request
                     (id, account_id, project_id, name, reason, hint, token_hash, status,
                      created_by, created_at, link_expires_at)
-                  VALUES (${paste.id}, ${actor.accountId}, ${paste.projectId}, ${paste.name},
+                  VALUES (${paste.id}, ${actor.accountId}, ${paste.environmentId}, ${paste.name},
                     ${paste.reason}, ${paste.hint}, ${paste.tokenHash}, 'pending',
                     ${encodeActor(actorOf(actor))}, ${now}, ${now + PASTE_LINK_LIFETIME_MS})
                   RETURNING id`,
               // Asking again replaces the earlier request for the same name: the owner sees one.
               sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
-                  WHERE project_id = ${paste.projectId} AND name = ${paste.name}
+                  WHERE project_id = ${paste.environmentId} AND name = ${paste.name}
                     AND status = 'pending' AND id != ${paste.id} AND ${took}`,
               yield* audit.entry(
                 {
                   accountId: actor.accountId,
                   actor: actorOf(actor),
                   action: 'paste.request',
-                  projectId: paste.projectId,
-                  projectName: project.name,
+                  environmentId: paste.environmentId,
+                  environmentName: environment.name,
                   secretName: paste.name,
                   detail: paste.reason,
                 },
@@ -643,8 +651,8 @@ export class Secrets extends Context.Service<
                 accountId: actor.accountId,
                 actor: actorOf(actor),
                 action: 'paste.cancel',
-                projectId: row.projectId,
-                projectName: row.projectName,
+                environmentId: row.environmentId,
+                environmentName: row.environmentName,
                 secretName: row.name,
               }),
             ])
@@ -657,7 +665,7 @@ export class Secrets extends Context.Service<
           return {
             request: toPasteRequest(row),
             accountId: row.accountId,
-            projectPublicKey: row.projectPublicKey,
+            environmentPublicKey: row.environmentPublicKey,
             keyVersion: row.keyVersion,
             nextVersion: (row.latestVersion ?? 0) + 1,
           };
@@ -665,7 +673,7 @@ export class Secrets extends Context.Service<
 
         fulfilPaste: Effect.fn('Secrets.fulfilPaste')(function* ({ caller, id, write }) {
           const { row, by } = yield* answerable(caller, id);
-          const slot = { projectId: row.projectId, name: row.name };
+          const slot = { environmentId: row.environmentId, name: row.name };
           yield* underLimit({ ...slot, version: write.version });
           const now = yield* Clock.currentTimeMillis;
           // One batch: the value is written only while the request is still pending, and the
@@ -675,7 +683,7 @@ export class Secrets extends Context.Service<
             {
               accountId: row.accountId,
               actor: by,
-              projectName: row.projectName,
+              environmentName: row.environmentName,
               action: 'paste.fulfil',
               alsoIf: sql`EXISTS (SELECT 1 FROM paste_request
                                   WHERE id = ${id} AND status = 'pending')`,
@@ -688,7 +696,7 @@ export class Secrets extends Context.Service<
                   WHERE id = ${id} AND status = 'pending' AND ${took}`,
               // The value is in: any other request for the same name has nothing left to ask.
               sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
-                  WHERE project_id = ${slot.projectId} AND name = ${slot.name}
+                  WHERE project_id = ${slot.environmentId} AND name = ${slot.name}
                     AND status = 'pending' AND ${took}`,
             ])
             .pipe(Effect.orDie);

@@ -4,7 +4,9 @@ import {
   fromBase64,
   generateKeyPair,
   importPrivateKey,
+  openBox,
   openVouched,
+  sealBox,
   toBase64Url,
   utf8,
 } from '@internal/zk-vault';
@@ -12,18 +14,18 @@ import { describe, expect, it } from 'vitest';
 import { fromCrockford, toCrockford } from './encoding.ts';
 import {
   createAccountKey,
-  createProjectKey,
+  createEnvironmentKey,
   createVault,
   derivePasskeyEncKey,
   endorseCredential,
   endorsedPublicKey,
-  generateProjectKey,
+  generateEnvironmentKey,
   generateRecoveryKey,
   generateServiceAccountToken,
   grantToServiceAccount,
   grantToTrustedReader,
   openAccountKey,
-  openOwnedProject,
+  openOwnedEnvironment,
   openValue,
   openVault,
   openWelcome,
@@ -35,18 +37,18 @@ import {
   sealValue,
   sealWelcome,
   serviceAccountKeyFromToken,
-  unwrapProjectKey,
+  unwrapEnvironmentKey,
   vaultProof,
   vouchedAccountKey,
-  vouchedProjectKey,
+  vouchedEnvironmentKey,
   vouchedScopedReader,
   vouchedServiceAccountKey,
-  vouchForProjectKey,
+  vouchForEnvironmentKey,
   vouchForServiceAccount,
-  wrapProjectKey,
+  wrapEnvironmentKey,
 } from './index.ts';
 
-const BINDING = { accountId: 'account-1', projectId: 'project-1', keyVersion: 1 };
+const BINDING = { accountId: 'account-1', environmentId: 'environment-1', keyVersion: 1 };
 const SLOT = { ...BINDING, name: 'STRIPE_SECRET_KEY', version: 3 };
 
 const ownerVault = async () => {
@@ -101,43 +103,43 @@ describe('a service account key', () => {
   });
 });
 
-describe('a project key wrap', () => {
+describe('an environment key wrap', () => {
   const setup = async () => {
-    const project = await generateProjectKey();
+    const environment = await generateEnvironmentKey();
     const reader = await generateKeyPair();
     const readerKey = await importPrivateKey(reader.privateKey, 'the reader');
-    const wrap = await wrapProjectKey({
-      projectPrivateKey: project.privateKey,
+    const wrap = await wrapEnvironmentKey({
+      environmentPrivateKey: environment.privateKey,
       readerPublicKey: reader.publicKey,
       readerId: 'credential-1',
       binding: BINDING,
     });
-    return { project, readerKey, wrap };
+    return { environment, readerKey, wrap };
   };
 
-  it('opens for its reader to the project key', async () => {
-    const { project, readerKey, wrap } = await setup();
+  it('opens for its reader to the environment key', async () => {
+    const { environment, readerKey, wrap } = await setup();
 
-    const opened = await unwrapProjectKey({
+    const opened = await unwrapEnvironmentKey({
       wrap,
       readerKey,
       readerId: 'credential-1',
       binding: BINDING,
-      projectPublicKey: project.publicKey,
+      environmentPublicKey: environment.publicKey,
     });
 
-    expect(opened.encoded).toBe(project.privateKey);
+    expect(opened.encoded).toBe(environment.privateKey);
   });
 
-  it('is bound to its reader, account, project and key version', async () => {
-    const { project, readerKey, wrap } = await setup();
-    const open = (overrides: Partial<Parameters<typeof unwrapProjectKey>[0]>) =>
-      unwrapProjectKey({
+  it('is bound to its reader, account, environment and key version', async () => {
+    const { environment, readerKey, wrap } = await setup();
+    const open = (overrides: Partial<Parameters<typeof unwrapEnvironmentKey>[0]>) =>
+      unwrapEnvironmentKey({
         wrap,
         readerKey,
         readerId: 'credential-1',
         binding: BINDING,
-        projectPublicKey: project.publicKey,
+        environmentPublicKey: environment.publicKey,
         ...overrides,
       });
     const stranger = await importPrivateKey((await generateKeyPair()).privateKey, 'a stranger');
@@ -146,7 +148,7 @@ describe('a project key wrap', () => {
       { readerKey: stranger },
       { readerId: 'credential-2' },
       { binding: { ...BINDING, accountId: 'account-2' } },
-      { binding: { ...BINDING, projectId: 'project-2' } },
+      { binding: { ...BINDING, environmentId: 'environment-2' } },
       { binding: { ...BINDING, keyVersion: 2 } },
     ]) {
       await expect(open(overrides)).rejects.toMatchObject({ code: 'unreadable' });
@@ -154,51 +156,59 @@ describe('a project key wrap', () => {
   });
 
   it('refuses a wrap of some other key, however validly sealed', async () => {
-    const { project, readerKey } = await setup();
-    const other = await generateProjectKey();
-    const swapped = await wrapProjectKey({
-      projectPrivateKey: other.privateKey,
+    const { environment, readerKey } = await setup();
+    const other = await generateEnvironmentKey();
+    const swapped = await wrapEnvironmentKey({
+      environmentPrivateKey: other.privateKey,
       readerPublicKey: Buffer.from(readerKey.publicKey).toString('base64url'),
       readerId: 'credential-1',
       binding: BINDING,
     });
 
     await expect(
-      unwrapProjectKey({
+      unwrapEnvironmentKey({
         wrap: swapped,
         readerKey,
         readerId: 'credential-1',
         binding: BINDING,
-        projectPublicKey: project.publicKey,
+        environmentPublicKey: environment.publicKey,
       }),
-    ).rejects.toThrow('not this project');
+    ).rejects.toThrow('not this environment');
   });
 });
 
 describe('a sealed value', () => {
   it('is sealed with the public key alone and opened with the private one, multi-line and all', async () => {
-    const project = await generateProjectKey();
-    const projectKey = await importPrivateKey(project.privateKey, 'the project key');
+    const environment = await generateEnvironmentKey();
+    const environmentKey = await importPrivateKey(environment.privateKey, 'the environment key');
     const value = '-----BEGIN PRIVATE KEY-----\nline two\n-----END PRIVATE KEY-----\n';
 
-    const ciphertext = await sealValue({ projectPublicKey: project.publicKey, slot: SLOT, value });
+    const ciphertext = await sealValue({
+      environmentPublicKey: environment.publicKey,
+      slot: SLOT,
+      value,
+    });
 
     expect(ciphertext).not.toContain('BEGIN');
-    expect(await openValue({ projectKey, slot: SLOT, ciphertext })).toBe(value);
+    expect(await openValue({ environmentKey, slot: SLOT, ciphertext })).toBe(value);
     expect(
       await openValue({
-        projectKey,
+        environmentKey,
         slot: SLOT,
-        ciphertext: await sealValue({ projectPublicKey: project.publicKey, slot: SLOT, value: '' }),
+        ciphertext: await sealValue({
+          environmentPublicKey: environment.publicKey,
+          slot: SLOT,
+          value: '',
+        }),
       }),
     ).toBe('');
   });
 
   it('opens only in its own slot', async () => {
-    const project = await generateProjectKey();
-    const projectKey = await importPrivateKey(project.privateKey, 'the project key');
+    const environment = await generateEnvironmentKey();
+    const environmentKey = await importPrivateKey(environment.privateKey, 'the environment key');
     const ciphertext = await sealValue({
-      projectPublicKey: project.publicKey,
+      environmentPublicKey: environment.publicKey,
       slot: SLOT,
       value: 'a value',
     });
@@ -207,25 +217,30 @@ describe('a sealed value', () => {
       { ...SLOT, name: 'STRIPE_PUBLIC_KEY' },
       { ...SLOT, version: 4 },
       { ...SLOT, keyVersion: 2 },
-      { ...SLOT, projectId: 'project-2' },
+      { ...SLOT, environmentId: 'environment-2' },
       { ...SLOT, accountId: 'account-2' },
     ]) {
-      await expect(openValue({ projectKey, slot, ciphertext })).rejects.toMatchObject({
+      await expect(openValue({ environmentKey, slot, ciphertext })).rejects.toMatchObject({
         code: 'unreadable',
       });
     }
   });
 
-  it('does not open for another project’s key', async () => {
-    const project = await generateProjectKey();
-    const other = await importPrivateKey((await generateProjectKey()).privateKey, 'another key');
+  it('does not open for another environment’s key', async () => {
+    const environment = await generateEnvironmentKey();
+    const other = await importPrivateKey(
+      (await generateEnvironmentKey()).privateKey,
+      'another key',
+    );
     const ciphertext = await sealValue({
-      projectPublicKey: project.publicKey,
+      environmentPublicKey: environment.publicKey,
       slot: SLOT,
       value: 'a value',
     });
 
-    await expect(openValue({ projectKey: other, slot: SLOT, ciphertext })).rejects.toMatchObject({
+    await expect(
+      openValue({ environmentKey: other, slot: SLOT, ciphertext }),
+    ).rejects.toMatchObject({
       code: 'unreadable',
     });
   });
@@ -369,9 +384,77 @@ describe('publicKeyFingerprint', () => {
   });
 });
 
-describe('a project key proof', () => {
+// The environment was a project when these were written, and every stored key and value was sealed
+// under them: the labels say `project`, and a binding is a JSON array of values. Changing a label
+// or the bytes of a binding makes what the owner stored unreadable.
+describe('an environment key, as it was sealed while environments were projects', () => {
+  const BINDING_BYTES = utf8(JSON.stringify(['account-1', 'environment-1', '1', 'credential-1']));
+  const SLOT_BYTES = utf8(
+    JSON.stringify(['account-1', 'environment-1', '1', 'STRIPE_SECRET_KEY', '3']),
+  );
+
+  it('wraps and proves under the labels `baymutt-project-key` and `baymutt-project-key-proof`', async () => {
+    const environment = await generateEnvironmentKey();
+    const reader = await generateKeyPair();
+    const readerKey = await importPrivateKey(reader.privateKey, 'the reader');
+    const voucher = await generateKeyPair();
+    const voucherKey = await importPrivateKey(voucher.privateKey, 'the voucher');
+    const wrap = await wrapEnvironmentKey({
+      environmentPrivateKey: environment.privateKey,
+      readerPublicKey: reader.publicKey,
+      readerId: 'credential-1',
+      binding: BINDING,
+    });
+    const proof = await vouchForEnvironmentKey({
+      voucherKey,
+      reader: { id: 'credential-1', publicKey: reader.publicKey },
+      binding: BINDING,
+      environmentPublicKey: environment.publicKey,
+    });
+
+    const wrapped = await openBox({
+      privateKey: readerKey,
+      info: 'baymutt-project-key',
+      aad: BINDING_BYTES,
+      box: fromBase64(wrap, 'the wrap'),
+      what: 'the wrap',
+    });
+    const proved = await openVouched({
+      recipient: readerKey,
+      sender: decodePublicKey(voucher.publicKey, 'the voucher'),
+      info: 'baymutt-project-key-proof',
+      aad: BINDING_BYTES,
+      box: fromBase64(proof, 'the proof'),
+      what: 'the proof',
+    });
+
+    expect(new TextDecoder().decode(wrapped)).toBe(environment.privateKey);
+    expect(toBase64Url(proved)).toBe(environment.publicKey);
+  });
+
+  it('seals a value under `baymutt-secret-value` in the slot [account, environment, key version, name, version]', async () => {
+    const environment = await generateEnvironmentKey();
+    const environmentKey = await importPrivateKey(environment.privateKey, 'the environment key');
+    const stored = await sealBox({
+      recipient: decodePublicKey(environment.publicKey, 'the environment key'),
+      info: 'baymutt-secret-value',
+      aad: SLOT_BYTES,
+      plaintext: utf8('a value sealed before the rename'),
+    });
+
+    expect(
+      await openValue({
+        environmentKey,
+        slot: SLOT,
+        ciphertext: stored.toBase64(),
+      }),
+    ).toBe('a value sealed before the rename');
+  });
+});
+
+describe('an environment key proof', () => {
   const setup = async () => {
-    const project = await generateProjectKey();
+    const environment = await generateEnvironmentKey();
     const [voucher, reader] = await Promise.all(
       [1, 2].map(async () => {
         const pair = await generateKeyPair();
@@ -379,42 +462,42 @@ describe('a project key proof', () => {
       }),
     );
     if (voucher === undefined || reader === undefined) throw new Error('no keys');
-    const proof = await vouchForProjectKey({
+    const proof = await vouchForEnvironmentKey({
       voucherKey: voucher.key,
       reader: { id: 'credential-1', publicKey: reader.publicKey },
       binding: BINDING,
-      projectPublicKey: project.publicKey,
+      environmentPublicKey: environment.publicKey,
     });
-    return { project, voucher, reader, proof };
+    return { environment, voucher, reader, proof };
   };
 
-  it('tells the reader the project’s public key, from a voucher it trusts', async () => {
-    const { project, voucher, reader, proof } = await setup();
+  it('tells the reader the environment’s public key, from a voucher it trusts', async () => {
+    const { environment, voucher, reader, proof } = await setup();
     const stranger = await generateKeyPair();
 
     expect(
-      await vouchedProjectKey({
+      await vouchedEnvironmentKey({
         proof,
         readerKey: reader.key,
         readerId: 'credential-1',
         vouchers: [stranger.publicKey, voucher.publicKey],
         binding: BINDING,
       }),
-    ).toBe(project.publicKey);
+    ).toBe(environment.publicKey);
   });
 
-  it('cannot be made by a stranger, and is bound to its reader, project and key version', async () => {
-    const { project, voucher, reader, proof } = await setup();
+  it('cannot be made by a stranger, and is bound to its reader, environment and key version', async () => {
+    const { environment, voucher, reader, proof } = await setup();
     const stranger = await generateKeyPair();
     const strangerKey = await importPrivateKey(stranger.privateKey, 'a stranger');
-    const forged = await vouchForProjectKey({
+    const forged = await vouchForEnvironmentKey({
       voucherKey: strangerKey,
       reader: { id: 'credential-1', publicKey: reader.publicKey },
       binding: BINDING,
-      projectPublicKey: stranger.publicKey,
+      environmentPublicKey: stranger.publicKey,
     });
-    const read = (overrides: Partial<Parameters<typeof vouchedProjectKey>[0]>) =>
-      vouchedProjectKey({
+    const read = (overrides: Partial<Parameters<typeof vouchedEnvironmentKey>[0]>) =>
+      vouchedEnvironmentKey({
         proof,
         readerKey: reader.key,
         readerId: 'credential-1',
@@ -428,18 +511,18 @@ describe('a project key proof', () => {
       { vouchers: [] },
       { readerId: 'credential-2' },
       { readerKey: strangerKey },
-      { binding: { ...BINDING, projectId: 'project-2' } },
+      { binding: { ...BINDING, environmentId: 'environment-2' } },
       { binding: { ...BINDING, keyVersion: 2 } },
       { binding: { ...BINDING, accountId: 'account-2' } },
     ]) {
       await expect(read(overrides)).rejects.toMatchObject({ code: 'unreadable' });
     }
-    expect(project.publicKey).not.toBe(stranger.publicKey);
+    expect(environment.publicKey).not.toBe(stranger.publicKey);
   });
 });
 
-describe('the owner and a project', () => {
-  /** An owner, a service account it paired, and a project that service account created. */
+describe('the owner and an environment', () => {
+  /** An owner, a service account it paired, and an environment that service account created. */
   const setup = async () => {
     const { vault } = await ownerVault();
     const account = await createAccountKey(vault);
@@ -455,7 +538,7 @@ describe('the owner and a project', () => {
       publicKey: serviceAccount.publicKey,
       endorsement,
     };
-    const created = await createProjectKey({
+    const created = await createEnvironmentKey({
       voucherKey: serviceAccount.privateKey,
       binding: BINDING,
       readers: [{ id: BINDING.accountId, publicKey: account.publicKey }],
@@ -466,27 +549,27 @@ describe('the owner and a project', () => {
     return { owner, account, serviceAccount, creator, created, owned };
   };
 
-  it('opens a project a paired service account created, to the key that service account vouched for', async () => {
+  it('opens an environment a paired service account created, to the key that service account vouched for', async () => {
     const { owner, created, owned } = await setup();
 
-    expect((await openOwnedProject(owner, owned)).publicKey).toBe(created.publicKey);
+    expect((await openOwnedEnvironment(owner, owned)).publicKey).toBe(created.publicKey);
   });
 
-  it('refuses a project the store forged: a key pair of its own, wrapped to the account', async () => {
+  it('refuses an environment the store forged: a key pair of its own, wrapped to the account', async () => {
     const { owner, account, owned } = await setup();
-    const forgedPair = await generateProjectKey();
-    const forgedWrap = await wrapProjectKey({
-      projectPrivateKey: forgedPair.privateKey,
+    const forgedPair = await generateEnvironmentKey();
+    const forgedWrap = await wrapEnvironmentKey({
+      environmentPrivateKey: forgedPair.privateKey,
       readerPublicKey: account.publicKey,
       readerId: BINDING.accountId,
       binding: BINDING,
     });
     const hostKey = await importPrivateKey((await generateKeyPair()).privateKey, 'the host');
-    const forgedProof = await vouchForProjectKey({
+    const forgedProof = await vouchForEnvironmentKey({
       voucherKey: hostKey,
       reader: { id: BINDING.accountId, publicKey: account.publicKey },
       binding: BINDING,
-      projectPublicKey: forgedPair.publicKey,
+      environmentPublicKey: forgedPair.publicKey,
     });
 
     // Its own wrap with the real proof, its own proof, and a creator the vault never endorsed.
@@ -497,7 +580,9 @@ describe('the owner and a project', () => {
       { ...owned, creator: { ...owned.creator, endorsement: null } },
       { ...owned, creator: null },
     ]) {
-      await expect(openOwnedProject(owner, forged)).rejects.toMatchObject({ code: 'unreadable' });
+      await expect(openOwnedEnvironment(owner, forged)).rejects.toMatchObject({
+        code: 'unreadable',
+      });
     }
   });
 
@@ -513,7 +598,7 @@ describe('the owner and a project', () => {
     const grant = await grantToServiceAccount(owner, owned, paired, { canRead: true });
     const writeOnly = await grantToServiceAccount(owner, owned, paired, { canRead: false });
 
-    const publicKey = await vouchedProjectKey({
+    const publicKey = await vouchedEnvironmentKey({
       proof: grant.keyProof,
       readerKey: reader.privateKey,
       readerId: reader.credentialId,
@@ -523,12 +608,12 @@ describe('the owner and a project', () => {
     expect(publicKey).toBe(created.publicKey);
     expect(writeOnly.readWrap).toBeNull();
     await expect(
-      unwrapProjectKey({
+      unwrapEnvironmentKey({
         wrap: grant.readWrap ?? '',
         readerKey: reader.privateKey,
         readerId: reader.credentialId,
         binding: BINDING,
-        projectPublicKey: publicKey,
+        environmentPublicKey: publicKey,
       }),
     ).resolves.toBeDefined();
   });
@@ -638,9 +723,9 @@ describe('a scoped service account’s vouchers', () => {
     expect(toBase64Url(pinnedAccount)).toBe(account.publicKey);
   });
 
-  it('let the service account take the owner’s proof of a project it was granted later', async () => {
+  it('let the service account take the owner’s proof of an environment it was granted later', async () => {
     const { owner, account, made, vouchers } = await setup();
-    const created = await createProjectKey({
+    const created = await createEnvironmentKey({
       voucherKey: owner.accountKey,
       binding: BINDING,
       readers: [{ id: BINDING.accountId, publicKey: account.publicKey }],
@@ -663,7 +748,7 @@ describe('a scoped service account’s vouchers', () => {
     });
 
     expect(
-      await vouchedProjectKey({
+      await vouchedEnvironmentKey({
         proof: grant.keyProof,
         readerKey: made.privateKey,
         readerId: made.credentialId,

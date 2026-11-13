@@ -57,8 +57,8 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
       <div className="max-w-[34rem] space-y-4">
         <h1 className="text-xl">{request.name} is approved</h1>
         <p className="text-muted">
-          The terminal picks this up by itself. It can read and write every project now, and each
-          one you make from here on.
+          The terminal picks this up by itself. It can read and write every environment now, and
+          each one you make from here on.
         </p>
         <Link to="/service-accounts" className={buttonStyles({ intent: 'primary' })}>
           See service accounts
@@ -93,9 +93,9 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
         <p className="mt-2 text-sm text-muted">This must match the code in the terminal.</p>
       </div>
       <p>
-        Approving lets it <strong className="font-medium">read and write every project</strong> in
-        this account, now and later, and make service accounts for any of them. What it reads stays
-        read, even after you revoke it.
+        Approving lets it <strong className="font-medium">read and write every environment</strong>{' '}
+        in this account, now and later, and make service accounts for any of them. What it reads
+        stays read, even after you revoke it.
       </p>
       <ExpiryField
         kept={request.expiresAt ?? null}
@@ -117,7 +117,7 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
         >
           {pairing.waiting ? 'Approving…' : 'The codes match: approve it'}
         </Button>
-        <Link to="/projects" className={buttonStyles()}>
+        <Link to="/environments" className={buttonStyles()}>
           Do not approve
         </Link>
       </div>

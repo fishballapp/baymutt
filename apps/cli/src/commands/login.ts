@@ -155,7 +155,7 @@ export const loginCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Log in to the owner’s account from this computer: make a key here and ask the owner to approve it. Once approved, this login reads and writes every project of the account, including ones made later, and can make service accounts that hold part of its access',
+    'Log in to the owner’s account from this computer: make a key here and ask the owner to approve it. Once approved, this login reads and writes every environment of the account, including ones made later, and can make service accounts that hold part of its access',
   ),
 );
 

@@ -18,8 +18,8 @@ export type AuditEntry = {
   readonly accountId: string;
   readonly actor: Actor;
   readonly action: AuditAction;
-  readonly projectId?: string | null;
-  readonly projectName?: string | null;
+  readonly environmentId?: string | null;
+  readonly environmentName?: string | null;
   readonly secretName?: string | null;
   readonly version?: number | null;
   readonly detail?: string | null;
@@ -30,8 +30,8 @@ const EventRowSchema = Schema.Struct({
   at: Schema.Finite,
   actor: ActorJsonSchema,
   action: AuditActionSchema,
-  projectId: Schema.NullOr(Schema.String),
-  projectName: Schema.NullOr(Schema.String),
+  environmentId: Schema.NullOr(Schema.String),
+  environmentName: Schema.NullOr(Schema.String),
   secretName: Schema.NullOr(Schema.String),
   version: Schema.NullOr(Schema.Finite),
   detail: Schema.NullOr(Schema.String),
@@ -53,7 +53,7 @@ export class Audit extends Context.Service<
     /** Newest first. The owner reads the account's; a service account reads what it did itself. */
     readonly list: (query: {
       readonly actor: ActorIdentity;
-      readonly projectId?: string | undefined;
+      readonly environmentId?: string | undefined;
       readonly before?: string | undefined;
       readonly limit?: number | undefined;
     }) => Effect.Effect<{
@@ -71,17 +71,22 @@ export class Audit extends Context.Service<
         Request: Schema.Struct({
           accountId: Schema.String,
           actorId: Schema.NullOr(Schema.String),
-          projectId: Schema.NullOr(Schema.String),
+          environmentId: Schema.NullOr(Schema.String),
           before: Schema.NullOr(Schema.String),
           limit: Schema.Finite,
         }),
         Result: EventRowSchema,
-        execute: ({ accountId, actorId, projectId, before, limit }) =>
-          sql`SELECT id, at, actor, action, project_id, project_name, secret_name, version, detail
+        execute: ({ accountId, actorId, environmentId, before, limit }) =>
+          // Rows written before environments were called projects hold `project.*`, and so do the
+          // ones the Worker that is live during a deploy writes: the log reads them as `environment.*`.
+          sql`SELECT id, at, actor, CASE WHEN action LIKE 'project.%' THEN 'environment.' || substr(action, 9)
+                     ELSE action END AS action,
+                project_id AS environment_id, project_name AS environment_name,
+                secret_name, version, detail
               FROM audit_event
               WHERE account_id = ${accountId}
                 AND (${actorId} IS NULL OR json_extract(actor, '$.id') = ${actorId})
-                AND (${projectId} IS NULL OR project_id = ${projectId})
+                AND (${environmentId} IS NULL OR project_id = ${environmentId})
                 AND (${before} IS NULL OR id < ${before})
               ORDER BY id DESC LIMIT ${limit}`,
       });
@@ -92,17 +97,17 @@ export class Audit extends Context.Service<
           return sql`INSERT INTO audit_event
               (id, account_id, at, actor, action, project_id, project_name, secret_name, version, detail)
             SELECT ${monotonicUlid(now)}, ${entry.accountId}, ${now}, ${encodeActor(entry.actor)},
-              ${entry.action}, ${entry.projectId ?? null}, ${entry.projectName ?? null},
+              ${entry.action}, ${entry.environmentId ?? null}, ${entry.environmentName ?? null},
               ${entry.secretName ?? null}, ${entry.version ?? null}, ${entry.detail ?? null}
             WHERE ${onlyIf ?? sql`1 = 1`}`;
         }),
 
-        list: Effect.fn('Audit.list')(function* ({ actor, projectId, before, limit }) {
+        list: Effect.fn('Audit.list')(function* ({ actor, environmentId, before, limit }) {
           const size = limit ?? DEFAULT_PAGE;
           const rows = yield* page({
             accountId: actor.accountId,
             actorId: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
-            projectId: projectId ?? null,
+            environmentId: environmentId ?? null,
             before: before ?? null,
             // One more than asked for says whether another page follows.
             limit: size + 1,

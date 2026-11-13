@@ -4,13 +4,13 @@
  * ```
  * DEK            = random 256 bits, wrapped once per passkey (PRF), once to the password's key
  *                  if there is one, and once to the recovery key
- * accountKey     = X25519 pair; its private half is a vault record   → every project key is wrapped to its public half
+ * accountKey     = X25519 pair; its private half is a vault record   → every environment key is wrapped to its public half
  * endorsement    = vault record [credentialId → service account public key]  → written when the owner pairs a service account
  * recoveryKey    = random 256 bits, shown once, kept by the owner; wraps the DEK like a passkey
  * vaultProof     = HMAC(indexKey, ["vault-proof", accountId])        → the store keeps SHA-256(vaultProof)
  * ```
  *
- * The endorsement is why the store cannot hand the owner a key of its own to wrap a project key
+ * The endorsement is why the store cannot hand the owner a key of its own to wrap an environment key
  * to: a service account's public key counts only if the vault vouches for it, and only the owner writes
  * there, after comparing the pairing code.
  */
@@ -26,14 +26,14 @@ import {
   zkVault,
 } from '@internal/zk-vault';
 import { fromCrockford, toCrockford } from './encoding.ts';
-import { sealWelcome } from './pairing.ts';
 import {
-  type ProjectKeyBinding,
-  unwrapProjectKey,
-  vouchedProjectKey,
-  vouchForProjectKey,
-  wrapProjectKey,
-} from './project.ts';
+  type EnvironmentKeyBinding,
+  unwrapEnvironmentKey,
+  vouchedEnvironmentKey,
+  vouchForEnvironmentKey,
+  wrapEnvironmentKey,
+} from './environment.ts';
+import { sealWelcome } from './pairing.ts';
 import { vouchedServiceAccountKey } from './vouchers.ts';
 
 const scheme = zkVault({ namespace: 'baymutt' });
@@ -173,8 +173,8 @@ export const approvePairing = async (
   ),
 });
 
-/** A project as the store hands it to the owner: nothing in it is trusted until `openOwnedProject` has passed. */
-export type OwnedProject = ProjectKeyBinding & {
+/** An environment as the store hands it to the owner: nothing in it is trusted until `openOwnedEnvironment` has passed. */
+export type OwnedEnvironment = EnvironmentKeyBinding & {
   readonly ownerWrap: string;
   readonly ownerProof: string;
   /** The service account that created it and vouched for its key; null when the owner did. */
@@ -186,12 +186,12 @@ export type OwnedProject = ProjectKeyBinding & {
 };
 
 /**
- * A project's key pair as the owner knows it: the public half its creator vouched for, where the
+ * An environment's key pair as the owner knows it: the public half its creator vouched for, where the
  * creator is the owner or a service account the vault endorsed, and the private half the wrap opens to.
  */
-export const openOwnedProject = async (
+export const openOwnedEnvironment = async (
   owner: OwnerKeys,
-  { ownerWrap, ownerProof, creator, ...binding }: OwnedProject,
+  { ownerWrap, ownerProof, creator, ...binding }: OwnedEnvironment,
 ): Promise<{ readonly publicKey: string; readonly encoded: string; readonly key: PrivateKey }> => {
   const voucher = await (async () => {
     if (creator === null) return toBase64Url(owner.accountKey.publicKey);
@@ -205,24 +205,24 @@ export const openOwnedProject = async (
     if (endorsed === null || endorsed !== creator.publicKey) {
       throw new VaultError(
         'unreadable',
-        'this project’s creator is not a service account the owner approved',
+        'this environment’s creator is not a service account the owner approved',
       );
     }
     return endorsed;
   })();
-  const publicKey = await vouchedProjectKey({
+  const publicKey = await vouchedEnvironmentKey({
     proof: ownerProof,
     readerKey: owner.accountKey,
     readerId: owner.accountId,
     vouchers: [voucher],
     binding,
   });
-  const { key, encoded } = await unwrapProjectKey({
+  const { key, encoded } = await unwrapEnvironmentKey({
     wrap: ownerWrap,
     readerKey: owner.accountKey,
     readerId: owner.accountId,
     binding,
-    projectPublicKey: publicKey,
+    environmentPublicKey: publicKey,
   });
   return { publicKey, encoded, key };
 };
@@ -256,29 +256,29 @@ export const endorsedReader = async (
 };
 
 /**
- * A grant for a reader whose key the owner already trusts: the owner's proof of the project's
- * public key, and for a read the project key wrapped to it. The reader's key must come from
+ * A grant for a reader whose key the owner already trusts: the owner's proof of the environment's
+ * public key, and for a read the environment key wrapped to it. The reader's key must come from
  * `endorsedReader`, or from the pairing link the owner is approving after comparing its code;
  * never from the store as it stands.
  */
 export const grantToTrustedReader = async (
   owner: OwnerKeys,
-  project: OwnedProject,
+  environment: OwnedEnvironment,
   reader: { readonly id: string; readonly publicKey: string },
   { canRead }: { readonly canRead: boolean },
 ): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> => {
-  const { ownerWrap: _, ownerProof: __, creator: ___, ...binding } = project;
-  const opened = await openOwnedProject(owner, project);
+  const { ownerWrap: _, ownerProof: __, creator: ___, ...binding } = environment;
+  const opened = await openOwnedEnvironment(owner, environment);
   return {
-    keyProof: await vouchForProjectKey({
+    keyProof: await vouchForEnvironmentKey({
       voucherKey: owner.accountKey,
       reader,
       binding,
-      projectPublicKey: opened.publicKey,
+      environmentPublicKey: opened.publicKey,
     }),
     readWrap: canRead
-      ? await wrapProjectKey({
-          projectPrivateKey: opened.encoded,
+      ? await wrapEnvironmentKey({
+          environmentPrivateKey: opened.encoded,
           readerPublicKey: reader.publicKey,
           readerId: reader.id,
           binding,
@@ -290,7 +290,7 @@ export const grantToTrustedReader = async (
 /** A grant for a service account the vault endorsed. */
 export const grantToServiceAccount = async (
   owner: OwnerKeys,
-  project: OwnedProject,
+  environment: OwnedEnvironment,
   serviceAccount: {
     readonly id: string;
     readonly publicKey: string;
@@ -298,7 +298,7 @@ export const grantToServiceAccount = async (
   },
   options: { readonly canRead: boolean },
 ): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> =>
-  grantToTrustedReader(owner, project, await endorsedReader(owner, serviceAccount), options);
+  grantToTrustedReader(owner, environment, await endorsedReader(owner, serviceAccount), options);
 
 /**
  * A scoped service account's key, as the login that made it vouched for it to the owner. The

@@ -1,4 +1,4 @@
-// Secrets: named values in a project. Every write adds a version and nothing is overwritten, which
+// Secrets: named values in an environment. Every write adds a version and nothing is overwritten, which
 // is what makes it safe for a service account to write without asking.
 
 import { coded } from '@internal/effect-api';
@@ -11,7 +11,7 @@ import { LimitReachedError, NoAccessError, NotFoundError, VersionConflictError }
 import {
   ActorSchema,
   CiphertextSchema,
-  ProjectNameSchema,
+  EnvironmentNameSchema,
   PublicKeySchema,
   SecretNameSchema,
   TimestampSchema,
@@ -48,16 +48,16 @@ export const SecretVersionSchema = Schema.Struct({
 }).annotate({ identifier: 'SecretVersion' });
 export type SecretVersion = typeof SecretVersionSchema.Type;
 
-/** Everything a reader needs to open a project's current values, in one answer. */
+/** Everything a reader needs to open an environment's current values, in one answer. */
 export const BundleSchema = Schema.Struct({
-  project: Schema.Struct({
+  environment: Schema.Struct({
     id: Schema.String,
     accountId: Schema.String,
-    name: ProjectNameSchema,
+    name: EnvironmentNameSchema,
     publicKey: PublicKeySchema,
     keyVersion: Schema.Int,
   }),
-  /** The project's private key wrapped to the caller, and the reader id it is bound to. */
+  /** The environment's private key wrapped to the caller, and the reader id it is bound to. */
   wrap: WrapSchema,
   readerId: Schema.String,
   secrets: Schema.Array(
@@ -79,8 +79,8 @@ export const SealedVersionSchema = Schema.Struct({
 }).annotate({ identifier: 'SealedVersion' });
 export type SealedVersion = typeof SealedVersionSchema.Type;
 
-const projectParam = { projectId: Schema.String };
-const secretParams = { ...projectParam, name: SecretNameSchema };
+const environmentParam = { environmentId: Schema.String };
+const secretParams = { ...environmentParam, name: SecretNameSchema };
 
 export const WriteSecretPayloadSchema = Schema.Struct({
   /** One above the secret's latest version (1 for a new name): the slot the ciphertext was sealed for. */
@@ -91,28 +91,28 @@ export const WriteSecretPayloadSchema = Schema.Struct({
 
 export class SecretsGroup extends HttpApiGroup.make('secrets')
   .add(
-    HttpApiEndpoint.get('list', '/projects/:projectId/secrets', {
-      params: projectParam,
+    HttpApiEndpoint.get('list', '/environments/:environmentId/secrets', {
+      params: environmentParam,
       success: Schema.Struct({ secrets: Schema.Array(SecretSchema) }),
       error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'List a project’s secrets',
+        summary: 'List an environment’s secrets',
         description: 'Names, versions and sizes; never a value. Either grant is enough.',
       }),
     ),
-    HttpApiEndpoint.get('bundle', '/projects/:projectId/bundle', {
-      params: projectParam,
+    HttpApiEndpoint.get('bundle', '/environments/:environmentId/bundle', {
+      params: environmentParam,
       success: BundleSchema,
       error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Load a project',
+        summary: 'Load an environment',
         description:
-          'Every current value as ciphertext, with the project key wrapped to the caller. Needs a read grant.',
+          'Every current value as ciphertext, with the environment key wrapped to the caller. Needs a read grant.',
       }),
     ),
-    HttpApiEndpoint.put('write', '/projects/:projectId/secrets/:name', {
+    HttpApiEndpoint.put('write', '/environments/:environmentId/secrets/:name', {
       params: secretParams,
       payload: WriteSecretPayloadSchema,
       success: SecretSchema,
@@ -128,7 +128,7 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
         description: 'Adds a version and makes it current. Needs a write grant, and no key.',
       }),
     ),
-    HttpApiEndpoint.delete('remove', '/projects/:projectId/secrets/:name', {
+    HttpApiEndpoint.delete('remove', '/environments/:environmentId/secrets/:name', {
       params: secretParams,
       success: SecretSchema,
       error: [coded(NotFoundError), coded(NoAccessError)],
@@ -139,7 +139,7 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
           'It goes to the bin: a load stops answering it, and a rollback brings it back with every version. After 30 days in the bin it is removed for good.',
       }),
     ),
-    HttpApiEndpoint.post('rollback', '/projects/:projectId/secrets/:name/rollback', {
+    HttpApiEndpoint.post('rollback', '/environments/:environmentId/secrets/:name/rollback', {
       params: secretParams,
       payload: Schema.Struct({
         version: VersionSchema,
@@ -155,19 +155,19 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
           'Needs a write grant. No version is removed. On a deleted secret, it is how one leaves the bin; `fromBin` refuses when it has already left.',
       }),
     ),
-    HttpApiEndpoint.get('versions', '/projects/:projectId/secrets/:name/versions', {
+    HttpApiEndpoint.get('versions', '/environments/:environmentId/secrets/:name/versions', {
       params: secretParams,
       success: Schema.Struct({ versions: Schema.Array(SecretVersionSchema) }),
       error: [coded(NotFoundError), coded(NoAccessError)],
     }).annotateMerge(OpenApi.annotations({ summary: 'A secret’s history' })),
-    HttpApiEndpoint.post('reveal', '/projects/:projectId/secrets/:name/reveal', {
+    HttpApiEndpoint.post('reveal', '/environments/:environmentId/secrets/:name/reveal', {
       params: secretParams,
       payload: Schema.Struct({ version: VersionSchema }),
       success: SealedVersionSchema,
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(OpenApi.annotations({ exclude: true })),
     // The owner's alone, from the dashboard with the vault open: it cannot be undone.
-    HttpApiEndpoint.post('purge', '/projects/:projectId/secrets/:name/purge', {
+    HttpApiEndpoint.post('purge', '/environments/:environmentId/secrets/:name/purge', {
       params: secretParams,
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(OpenApi.annotations({ exclude: true })),

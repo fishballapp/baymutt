@@ -16,9 +16,9 @@ import {
 } from './errors.ts';
 import {
   ActorSchema,
+  EnvironmentNameSchema,
   HashSchema,
   IdSchema,
-  ProjectNameSchema,
   PublicKeySchema,
   ReasonSchema,
   SecretNameSchema,
@@ -53,8 +53,8 @@ export class RetiredGroup extends HttpApiGroup.make('retired')
 
 export const PasteRequestSchema = Schema.Struct({
   id: Schema.String,
-  projectId: Schema.String,
-  projectName: ProjectNameSchema,
+  environmentId: Schema.String,
+  environmentName: EnvironmentNameSchema,
   name: SecretNameSchema,
   reason: ReasonSchema,
   /** Where the owner finds the value, such as "Stripe dashboard, Developers, API keys". */
@@ -71,7 +71,7 @@ export type PasteRequest = typeof PasteRequestSchema.Type;
 export const PasteTargetSchema = Schema.Struct({
   request: PasteRequestSchema,
   accountId: Schema.String,
-  projectPublicKey: PublicKeySchema,
+  environmentPublicKey: PublicKeySchema,
   keyVersion: Schema.Int,
   /** The version the pasted value will be: seal for this slot. */
   nextVersion: VersionSchema,
@@ -98,7 +98,7 @@ export class PasteRequestsGroup extends HttpApiGroup.make('pasteRequests')
     HttpApiEndpoint.post('create', '/paste-requests', {
       payload: Schema.Struct({
         id: IdSchema,
-        projectId: Schema.String,
+        environmentId: Schema.String,
         name: SecretNameSchema,
         reason: ReasonSchema,
         hint: ReasonSchema,
@@ -111,7 +111,7 @@ export class PasteRequestsGroup extends HttpApiGroup.make('pasteRequests')
       OpenApi.annotations({
         summary: 'Ask the owner to paste a value',
         description:
-          'For a value only the owner can fetch from a vendor. Needs a write grant. The link is single-use and bound to this project and name.',
+          'For a value only the owner can fetch from a vendor. Needs a write grant. The link is single-use and bound to this environment and name.',
       }),
     ),
     HttpApiEndpoint.delete('cancel', '/paste-requests/:id', {

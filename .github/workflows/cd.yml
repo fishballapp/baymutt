@@ -19,7 +19,7 @@ jobs:
 
   # D1 migrations, then the Worker with the landing page and the dashboard. The deploy's secrets are
   # in baymutt itself: BAYMUTT_KEY, a secret of the `production` environment that only main can
-  # deploy to, is a service account that reads the one project they are in (apps/worker-web/.env.schema).
+  # deploy to, is a service account that reads the one environment they are in (apps/worker-web/.env.schema).
   deploy:
     name: Deploy baymutt.fsh.ba
     needs: gates

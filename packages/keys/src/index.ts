@@ -9,6 +9,19 @@ export {
 } from '@internal/zk-vault';
 export { randomToken } from './encoding.ts';
 export {
+  createEnvironmentKey,
+  type EnvironmentKeyBinding,
+  generateEnvironmentKey,
+  openValue,
+  publicKeyFingerprint,
+  sealValue,
+  unwrapEnvironmentKey,
+  type ValueSlot,
+  vouchedEnvironmentKey,
+  vouchForEnvironmentKey,
+  wrapEnvironmentKey,
+} from './environment.ts';
+export {
   approvePairing,
   createAccountKey,
   createVault,
@@ -21,11 +34,11 @@ export {
   grantToServiceAccount,
   grantToTrustedReader,
   MIN_PASSWORD_LENGTH,
-  type OwnedProject,
+  type OwnedEnvironment,
   type OwnerKeys,
   type OwnerVault,
   openAccountKey,
-  openOwnedProject,
+  openOwnedEnvironment,
   openVault,
   PRF_INPUT_LABEL,
   recoveryVaultKey,
@@ -34,19 +47,6 @@ export {
   vouchedScopedReader,
 } from './owner.ts';
 export { openWelcome, sealWelcome, type Welcome } from './pairing.ts';
-export {
-  createProjectKey,
-  generateProjectKey,
-  openValue,
-  type ProjectKeyBinding,
-  publicKeyFingerprint,
-  sealValue,
-  unwrapProjectKey,
-  type ValueSlot,
-  vouchedProjectKey,
-  vouchForProjectKey,
-  wrapProjectKey,
-} from './project.ts';
 export {
   generateServiceAccountToken,
   type ServiceAccountKey,

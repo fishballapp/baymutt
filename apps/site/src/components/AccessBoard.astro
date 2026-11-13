@@ -1,14 +1,14 @@
 ---
-// Which service account can reach which project in the example account, and who filled each cell.
-// A CLI login holds every project, as the owner does; a service account a login made holds what
+// Which service account can reach which environment in the example account, and who filled each cell.
+// A CLI login holds every environment, as the owner does; a service account a login made holds what
 // its maker handed it, and the empty cell is one it cannot fill itself.
 import { MAC_MINI, MACBOOK } from '../example.ts';
 
 type Cell = { kind: 'grant'; grant: string; by: string } | { kind: 'none' };
 
-const PROJECTS = ['app/dev', 'app/production'] as const;
+const ENVIRONMENTS = ['app/dev', 'app/production'] as const;
 
-const EVERY = { kind: 'grant', grant: 'read + write', by: 'every project' } as const;
+const EVERY = { kind: 'grant', grant: 'read + write', by: 'every environment' } as const;
 
 const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [Cell, Cell] }[] = [
   { serviceAccount: MACBOOK.name, origin: 'CLI login you approved', cells: [EVERY, EVERY] },
@@ -33,7 +33,7 @@ const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [
       <thead>
         <tr>
           <th scope="col">Service account</th>
-          {PROJECTS.map(project => <th scope="col"><code>{project}</code></th>)}
+          {ENVIRONMENTS.map(environment => <th scope="col"><code>{environment}</code></th>)}
         </tr>
       </thead>
       <tbody>
@@ -65,7 +65,7 @@ const ROWS: readonly { serviceAccount: string; origin: string; cells: readonly [
     </table>
   </div>
   <figcaption>
-    A login you approve reads and writes every project, as you can, and so do the agents that use
+    A login you approve reads and writes every environment, as you can, and so do the agents that use
     it. MacBook made CI deploy and handed it one read: that is all it can reach,
     and it cannot widen it.
   </figcaption>

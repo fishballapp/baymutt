@@ -1,12 +1,12 @@
 // Service accounts: making a narrower one for a job, changing what it holds, revoking; and the log.
-import { LabelSchema, type ServiceAccount as Listed, type Project } from '@baymutt/api';
+import { type Environment, LabelSchema, type ServiceAccount as Listed } from '@baymutt/api';
 import {
   generateServiceAccountToken,
   serviceAccountKeyFromToken,
   vouchedServiceAccountKey,
-  vouchForProjectKey,
+  vouchForEnvironmentKey,
   vouchForServiceAccount,
-  wrapProjectKey,
+  wrapEnvironmentKey,
 } from '@baymutt/keys';
 import * as Argument from 'effect/cli/Argument';
 import * as Command from 'effect/cli/Command';
@@ -17,9 +17,9 @@ import * as ChildProcess from 'effect/process/ChildProcess';
 import * as ChildProcessSpawner from 'effect/process/ChildProcessSpawner';
 import * as Stream from 'effect/Stream';
 import { aboutFlags, aboutPayload } from '../about.ts';
+import { openEnvironment, resolveEnvironment, trustedKey } from '../environments.ts';
 import { crypto_, report, usage } from '../errors.ts';
 import { print } from '../output.ts';
-import { openProject, resolveProject, trustedKey } from '../projects.ts';
 import { ServiceAccount } from '../service-account.ts';
 
 const listServiceAccountsCommand = Command.make(
@@ -64,13 +64,13 @@ const createServiceAccountCommand = Command.make(
     ),
     read: Flag.String('read').pipe(
       Flag.withDescription(
-        'A project it may load (repeatable). This service account must be able to',
+        'An environment it may load (repeatable). This service account must be able to',
       ),
       Flag.atLeast(0),
     ),
     write: Flag.String('write').pipe(
       Flag.withDescription(
-        'A project it may write (repeatable). This service account must be able to',
+        'An environment it may write (repeatable). This service account must be able to',
       ),
       Flag.atLeast(0),
     ),
@@ -92,38 +92,40 @@ const createServiceAccountCommand = Command.make(
   }) {
     const serviceAccount = yield* ServiceAccount;
     const names = [...new Set([...read, ...write])];
-    if (names.length === 0) return yield* usage('Give it at least one --read or --write project.');
-    const projects = yield* Effect.forEach(names, resolveProject, { concurrency: 4 });
+    if (names.length === 0) {
+      return yield* usage('Give it at least one --read or --write environment.');
+    }
+    const environments = yield* Effect.forEach(names, resolveEnvironment, { concurrency: 4 });
 
     // The new service account's key carries this service account's public key, so it knows whose proofs to take.
     const token = generateServiceAccountToken(serviceAccount.key.publicKey);
     const made = yield* crypto_(() => serviceAccountKeyFromToken(token));
     const reader = { id: made.credentialId, publicKey: made.publicKey };
-    const grantFor = Effect.fnUntraced(function* (project: Project) {
-      const canWrite = write.includes(project.name) || write.includes(project.id);
-      const canRead = read.includes(project.name) || read.includes(project.id);
-      const { publicKey, binding } = yield* trustedKey(project);
+    const grantFor = Effect.fnUntraced(function* (environment: Environment) {
+      const canWrite = write.includes(environment.name) || write.includes(environment.id);
+      const canRead = read.includes(environment.name) || read.includes(environment.id);
+      const { publicKey, binding } = yield* trustedKey(environment);
       const keyProof = yield* crypto_(() =>
-        vouchForProjectKey({
+        vouchForEnvironmentKey({
           voucherKey: serviceAccount.key.privateKey,
           reader,
           binding,
-          projectPublicKey: publicKey,
+          environmentPublicKey: publicKey,
         }),
       );
-      if (!canRead) return { projectId: project.id, canWrite, readWrap: null, keyProof };
-      // A read is the project key wrapped to the new service account, which only a holder of the key
+      if (!canRead) return { environmentId: environment.id, canWrite, readWrap: null, keyProof };
+      // A read is the environment key wrapped to the new service account, which only a holder of the key
       // can make: this service account opens it and seals it again.
-      const { encodedProjectKey } = yield* openProject(project);
+      const { encodedEnvironmentKey } = yield* openEnvironment(environment);
       const readWrap = yield* crypto_(() =>
-        wrapProjectKey({
-          projectPrivateKey: encodedProjectKey,
+        wrapEnvironmentKey({
+          environmentPrivateKey: encodedEnvironmentKey,
           readerPublicKey: reader.publicKey,
           readerId: reader.id,
           binding,
         }),
       );
-      return { projectId: project.id, canWrite, readWrap, keyProof };
+      return { environmentId: environment.id, canWrite, readWrap, keyProof };
     });
     const about = yield* aboutPayload({ description, expires });
     // This login vouches for the new key, so its access can change later without anyone taking
@@ -146,7 +148,7 @@ const createServiceAccountCommand = Command.make(
         name,
         publicKey: made.publicKey,
         bearerHash: made.bearerHash,
-        grants: yield* Effect.forEach(projects, grantFor, { concurrency: 4 }),
+        grants: yield* Effect.forEach(environments, grantFor, { concurrency: 4 }),
         ...(vouchers === undefined ? {} : { vouchers }),
       },
     });
@@ -165,52 +167,52 @@ const createServiceAccountCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Make a service account that holds only the projects named here, with the access given. It cannot widen its own access, and makes no others; this login and the owner can change it later. Its key goes to the command after `--`, on stdin, and is never printed',
+    'Make a service account that holds only the environments named here, with the access given. It cannot widen its own access, and makes no others; this login and the owner can change it later. Its key goes to the command after `--`, on stdin, and is never printed',
   ),
 );
 
 /**
- * Its access to one project, as it is to become, ready to send. A read or a project it gains needs
+ * Its access to one environment, as it is to become, ready to send. A read or an environment it gains needs
  * its key, as this login vouched for it. Nothing is written here, so a refusal changes nothing.
  */
 const accessOn = Effect.fnUntraced(function* (
   target: Listed,
   reader: { readonly id: string; readonly publicKey: string } | null,
-  project: Project,
+  environment: Environment,
   { canRead, canWrite }: { readonly canRead: boolean; readonly canWrite: boolean },
 ) {
   const serviceAccount = yield* ServiceAccount;
-  const held = target.grants.find(grant => grant.projectId === project.id);
-  const gainsProject = held === undefined;
+  const held = target.grants.find(grant => grant.environmentId === environment.id);
+  const gainsEnvironment = held === undefined;
   const gainsRead = canRead && !held?.canRead;
-  if ((gainsProject || gainsRead) && reader === null) {
+  if ((gainsEnvironment || gainsRead) && reader === null) {
     return yield* usage(
-      `Nothing vouches for ${target.name}’s key: a CLI before 0.4.0 made it. It can lose access, and can gain only write on a project it already holds.`,
+      `Nothing vouches for ${target.name}’s key: a CLI before 0.4.0 made it. It can lose access, and can gain only write on an environment it already holds.`,
       'integrity',
     );
   }
   const keyProof =
-    gainsProject && reader !== null
+    gainsEnvironment && reader !== null
       ? yield* Effect.gen(function* () {
-          const { publicKey, binding } = yield* trustedKey(project);
+          const { publicKey, binding } = yield* trustedKey(environment);
           return yield* crypto_(() =>
-            vouchForProjectKey({
+            vouchForEnvironmentKey({
               voucherKey: serviceAccount.key.privateKey,
               reader,
               binding,
-              projectPublicKey: publicKey,
+              environmentPublicKey: publicKey,
             }),
           );
         })
       : undefined;
-  // A read is the project key wrapped to it, which only a holder of the key can make.
+  // A read is the environment key wrapped to it, which only a holder of the key can make.
   const readWrap =
     gainsRead && reader !== null
       ? yield* Effect.gen(function* () {
-          const { encodedProjectKey, binding } = yield* openProject(project);
+          const { encodedEnvironmentKey, binding } = yield* openEnvironment(environment);
           return yield* crypto_(() =>
-            wrapProjectKey({
-              projectPrivateKey: encodedProjectKey,
+            wrapEnvironmentKey({
+              environmentPrivateKey: encodedEnvironmentKey,
               readerPublicKey: reader.publicKey,
               readerId: reader.id,
               binding,
@@ -219,7 +221,7 @@ const accessOn = Effect.fnUntraced(function* (
         })
       : undefined;
   return {
-    params: { id: target.id, projectId: project.id },
+    params: { id: target.id, environmentId: environment.id },
     payload: {
       canRead,
       canWrite,
@@ -239,16 +241,16 @@ const changeAccessCommand = Command.make(
     ),
     read: Flag.String('read').pipe(
       Flag.withDescription(
-        'A project it may load (repeatable). Each project named gets exactly the access given here',
+        'An environment it may load (repeatable). Each environment named gets exactly the access given here',
       ),
       Flag.atLeast(0),
     ),
     write: Flag.String('write').pipe(
-      Flag.withDescription('A project it may write (repeatable)'),
+      Flag.withDescription('An environment it may write (repeatable)'),
       Flag.atLeast(0),
     ),
     remove: Flag.String('remove').pipe(
-      Flag.withDescription('A project it loses (repeatable)'),
+      Flag.withDescription('An environment it loses (repeatable)'),
       Flag.atLeast(0),
     ),
   },
@@ -256,7 +258,7 @@ const changeAccessCommand = Command.make(
     const serviceAccount = yield* ServiceAccount;
     const names = [...new Set([...read, ...write])];
     if (names.length === 0 && remove.length === 0) {
-      return yield* usage('Name at least one --read, --write or --remove project.');
+      return yield* usage('Name at least one --read, --write or --remove environment.');
     }
     const { credentials } = yield* serviceAccount.api.credentials.list();
     const target = credentials.find(listed => listed.id === id);
@@ -279,27 +281,32 @@ const changeAccessCommand = Command.make(
               serviceAccount: target,
             }),
           );
-    // Resolved before anything is written: one project may be named twice, by name and by id.
-    const given = new Map<string, { project: Project; canRead: boolean; canWrite: boolean }>();
+    // Resolved before anything is written: one environment may be named twice, by name and by id.
+    const given = new Map<
+      string,
+      { environment: Environment; canRead: boolean; canWrite: boolean }
+    >();
     for (const name of names) {
-      const project = yield* resolveProject(name);
-      const before = given.get(project.id);
-      given.set(project.id, {
-        project,
+      const environment = yield* resolveEnvironment(name);
+      const before = given.get(environment.id);
+      given.set(environment.id, {
+        environment,
         canRead: (before?.canRead ?? false) || read.includes(name),
         canWrite: (before?.canWrite ?? false) || write.includes(name),
       });
     }
-    const removed = yield* Effect.forEach(remove, resolveProject);
-    const clash = removed.find(project => given.has(project.id));
+    const removed = yield* Effect.forEach(remove, resolveEnvironment);
+    const clash = removed.find(environment => given.has(environment.id));
     if (clash !== undefined) return yield* usage(`${clash.name} is both given and removed.`);
-    const prepared = yield* Effect.forEach([...given.values()], ({ project, canRead, canWrite }) =>
-      accessOn(target, reader, project, { canRead, canWrite }),
+    const prepared = yield* Effect.forEach(
+      [...given.values()],
+      ({ environment, canRead, canWrite }) =>
+        accessOn(target, reader, environment, { canRead, canWrite }),
     );
     yield* Effect.forEach(prepared, request => serviceAccount.api.credentials.setAccess(request));
-    yield* Effect.forEach(removed, project =>
+    yield* Effect.forEach(removed, environment =>
       serviceAccount.api.credentials.removeAccess({
-        params: { id: target.id, projectId: project.id },
+        params: { id: target.id, environmentId: environment.id },
       }),
     );
     const { credentials: after } = yield* serviceAccount.api.credentials.list();
@@ -307,7 +314,7 @@ const changeAccessCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Change what a service account this login made can reach, keeping its key: give it a project, change read or write on one, or take one away. It cannot change its own access',
+    'Change what a service account this login made can reach, keeping its key: give it an environment, change read or write on one, or take one away. It cannot change its own access',
   ),
 );
 
@@ -344,8 +351,8 @@ export const serviceAccountsCommand = Command.make('service-accounts').pipe(
 export const auditCommand = Command.make(
   'audit',
   {
-    project: Flag.String('project').pipe(
-      Flag.withDescription('Only this project’s entries'),
+    environment: Flag.String('environment').pipe(
+      Flag.withDescription('Only this environment’s entries'),
       Flag.optional,
     ),
     limit: Flag.Int('limit').pipe(
@@ -359,16 +366,16 @@ export const auditCommand = Command.make(
       Flag.optional,
     ),
   },
-  Effect.fn('audit')(function* ({ project, limit, before }) {
+  Effect.fn('audit')(function* ({ environment, limit, before }) {
     const { api } = yield* ServiceAccount;
-    const projectId = Option.isSome(project)
-      ? (yield* resolveProject(project.value)).id
+    const environmentId = Option.isSome(environment)
+      ? (yield* resolveEnvironment(environment.value)).id
       : undefined;
     yield* print(
       yield* api.audit.list({
         query: {
           limit,
-          ...(projectId === undefined ? {} : { projectId }),
+          ...(environmentId === undefined ? {} : { environmentId }),
           ...(Option.isSome(before) ? { before: before.value } : {}),
         },
       }),

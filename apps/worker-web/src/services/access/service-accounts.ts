@@ -24,7 +24,7 @@ import * as Schema from 'effect/Schema';
 import * as SqlSchema from 'effect/sql/SqlSchema';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
-import type { projects } from './projects.ts';
+import type { environments } from './environments.ts';
 import { type Lookups, type ServiceAccountRow, ServiceAccountRowSchema } from './rows.ts';
 
 const LAST_USED_RESOLUTION_MS = 60_000;
@@ -55,11 +55,11 @@ export const serviceAccounts = ({
   sql,
   audit,
   grantStatement,
-  lookups: { projectsOf, projectFor, ownersProject, serviceAccountIn, underLimit },
+  lookups: { environmentsOf, environmentFor, ownersEnvironment, serviceAccountIn, underLimit },
 }: {
   readonly sql: D1Client.D1Client;
   readonly audit: Audit['Service'];
-  readonly grantStatement: ReturnType<typeof projects>['grantStatement'];
+  readonly grantStatement: ReturnType<typeof environments>['grantStatement'];
   readonly lookups: Lookups;
 }) => {
   const byBearer = SqlSchema.findOneOption({
@@ -96,13 +96,14 @@ export const serviceAccounts = ({
     Request: Schema.String,
     Result: Schema.Struct({
       credentialId: Schema.String,
-      projectId: Schema.String,
-      projectName: Schema.String,
+      environmentId: Schema.String,
+      environmentName: Schema.String,
       canWrite: Schema.Finite,
       canRead: Schema.Finite,
     }),
     execute: accountId =>
-      sql`SELECT g.credential_id, g.project_id, p.name AS project_name, g.can_write,
+      sql`SELECT g.credential_id, g.project_id AS environment_id, p.name AS environment_name,
+            g.can_write,
             g.read_wrap IS NOT NULL AS can_read
           FROM project_grant g JOIN project p ON p.id = g.project_id
           WHERE g.account_id = ${accountId} AND p.archived_at IS NULL
@@ -147,9 +148,9 @@ export const serviceAccounts = ({
         lastUsedAt: row.lastUsedAt,
         grants: grants
           .filter(grant => grant.credentialId === row.id)
-          .map(({ projectId, projectName, canRead, canWrite }) => ({
-            projectId,
-            projectName,
+          .map(({ environmentId, environmentName, canRead, canWrite }) => ({
+            environmentId,
+            environmentName,
             canRead: canRead !== 0,
             canWrite: canWrite !== 0,
           })),
@@ -202,14 +203,14 @@ export const serviceAccounts = ({
   /**
    * A scoped service account whose access `actor` may change: the owner, or the login that made
    * it. Never itself, so it cannot widen its own access; never another login, which cannot tell
-   * its real key from one the store made up. A login's access is every project and does not change.
+   * its real key from one the store made up. A login's access is every environment and does not change.
    */
   const changeable = Effect.fnUntraced(function* (actor: ActorIdentity, id: string) {
     const target = yield* serviceAccountIn(actor.accountId, id);
     if (target.parentId === null) {
       return yield* new OwnerRequiredError({
         message:
-          'A CLI login reads and writes every project, so its access does not change. Revoke it to end it.',
+          'A CLI login reads and writes every environment, so its access does not change. Revoke it to end it.',
       });
     }
     if (actor._tag === 'ServiceAccount' && actor.credentialId !== target.parentId) {
@@ -293,7 +294,7 @@ export const serviceAccounts = ({
       readonly serviceAccount: NewServiceAccount;
       readonly endorsement: string;
       readonly welcome: string;
-      /** Read and write on each project, wrapped by the owner's vault: a login holds every one. */
+      /** Read and write on each environment, wrapped by the owner's vault: a login holds every one. */
       readonly grants: ReadonlyArray<LoginGrant>;
     }) {
       if (actor._tag !== 'Owner') {
@@ -305,7 +306,7 @@ export const serviceAccounts = ({
       yield* underLimit(actor.accountId, 'serviceAccounts');
       const now = yield* Clock.currentTimeMillis;
       const made = madeBy(serviceAccount, now);
-      // One batch: approved and holding its projects, or neither. A grant names a live project of
+      // One batch: approved and holding its environments, or neither. A grant names a live environment of
       // this account or is dropped; one made meanwhile is the dashboard's top-up to add.
       const [inserted] = yield* sql
         .batch([
@@ -318,7 +319,7 @@ export const serviceAccounts = ({
                   SELECT id, ${serviceAccount.id}, account_id, 1, ${grant.readWrap},
                     ${grant.keyProof}, ${grant.keyVersion}, ${now}
                   FROM project
-                  WHERE id = ${grant.projectId} AND account_id = ${actor.accountId}
+                  WHERE id = ${grant.environmentId} AND account_id = ${actor.accountId}
                     AND archived_at IS NULL AND ${made}`,
           ),
           yield* audit.entry(
@@ -345,7 +346,7 @@ export const serviceAccounts = ({
       readonly actor: ActorIdentity;
       readonly serviceAccount: NewServiceAccount;
       readonly grants: ReadonlyArray<{
-        readonly projectId: string;
+        readonly environmentId: string;
         readonly canWrite: boolean;
         readonly readWrap: string | null;
         readonly keyProof: string;
@@ -361,22 +362,22 @@ export const serviceAccounts = ({
         });
       }
       // It can hand on only what it holds: the store checks the grant, and a read is a wrap only
-      // its maker, holding the project key, could have sealed.
-      const held = yield* projectsOf(actor);
+      // its maker, holding the environment key, could have sealed.
+      const held = yield* environmentsOf(actor);
       for (const grant of grants) {
-        const access = held.find(({ project }) => project.id === grant.projectId);
+        const access = held.find(({ environment }) => environment.id === grant.environmentId);
         if (access === undefined) {
           return yield* new NotFoundError({
-            message: `No project ${grant.projectId} is granted to this service account.`,
+            message: `No environment ${grant.environmentId} is granted to this service account.`,
           });
         }
         for (const need of ['read', 'write'] as const) {
           const wants = need === 'read' ? grant.readWrap !== null : grant.canWrite;
-          const holds = need === 'read' ? access.project.canRead : access.project.canWrite;
+          const holds = need === 'read' ? access.environment.canRead : access.environment.canWrite;
           if (wants && !holds) {
             return yield* new NoAccessError({
               need,
-              message: `This service account has no ${need} access to ${access.project.name}, so it cannot hand it on.`,
+              message: `This service account has no ${need} access to ${access.environment.name}, so it cannot hand it on.`,
             });
           }
         }
@@ -389,11 +390,12 @@ export const serviceAccounts = ({
           insert(actor.accountId, serviceAccount, now)({ parentId: actor.credentialId, vouchers }),
           ...grants.map(grant => {
             const keyVersion =
-              held.find(({ project }) => project.id === grant.projectId)?.project.keyVersion ?? 0;
+              held.find(({ environment }) => environment.id === grant.environmentId)?.environment
+                .keyVersion ?? 0;
             return sql`INSERT INTO project_grant
                 (project_id, credential_id, account_id, can_write, read_wrap, key_proof,
                  key_version, created_at)
-              SELECT ${grant.projectId}, ${serviceAccount.id}, ${actor.accountId},
+              SELECT ${grant.environmentId}, ${serviceAccount.id}, ${actor.accountId},
                 ${grant.canWrite ? 1 : 0}, ${grant.readWrap}, ${grant.keyProof}, ${keyVersion},
                 ${now}
               WHERE ${made}`;
@@ -416,19 +418,20 @@ export const serviceAccounts = ({
     setAccess: Effect.fn('Access.setAccess')(function* ({
       actor,
       id,
-      projectId,
+      environmentId,
       access,
     }: {
       readonly actor: ActorIdentity;
       readonly id: string;
-      readonly projectId: string;
+      readonly environmentId: string;
       readonly access: SetAccessPayload;
     }) {
       const target = yield* changeable(actor, id);
       const { canRead, canWrite, readWrap, keyProof } = access;
       if (!canRead && !canWrite) {
         return yield* new InvalidRequestError({
-          message: 'Access is read, write or both. To take the project away, remove its access.',
+          message:
+            'Access is read, write or both. To take the environment away, remove its access.',
         });
       }
       if (!canRead && readWrap !== undefined) {
@@ -436,42 +439,42 @@ export const serviceAccounts = ({
           message: 'A read wrap was sent for access that does not read.',
         });
       }
-      const { project } =
+      const { environment } =
         actor._tag === 'Owner'
-          ? yield* ownersProject(actor, projectId)
-          : yield* projectFor(actor, projectId);
+          ? yield* ownersEnvironment(actor, environmentId)
+          : yield* environmentFor(actor, environmentId);
       // A login hands on only what it holds, as when it made this one.
       if (actor._tag === 'ServiceAccount') {
         for (const need of ['read', 'write'] as const) {
           const wants = need === 'read' ? canRead : canWrite;
-          const holds = need === 'read' ? project.canRead : project.canWrite;
+          const holds = need === 'read' ? environment.canRead : environment.canWrite;
           if (wants && !holds) {
             return yield* new NoAccessError({
               need,
-              message: `This login has no ${need} access to ${project.name}, so it cannot hand it on.`,
+              message: `This login has no ${need} access to ${environment.name}, so it cannot hand it on.`,
             });
           }
         }
       }
-      // Only what was made for the project's current key is kept.
+      // Only what was made for the environment's current key is kept.
       const [held] = yield* sql<{
         readonly readWrap: string | null;
         readonly keyProof: string;
       }>`SELECT read_wrap, key_proof FROM project_grant
-          WHERE project_id = ${projectId} AND credential_id = ${id}
-            AND key_version = ${project.keyVersion}`.pipe(Effect.orDie);
-      // A read it gains is a wrap only a holder of the project key can make, and a project it
+          WHERE project_id = ${environmentId} AND credential_id = ${id}
+            AND key_version = ${environment.keyVersion}`.pipe(Effect.orDie);
+      // A read it gains is a wrap only a holder of the environment key can make, and an environment it
       // gains comes with a proof of its key: the store keeps either, and makes neither.
       const wrap = canRead ? (readWrap ?? held?.readWrap ?? null) : null;
       if (canRead && wrap === null) {
         return yield* new InvalidRequestError({
-          message: `${target.name} does not read ${project.name} yet: send the project key wrapped to it (\`readWrap\`).`,
+          message: `${target.name} does not read ${environment.name} yet: send the environment key wrapped to it (\`readWrap\`).`,
         });
       }
       const proof = keyProof ?? held?.keyProof;
       if (proof === undefined) {
         return yield* new InvalidRequestError({
-          message: `${target.name} holds nothing on ${project.name} yet: send the proof of the project’s key (\`keyProof\`).`,
+          message: `${target.name} holds nothing on ${environment.name} yet: send the proof of the environment’s key (\`keyProof\`).`,
         });
       }
       const now = yield* Clock.currentTimeMillis;
@@ -479,20 +482,20 @@ export const serviceAccounts = ({
         .batch([
           grantStatement({
             accountId: actor.accountId,
-            projectId,
+            environmentId,
             credentialId: id,
             canWrite,
             readWrap: wrap,
             keyProof: proof,
-            keyVersion: project.keyVersion,
+            keyVersion: environment.keyVersion,
             now,
           }),
           yield* audit.entry({
             accountId: actor.accountId,
             actor: actorOf(actor),
             action: 'grant.set',
-            projectId,
-            projectName: project.name,
+            environmentId,
+            environmentName: environment.name,
             detail: `${target.name}: ${[canRead && 'read', canWrite && 'write'].filter(Boolean).join(' + ')}`,
           }),
         ])
@@ -503,20 +506,20 @@ export const serviceAccounts = ({
     removeAccess: Effect.fn('Access.removeAccess')(function* ({
       actor,
       id,
-      projectId,
+      environmentId,
     }: {
       readonly actor: ActorIdentity;
       readonly id: string;
-      readonly projectId: string;
+      readonly environmentId: string;
     }) {
       const target = yield* changeable(actor, id);
-      // By the caller's list, not its grant: a login may take away a project it lacks itself.
-      const [listed] = yield* projectsOf(actor, projectId);
+      // By the caller's list, not its grant: a login may take away an environment it lacks itself.
+      const [listed] = yield* environmentsOf(actor, environmentId);
       if (listed === undefined) {
-        return yield* new NotFoundError({ message: 'No project has this id.' });
+        return yield* new NotFoundError({ message: 'No environment has this id.' });
       }
       const held = sql`EXISTS (SELECT 1 FROM project_grant
-        WHERE project_id = ${projectId} AND credential_id = ${id})`;
+        WHERE project_id = ${environmentId} AND credential_id = ${id})`;
       yield* sql
         .batch([
           // Logged only when there was access to remove, so before the delete.
@@ -525,13 +528,13 @@ export const serviceAccounts = ({
               accountId: actor.accountId,
               actor: actorOf(actor),
               action: 'grant.remove',
-              projectId,
-              projectName: listed.project.name,
+              environmentId,
+              environmentName: listed.environment.name,
               detail: target.name,
             },
             held,
           ),
-          sql`DELETE FROM project_grant WHERE project_id = ${projectId} AND credential_id = ${id}`,
+          sql`DELETE FROM project_grant WHERE project_id = ${environmentId} AND credential_id = ${id}`,
         ])
         .pipe(Effect.orDie);
       return yield* one(actor, id);

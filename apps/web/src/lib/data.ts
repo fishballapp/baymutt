@@ -1,13 +1,13 @@
 // Server state as atoms derived from the API definition, and the writes that change it. A write
 // that needs the vault takes the owner in its argument: the open vault is never module state an
 // atom reads behind a component's back.
-import type { LoginGrant, PairingRequest, Project, ServiceAccount } from '@baymutt/api';
+import type { Environment, LoginGrant, PairingRequest, ServiceAccount } from '@baymutt/api';
 import {
   approvePairing,
-  createProjectKey,
+  createEnvironmentKey,
   endorsedReader,
   grantToTrustedReader,
-  openOwnedProject,
+  openOwnedEnvironment,
   openValue,
   publicKeyFingerprint,
   sealValue,
@@ -72,39 +72,40 @@ export const removePasswordAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['account'] },
 );
 
-// --- projects and secrets ----------------------------------------------------------------------
+// --- environments and secrets ----------------------------------------------------------------------
 
-type SecretKey = { readonly projectId: string; readonly name: string };
+type SecretKey = { readonly environmentId: string; readonly name: string };
 
-export const projectsAtom = ApiClient.query('projects', 'list', {
-  reactivityKeys: ['projects'],
-}).pipe(Atom.mapResult(({ projects }) => projects));
+export const environmentsAtom = ApiClient.query('environments', 'list', {
+  reactivityKeys: ['environments'],
+}).pipe(Atom.mapResult(({ environments }) => environments));
 
-export const projectAtom = Atom.family((id: string) =>
-  ApiClient.query('projects', 'get', { params: { id }, reactivityKeys: ['projects'] }),
+export const environmentAtom = Atom.family((id: string) =>
+  ApiClient.query('environments', 'get', { params: { id }, reactivityKeys: ['environments'] }),
 );
 
-export const secretsAtom = Atom.family((projectId: string) =>
-  ApiClient.query('secrets', 'list', { params: { projectId }, reactivityKeys: ['secrets'] }).pipe(
-    Atom.mapResult(({ secrets }) => secrets),
-  ),
+export const secretsAtom = Atom.family((environmentId: string) =>
+  ApiClient.query('secrets', 'list', {
+    params: { environmentId },
+    reactivityKeys: ['secrets'],
+  }).pipe(Atom.mapResult(({ secrets }) => secrets)),
 );
 
 export const versionsAtom = Atom.family(
-  ({ projectId, name }: { readonly projectId: string; readonly name: string }) =>
+  ({ environmentId, name }: { readonly environmentId: string; readonly name: string }) =>
     ApiClient.query('secrets', 'versions', {
-      params: { projectId, name },
+      params: { environmentId, name },
       reactivityKeys: ['secrets'],
     }).pipe(Atom.mapResult(({ versions }) => versions)),
 );
 
 export const grantsAtom = Atom.family((id: string) =>
-  ApiClient.query('projects', 'grants', { params: { id }, reactivityKeys: ['grants'] }).pipe(
+  ApiClient.query('environments', 'grants', { params: { id }, reactivityKeys: ['grants'] }).pipe(
     Atom.mapResult(({ grants }) => grants),
   ),
 );
 
-/** A login: made by `baymutt login` and approved here, so it has no parent. It holds every project. */
+/** A login: made by `baymutt login` and approved here, so it has no parent. It holds every environment. */
 export const isLogin = (serviceAccount: Pick<ServiceAccount, 'parentId'>): boolean =>
   serviceAccount.parentId === null;
 
@@ -112,8 +113,8 @@ const listLogins = ApiClient.use(client => client.credentials.list()).pipe(
   Effect.map(({ credentials }) => credentials.filter(isLogin)),
 );
 
-/** A new project, its key made here and wrapped to the account and, in the same request, to every login. */
-export const createProjectAtom = ApiClient.runtime.fn(
+/** A new environment, its key made here and wrapped to the account and, in the same request, to every login. */
+export const createEnvironmentAtom = ApiClient.runtime.fn(
   ({ owner, name }: { readonly owner: Owner; readonly name: string }) =>
     Effect.gen(function* () {
       const id = crypto.randomUUID();
@@ -127,16 +128,16 @@ export const createProjectAtom = ApiClient.runtime.fn(
         Promise.all(listed.map(login => endorsedReader(owner, login))),
       );
       const { publicKey, grants } = yield* keys(() =>
-        createProjectKey({
+        createEnvironmentKey({
           voucherKey: owner.accountKey,
-          binding: { accountId: owner.accountId, projectId: id, keyVersion: 1 },
+          binding: { accountId: owner.accountId, environmentId: id, keyVersion: 1 },
           readers: [{ id: owner.accountId, publicKey: accountPublicKey }, ...logins],
         }),
       );
       const [own, ...forLogins] = grants;
-      if (own === undefined) return yield* Effect.die('a project key came with no grant');
+      if (own === undefined) return yield* Effect.die('an environment key came with no grant');
       return yield* ApiClient.use(client =>
-        client.projects.create({
+        client.environments.create({
           payload: {
             id,
             name,
@@ -155,32 +156,34 @@ export const createProjectAtom = ApiClient.runtime.fn(
         }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['projects', 'serviceAccounts', 'grants'] },
+  { reactivityKeys: ['environments', 'serviceAccounts', 'grants'] },
 );
 
-export const deleteProjectAtom = ApiClient.runtime.fn(
+export const deleteEnvironmentAtom = ApiClient.runtime.fn(
   (id: string) =>
-    ApiClient.use(client => client.projects.remove({ params: { id } })).pipe(faultsAsDefects),
-  { reactivityKeys: ['projects', 'requests', 'serviceAccounts', 'grants', 'bin', 'audit'] },
+    ApiClient.use(client => client.environments.remove({ params: { id } })).pipe(faultsAsDefects),
+  { reactivityKeys: ['environments', 'requests', 'serviceAccounts', 'grants', 'bin', 'audit'] },
 );
 
 // --- the bin -----------------------------------------------------------------------------------
 
 export const binAtom = ApiClient.query('bin', 'list', { reactivityKeys: ['bin'] });
 
-export const restoreProjectAtom = Atom.family((_id: string) =>
+export const restoreEnvironmentAtom = Atom.family((_id: string) =>
   ApiClient.runtime.fn(
     (id: string) =>
-      ApiClient.use(client => client.projects.restore({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['projects', 'serviceAccounts', 'grants', 'bin', 'audit'] },
+      ApiClient.use(client => client.environments.restore({ params: { id } })).pipe(
+        faultsAsDefects,
+      ),
+    { reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'bin', 'audit'] },
   ),
 );
 
-/** Removes a deleted project for good, with its secrets, versions and grants. */
-export const purgeProjectAtom = Atom.family((_id: string) =>
+/** Removes a deleted environment for good, with its secrets, versions and grants. */
+export const purgeEnvironmentAtom = Atom.family((_id: string) =>
   ApiClient.runtime.fn(
     (id: string) =>
-      ApiClient.use(client => client.projects.purge({ params: { id } })).pipe(faultsAsDefects),
+      ApiClient.use(client => client.environments.purge({ params: { id } })).pipe(faultsAsDefects),
     { reactivityKeys: ['serviceAccounts', 'grants', 'bin', 'audit'] },
   ),
 );
@@ -192,7 +195,7 @@ export const restoreSecretAtom = Atom.family((_slot: string) =>
       ApiClient.use(client =>
         client.secrets.rollback({ params, payload: { version, fromBin: true } }),
       ).pipe(faultsAsDefects),
-    { reactivityKeys: ['secrets', 'projects', 'bin', 'audit'] },
+    { reactivityKeys: ['secrets', 'environments', 'bin', 'audit'] },
   ),
 );
 
@@ -206,23 +209,23 @@ export const purgeSecretAtom = Atom.family((_slot: string) =>
 );
 
 /**
- * The project as the owner's vault proves it: the public key its creator vouched for (the owner,
+ * The environment as the owner's vault proves it: the public key its creator vouched for (the owner,
  * or a service account the vault endorsed) and the private key the owner's wrap opens to. Nothing the
- * store lists beside the project is used past this point.
+ * store lists beside the environment is used past this point.
  */
-const ownedProject = Effect.fnUntraced(function* (owner: Owner, projectId: string) {
+const ownedEnvironment = Effect.fnUntraced(function* (owner: Owner, environmentId: string) {
   const { ownerWrap, ownerProof, keyVersion, creator } = yield* ApiClient.use(client =>
-    client.projects.ownerWrap({ params: { id: projectId } }),
+    client.environments.ownerWrap({ params: { id: environmentId } }),
   );
   const owned = {
     accountId: owner.accountId,
-    projectId,
+    environmentId,
     keyVersion,
     ownerWrap,
     ownerProof,
     creator,
   };
-  const { publicKey, key } = yield* keys(() => openOwnedProject(owner, owned));
+  const { publicKey, key } = yield* keys(() => openOwnedEnvironment(owner, owned));
   return { owned, publicKey, key, keyVersion };
 });
 
@@ -230,40 +233,46 @@ const ownedProject = Effect.fnUntraced(function* (owner: Owner, projectId: strin
 export const writeSecretAtom = ApiClient.runtime.fn(
   ({
     owner,
-    project,
+    environment,
     name,
     value,
   }: {
     readonly owner: Owner;
-    readonly project: Project;
+    readonly environment: Environment;
     readonly name: string;
     readonly value: string;
   }) =>
     Effect.gen(function* () {
-      const { keyVersion, publicKey } = yield* ownedProject(owner, project.id);
+      const { keyVersion, publicKey } = yield* ownedEnvironment(owner, environment.id);
       const { secrets } = yield* ApiClient.use(client =>
-        client.secrets.list({ params: { projectId: project.id } }),
+        client.secrets.list({ params: { environmentId: environment.id } }),
       );
       const version = (secrets.find(secret => secret.name === name)?.latestVersion ?? 0) + 1;
       const ciphertext = yield* keys(() =>
         sealValue({
-          projectPublicKey: publicKey,
-          slot: { accountId: owner.accountId, projectId: project.id, keyVersion, name, version },
+          environmentPublicKey: publicKey,
+          slot: {
+            accountId: owner.accountId,
+            environmentId: environment.id,
+            keyVersion,
+            name,
+            version,
+          },
           value,
         }),
       );
       return yield* ApiClient.use(client =>
         client.secrets.write({
-          params: { projectId: project.id, name },
+          params: { environmentId: environment.id, name },
           payload: { version, keyVersion, ciphertext },
         }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['secrets', 'projects', 'audit'] },
+  { reactivityKeys: ['secrets', 'environments', 'audit'] },
 );
 
 /**
- * One version's value, opened here with the project key the vault just proved. The store logs the
+ * One version's value, opened here with the environment key the vault just proved. The store logs the
  * request and never sees the value. One per secret, and nothing keeps it: a row resets it on hide
  * and when it unmounts, and locking the vault unmounts every row.
  */
@@ -271,22 +280,22 @@ export const revealSecretAtom = Atom.family((_slot: string) =>
   ApiClient.runtime.fn(
     ({
       owner,
-      projectId,
+      environmentId,
       name,
       version,
     }: SecretKey & { readonly owner: Owner; readonly version: number }) =>
       Effect.gen(function* () {
-        const { key } = yield* ownedProject(owner, projectId);
+        const { key } = yield* ownedEnvironment(owner, environmentId);
         const sealed = yield* ApiClient.use(client =>
-          client.secrets.reveal({ params: { projectId, name }, payload: { version } }),
+          client.secrets.reveal({ params: { environmentId, name }, payload: { version } }),
         );
         return yield* keys(
           () =>
             openValue({
-              projectKey: key,
+              environmentKey: key,
               slot: {
                 accountId: owner.accountId,
-                projectId,
+                environmentId,
                 keyVersion: sealed.keyVersion,
                 name,
                 // The version asked for, not the one the store says it answered: another
@@ -295,7 +304,7 @@ export const revealSecretAtom = Atom.family((_slot: string) =>
               },
               ciphertext: sealed.ciphertext,
             }),
-          'The store answered a value that does not open with this project’s key.',
+          'The store answered a value that does not open with this environment’s key.',
         );
       }).pipe(faultsAsDefects),
     { reactivityKeys: ['audit'] },
@@ -305,7 +314,7 @@ export const revealSecretAtom = Atom.family((_slot: string) =>
 export const removeSecretAtom = ApiClient.runtime.fn(
   (params: SecretKey) =>
     ApiClient.use(client => client.secrets.remove({ params })).pipe(faultsAsDefects),
-  { reactivityKeys: ['secrets', 'projects', 'bin', 'audit'] },
+  { reactivityKeys: ['secrets', 'environments', 'bin', 'audit'] },
 );
 
 export const rollbackSecretAtom = ApiClient.runtime.fn(
@@ -313,7 +322,7 @@ export const rollbackSecretAtom = ApiClient.runtime.fn(
     ApiClient.use(client => client.secrets.rollback({ params, payload: { version } })).pipe(
       faultsAsDefects,
     ),
-  { reactivityKeys: ['secrets', 'projects', 'bin', 'audit'] },
+  { reactivityKeys: ['secrets', 'environments', 'bin', 'audit'] },
 );
 
 // --- service accounts and access -----------------------------------------------------------------------
@@ -324,7 +333,7 @@ export const serviceAccountsAtom = ApiClient.query('credentials', 'list', {
 
 /**
  * Approves a pairing link: the vault vouches for the login's key, tells it which account key to
- * trust, and wraps every project to it. One request, so the store has it approved with all of
+ * trust, and wraps every environment to it. One request, so the store has it approved with all of
  * them or not at all. Its key is trusted because the owner just compared its code. One per
  * link, so a second link opened in the same tab starts unanswered.
  */
@@ -343,10 +352,10 @@ export const pairAtom = Atom.family((_credentialId: string) =>
       Effect.gen(function* () {
         const { pairingSecret, expiresAt: _asked, ...serviceAccount } = request;
         const reader = { id: serviceAccount.id, publicKey: serviceAccount.publicKey };
-        const { projects } = yield* ApiClient.use(client => client.projects.list());
+        const { environments } = yield* ApiClient.use(client => client.environments.list());
         const grants = yield* Effect.forEach(
-          projects,
-          project => loginGrant(owner, project.id, reader),
+          environments,
+          environment => loginGrant(owner, environment.id, reader),
           { concurrency: 6 },
         );
         const sealed = yield* keys(() =>
@@ -367,52 +376,52 @@ export const pairAtom = Atom.family((_credentialId: string) =>
   ),
 );
 
-/** Read and write on one project for a login whose key the owner trusts. */
+/** Read and write on one environment for a login whose key the owner trusts. */
 const loginGrant = Effect.fnUntraced(function* (
   owner: Owner,
-  projectId: string,
+  environmentId: string,
   reader: { readonly id: string; readonly publicKey: string },
 ) {
-  const { owned, keyVersion } = yield* ownedProject(owner, projectId);
+  const { owned, keyVersion } = yield* ownedEnvironment(owner, environmentId);
   const { keyProof, readWrap } = yield* keys(() =>
     grantToTrustedReader(owner, owned, reader, { canRead: true }),
   );
   if (readWrap === null) return yield* Effect.die('a read grant came without its wrap');
-  return { projectId, keyVersion, keyProof, readWrap } satisfies LoginGrant;
+  return { environmentId, keyVersion, keyProof, readWrap } satisfies LoginGrant;
 });
 
 /**
- * Grants each login every project it lacks: the ones a service account made since, which only
+ * Grants each login every environment it lacks: the ones a service account made since, which only
  * the owner's vault can wrap to another login. Runs whenever the vault is open; what fails is
  * tried again next time.
  */
 export const topUpLoginsAtom = ApiClient.runtime.fn(
   (owner: Owner) =>
     Effect.gen(function* () {
-      const [{ credentials }, { projects }] = yield* Effect.all(
+      const [{ credentials }, { environments }] = yield* Effect.all(
         [
           ApiClient.use(client => client.credentials.list()),
-          ApiClient.use(client => client.projects.list()),
+          ApiClient.use(client => client.environments.list()),
         ],
         { concurrency: 2 },
       );
       const missing = credentials.filter(isLogin).flatMap(login =>
-        projects
-          .filter(project => {
-            const held = login.grants.find(grant => grant.projectId === project.id);
+        environments
+          .filter(environment => {
+            const held = login.grants.find(grant => grant.environmentId === environment.id);
             return !(held?.canRead && held.canWrite);
           })
-          .map(project => ({ login, project })),
+          .map(environment => ({ login, environment })),
       );
       yield* Effect.forEach(
         missing,
-        ({ login, project }) =>
+        ({ login, environment }) =>
           Effect.gen(function* () {
             const reader = yield* keys(() => endorsedReader(owner, login));
-            const { projectId, ...grant } = yield* loginGrant(owner, project.id, reader);
+            const { environmentId, ...grant } = yield* loginGrant(owner, environment.id, reader);
             yield* ApiClient.use(client =>
-              client.projects.setGrant({
-                params: { id: projectId, credentialId: login.id },
+              client.environments.setGrant({
+                params: { id: environmentId, credentialId: login.id },
                 payload: { canWrite: true, ...grant },
               }),
             );
@@ -438,19 +447,19 @@ export const revokeServiceAccountAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['serviceAccounts', 'grants', 'requests', 'audit'] },
 );
 
-/** What a scoped service account is to hold on one project; neither read nor write takes it away. */
+/** What a scoped service account is to hold on one environment; neither read nor write takes it away. */
 export type AccessChange = {
-  readonly projectId: string;
+  readonly environmentId: string;
   readonly canRead: boolean;
   readonly canWrite: boolean;
 };
 
-/** Whether the login that made it vouched for its key, so a read or a project it gains can be wrapped to it. */
+/** Whether the login that made it vouched for its key, so a read or an environment it gains can be wrapped to it. */
 export const isVouched = (serviceAccount: Pick<ServiceAccount, 'keyVoucher'>): boolean =>
   serviceAccount.keyVoucher !== null;
 
 /**
- * Changes a scoped service account's access, keeping its key. A read or a project it gains is
+ * Changes a scoped service account's access, keeping its key. A read or an environment it gains is
  * wrapped and vouched for to the key its maker vouched for to the account, which the vault trusts
  * through its endorsement of that login: never to the key the store lists.
  */
@@ -468,26 +477,30 @@ export const changeAccessAtom = ApiClient.runtime.fn(
   }) =>
     Effect.gen(function* () {
       const gains = (change: AccessChange) => {
-        const held = serviceAccount.grants.find(grant => grant.projectId === change.projectId);
+        const held = serviceAccount.grants.find(
+          grant => grant.environmentId === change.environmentId,
+        );
         const removes = !change.canRead && !change.canWrite;
         return {
-          project: !removes && held === undefined,
+          environment: !removes && held === undefined,
           read: change.canRead && !held?.canRead,
         };
       };
-      const needsKey = changes.some(change => gains(change).project || gains(change).read);
+      const needsKey = changes.some(change => gains(change).environment || gains(change).read);
       const reader = needsKey
         ? yield* keys(
             () => vouchedScopedReader(owner, { serviceAccount, maker }),
-            'Nothing vouches for this service account’s key, so it cannot be given a read or a project. Nothing was changed.',
+            'Nothing vouches for this service account’s key, so it cannot be given a read or an environment. Nothing was changed.',
           )
         : null;
       // Every wrap and proof is made before the first request, so a vault failure changes nothing.
       const prepared = yield* Effect.forEach(changes, change =>
         Effect.gen(function* () {
           const gained = gains(change);
-          if (reader === null || !(gained.project || gained.read)) return { change, sealed: null };
-          const { owned } = yield* ownedProject(owner, change.projectId);
+          if (reader === null || !(gained.environment || gained.read)) {
+            return { change, sealed: null };
+          }
+          const { owned } = yield* ownedEnvironment(owner, change.environmentId);
           const sealed = yield* keys(() =>
             grantToTrustedReader(owner, owned, reader, { canRead: gained.read }),
           );
@@ -495,8 +508,8 @@ export const changeAccessAtom = ApiClient.runtime.fn(
         }),
       );
       for (const { change, sealed } of prepared) {
-        const { projectId, canRead, canWrite } = change;
-        const params = { id: serviceAccount.id, projectId };
+        const { environmentId, canRead, canWrite } = change;
+        const params = { id: serviceAccount.id, environmentId };
         if (!canRead && !canWrite) {
           yield* ApiClient.use(client => client.credentials.removeAccess({ params }));
           continue;
@@ -507,7 +520,9 @@ export const changeAccessAtom = ApiClient.runtime.fn(
             payload: {
               canRead,
               canWrite,
-              ...(sealed !== null && gains(change).project ? { keyProof: sealed.keyProof } : {}),
+              ...(sealed !== null && gains(change).environment
+                ? { keyProof: sealed.keyProof }
+                : {}),
               ...(sealed?.readWrap ? { readWrap: sealed.readWrap } : {}),
             },
           }),
@@ -523,7 +538,7 @@ export const changeAccessAtom = ApiClient.runtime.fn(
 
 export const removeGrantAtom = ApiClient.runtime.fn(
   (params: { readonly id: string; readonly credentialId: string }) =>
-    ApiClient.use(client => client.projects.removeGrant({ params })).pipe(faultsAsDefects),
+    ApiClient.use(client => client.environments.removeGrant({ params })).pipe(faultsAsDefects),
   { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
 );
 
@@ -580,28 +595,28 @@ export const fulfilPasteAtom = ApiClient.runtime.fn(
       // The key to seal to must be one the store could not have swapped: the one the owner's vault
       // proves, or the one the link named in its fragment, which never reached the store. The key
       // the store sent with the target is only ever compared with it.
-      const projectPublicKey = yield* Effect.gen(function* () {
+      const environmentPublicKey = yield* Effect.gen(function* () {
         // Someone signed in to an account of their own is, for this request, a link holder.
         if (owner !== null && owner.accountId === target.accountId) {
-          const proven = yield* ownedProject(owner, target.request.projectId);
+          const proven = yield* ownedEnvironment(owner, target.request.environmentId);
           return proven.keyVersion === target.keyVersion ? proven.publicKey : null;
         }
         if (fingerprint === undefined) return null;
-        const shown = yield* keys(() => publicKeyFingerprint(target.projectPublicKey));
-        return shown === fingerprint ? target.projectPublicKey : null;
+        const shown = yield* keys(() => publicKeyFingerprint(target.environmentPublicKey));
+        return shown === fingerprint ? target.environmentPublicKey : null;
       });
-      if (projectPublicKey === null || projectPublicKey !== target.projectPublicKey) {
+      if (environmentPublicKey === null || environmentPublicKey !== target.environmentPublicKey) {
         return yield* new OwnerError({
           message:
-            'The store shows a different project key than the one this request was made for. Nothing was sent.',
+            'The store shows a different environment key than the one this request was made for. Nothing was sent.',
         });
       }
       const ciphertext = yield* keys(() =>
         sealValue({
-          projectPublicKey,
+          environmentPublicKey,
           slot: {
             accountId: target.accountId,
-            projectId: target.request.projectId,
+            environmentId: target.request.environmentId,
             keyVersion: target.keyVersion,
             name: target.request.name,
             version: target.nextVersion,
@@ -622,9 +637,9 @@ export const fulfilPasteAtom = ApiClient.runtime.fn(
 
 // --- the audit log -----------------------------------------------------------------------------
 
-export const auditAtom = Atom.family((projectId: string | null) =>
+export const auditAtom = Atom.family((environmentId: string | null) =>
   ApiClient.query('audit', 'list', {
-    query: { limit: 100, ...(projectId === null ? {} : { projectId }) },
+    query: { limit: 100, ...(environmentId === null ? {} : { environmentId }) },
     reactivityKeys: ['audit'],
   }).pipe(Atom.mapResult(({ events }) => events)),
 );

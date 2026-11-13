@@ -18,13 +18,13 @@ export const AUDIT_ACTIONS = [
   'credential.create',
   'credential.revoke',
   'credential.expiry',
-  'project.create',
-  /** What deleting a project was logged as before the bin: the same deed. */
-  'project.archive',
-  'project.delete',
-  'project.restore',
-  'project.purge',
-  'project.load',
+  'environment.create',
+  /** What deleting an environment was logged as before the bin: the same deed. */
+  'environment.archive',
+  'environment.delete',
+  'environment.restore',
+  'environment.purge',
+  'environment.load',
   'secret.write',
   'secret.delete',
   'secret.rollback',
@@ -48,8 +48,8 @@ export const AuditEventSchema = Schema.Struct({
   at: TimestampSchema,
   actor: ActorSchema,
   action: AuditActionSchema,
-  projectId: Schema.NullOr(Schema.String),
-  projectName: Schema.NullOr(Schema.String),
+  environmentId: Schema.NullOr(Schema.String),
+  environmentName: Schema.NullOr(Schema.String),
   secretName: Schema.NullOr(Schema.String),
   version: Schema.NullOr(Schema.Int),
   /** The other party or the detail the action names: a service account's name, a grant's shape. */
@@ -61,7 +61,7 @@ export class AuditGroup extends HttpApiGroup.make('audit')
   .add(
     HttpApiEndpoint.get('list', '/audit', {
       query: {
-        projectId: Schema.optionalKey(Schema.String),
+        environmentId: Schema.optionalKey(Schema.String),
         before: Schema.optionalKey(Schema.String).annotate({
           description: 'An event id: answers the events before it.',
         }),

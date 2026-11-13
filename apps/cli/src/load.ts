@@ -1,4 +1,4 @@
-// For the varlock plugin, and anything else that needs a project's values in-process: one call,
+// For the varlock plugin, and anything else that needs an environment's values in-process: one call,
 // no Effect in its signature. It reads the service account key the way the CLI does.
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import * as ConfigProvider from 'effect/ConfigProvider';
@@ -8,20 +8,20 @@ import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
 import { describeFailure } from './errors.ts';
 import { KeyStore } from './key-store.ts';
-import { loadValues } from './projects.ts';
+import { loadValues } from './legacy-load.ts';
 import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 
 /**
- * A project's current values by name. `key` and `url` stand in for `BAYMUTT_KEY` and
+ * An environment's current values by name. `key` and `url` stand in for `BAYMUTT_KEY` and
  * `BAYMUTT_URL` when the caller holds them itself. Rejects with an error whose `message` says what
  * to do next.
  */
-export const loadProject = (
-  project: string,
+export const loadEnvironment = (
+  environment: string,
   { key, url }: { readonly key?: string | undefined; readonly url?: string | undefined } = {},
 ): Promise<Record<string, string>> =>
-  loadValues(project).pipe(
+  loadValues(environment).pipe(
     Effect.map(({ values }) => values),
     Effect.provide(
       ServiceAccount.layerUnreported.pipe(

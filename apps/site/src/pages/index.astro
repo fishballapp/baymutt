@@ -13,7 +13,7 @@ import {
   MAC_MINI,
   MACBOOK,
   PAIR,
-  PROJECT,
+  ENVIRONMENT,
   REQUEST,
   SCHEMA_FILE,
   SERVICE_ACCOUNT_COMMAND,
@@ -100,7 +100,7 @@ const softwareApplication = {
               <p>
                 Install the CLI from npm and run <code>baymutt login</code>. It makes the login’s own
                 key and prints a link. You open it, check that the code matches the terminal’s, and
-                approve it. From then on it reads and writes every project, as you can.
+                approve it. From then on it reads and writes every environment, as you can.
               </p>
             </div>
             <div class="step-visuals">
@@ -115,7 +115,7 @@ const softwareApplication = {
             <div class="step-text">
               <h3>Load with no prompt.</h3>
               <p>
-                Name the project in your <code>.env.schema</code>. varlock loads its values through
+                Name the environment in your <code>.env.schema</code>. varlock loads its values through
                 the plugin and opens them on the computer that runs it, with no prompt and no cache. The
                 login’s key stays in the keychain, or the plugin reads a key from <code>BAYMUTT_KEY</code>.
               </p>
@@ -142,8 +142,8 @@ const softwareApplication = {
             <div class="step-visuals">
               <Terminal serviceAccount={MACBOOK.name} lines={WRITE} />
               <Screen
-                path={`/projects/${PROJECT.id}`}
-                label="A project’s secrets, as the dashboard shows them"
+                path={`/environments/${ENVIRONMENT.id}`}
+                label="An environment’s secrets, as the dashboard shows them"
                 isFlush
               >
                 <SecretRows
@@ -178,7 +178,7 @@ const softwareApplication = {
                 <PastePage
                   name="RESEND_API_KEY"
                   serviceAccount={MACBOOK.name}
-                  project={PROJECT.name}
+                  environment={ENVIRONMENT.name}
                   reason="to send sign-in emails"
                   where="Resend dashboard, API Keys"
                 />
@@ -199,10 +199,10 @@ const softwareApplication = {
       <div class="limits-head">
         <h2 id="limits-title">baymutt cannot read what it stores.</h2>
         <p>
-          Values are sealed on the computer running the CLI or in your browser, to a project key the store never
-          holds. Writing needs only the project’s public key. Reading needs the project key wrapped
+          Values are sealed on the computer running the CLI or in your browser, to an environment key the store never
+          holds. Writing needs only the environment’s public key. Reading needs the environment key wrapped
           to that one reader, which only a holder of the key can make: your browser wraps every
-          project to each login you approve, and a login hands a narrower service account only what
+          environment to each login you approve, and a login hands a narrower service account only what
           it holds. So a service account cannot widen its own access, and neither can the store.
         </p>
       </div>
@@ -213,11 +213,11 @@ const softwareApplication = {
           <ul>
             <li>Read a value, in any version.</li>
             <li>
-              Read a project’s, the account’s or a service account’s private key, your data key or your
+              Read an environment’s, the account’s or a service account’s private key, your data key or your
               recovery key.
             </li>
-            <li>Let a service account read a project.</li>
-            <li>Move a value to another name, version or project.</li>
+            <li>Let a service account read an environment.</li>
+            <li>Move a value to another name, version or environment.</li>
           </ul>
         </div>
         <div class="column">
@@ -276,16 +276,16 @@ const softwareApplication = {
                 'pasted ',
                 { code: 'STRIPE_SECRET_KEY' },
                 ' (v1) into ',
-                { code: PROJECT.name },
+                { code: ENVIRONMENT.name },
               ],
               when: '2 days ago',
             },
             {
               who: MACBOOK.name,
-              what: ['asked for ', { code: 'STRIPE_SECRET_KEY' }, ' in ', { code: PROJECT.name }],
+              what: ['asked for ', { code: 'STRIPE_SECRET_KEY' }, ' in ', { code: ENVIRONMENT.name }],
               when: '2 days ago',
             },
-            { who: 'CI deploy', what: ['loaded ', { code: PROJECT.name }], when: '2 days ago' },
+            { who: 'CI deploy', what: ['loaded ', { code: ENVIRONMENT.name }], when: '2 days ago' },
             { who: MACBOOK.name, what: ['made the service account CI deploy'], when: '3 days ago' },
           ]}
         />
@@ -296,8 +296,8 @@ const softwareApplication = {
       <h2 id="close-title">Free while baymutt is in beta.</h2>
       <p>
         Sign up with an email link, then a passkey or a password, and keep the recovery key it
-        shows you once. In beta an account holds up to 100 projects, 200 service accounts and 500 secrets a
-        project.
+        shows you once. In beta an account holds up to 100 environments, 200 service accounts and 500 secrets an
+        environment.
       </p>
       <div class="actions">
         <a class="primary" href="/signup">Create an account</a>

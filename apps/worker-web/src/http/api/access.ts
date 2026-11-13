@@ -1,4 +1,4 @@
-/** Service accounts, projects and grants (`Access`), the bin (`Bin`) and the audit log (`Audit`). */
+/** Service accounts, environments and grants (`Access`), the bin (`Bin`) and the audit log (`Audit`). */
 import { Api, CurrentActor, OwnerRequiredError } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
@@ -58,30 +58,33 @@ const CredentialsHandlers = HttpApiBuilder.group(
   }),
 );
 
-const ProjectsHandlers = HttpApiBuilder.group(
+const EnvironmentsHandlers = HttpApiBuilder.group(
   Api,
-  'projects',
+  'environments',
   Effect.fn(function* (handlers) {
     const access = yield* Access;
     const bin = yield* Bin;
     return handlers.handleAll({
       list: Effect.fn(function* () {
-        return { projects: yield* access.listProjects(yield* CurrentActor) };
+        return { environments: yield* access.listEnvironments(yield* CurrentActor) };
       }),
       create: Effect.fn(function* ({ payload }) {
-        return yield* access.createProject({ actor: yield* CurrentActor, project: payload });
+        return yield* access.createEnvironment({
+          actor: yield* CurrentActor,
+          environment: payload,
+        });
       }),
       get: Effect.fn(function* ({ params }) {
-        return (yield* access.project(yield* CurrentActor, params.id)).project;
+        return (yield* access.environment(yield* CurrentActor, params.id)).environment;
       }),
       remove: Effect.fn(function* ({ params }) {
-        return yield* access.removeProject({ actor: yield* CurrentActor, id: params.id });
+        return yield* access.removeEnvironment({ actor: yield* CurrentActor, id: params.id });
       }),
       restore: Effect.fn(function* ({ params }) {
-        return yield* access.restoreProject({ actor: yield* CurrentActor, id: params.id });
+        return yield* access.restoreEnvironment({ actor: yield* CurrentActor, id: params.id });
       }),
       purge: Effect.fn(function* ({ params }) {
-        yield* bin.purgeProject({ actor: yield* CurrentActor, id: params.id });
+        yield* bin.purgeEnvironment({ actor: yield* CurrentActor, id: params.id });
       }),
       ownerWrap: Effect.fn(function* ({ params }) {
         return yield* access.ownerWrap({ actor: yield* CurrentActor, id: params.id });
@@ -139,7 +142,7 @@ const BinHandlers = HttpApiBuilder.group(
 
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
-  ProjectsHandlers,
+  EnvironmentsHandlers,
   RetiredHandlers,
   AuditHandlers,
   BinHandlers,

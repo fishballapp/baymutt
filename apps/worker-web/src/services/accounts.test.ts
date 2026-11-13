@@ -160,14 +160,14 @@ describe('the account', () => {
 });
 
 describe('a session whose vault is locked', () => {
-  it('reads, and changes nothing: not the account, not a project, not a service account', async () => {
-    const { w, user, owner, locked, project, pair } = await storeWorld();
-    const projectId = await project('app/production');
+  it('reads, and changes nothing: not the account, not an environment, not a service account', async () => {
+    const { w, user, owner, locked, environment, pair } = await storeWorld();
+    const environmentId = await environment('app/production');
     const serviceAccount = await pair();
     const second = user.passkey('second');
 
     // What a magic link gives: enough to look around.
-    for (const path of ['/account', '/projects', '/credentials', '/audit']) {
+    for (const path of ['/account', '/environments', '/credentials', '/audit']) {
       expect(await call(w, 'GET', path, locked)).toMatchObject({ status: 200 });
     }
 
@@ -177,16 +177,16 @@ describe('a session whose vault is locked', () => {
       ['PUT', '/account/recovery', { recoveryWrappedDek: sealedLike('r') }],
       ['PUT', '/account/password', { authValue: authValue('h'), wrappedDek: sealedLike('p') }],
       ['DELETE', '/account/password', undefined],
-      ['DELETE', `/projects/${projectId}`, undefined],
+      ['DELETE', `/environments/${environmentId}`, undefined],
       ['DELETE', `/credentials/${serviceAccount.id}`, undefined],
       [
         'PUT',
-        `/projects/${projectId}/grants/${serviceAccount.id}`,
+        `/environments/${environmentId}/grants/${serviceAccount.id}`,
         { canWrite: true, readWrap: null, keyProof: sealedLike('p'), keyVersion: 1 },
       ],
       [
         'PUT',
-        `/projects/${projectId}/secrets/API_KEY`,
+        `/environments/${environmentId}/secrets/API_KEY`,
         { version: 1, keyVersion: 1, ciphertext: sealedLike('c', 96) },
       ],
       [
@@ -209,12 +209,14 @@ describe('a session whose vault is locked', () => {
     }
     // A proof that is not the vault's is no proof.
     expect(
-      await call(w, 'DELETE', `/projects/${projectId}`, {
+      await call(w, 'DELETE', `/environments/${environmentId}`, {
         ...locked,
         'x-baymutt-vault-proof': 'a-guess',
       }),
     ).toMatchObject({ status: 403, body: { code: 'VaultLockedError' } });
-    expect(await call(w, 'DELETE', `/projects/${projectId}`, owner)).toMatchObject({ status: 200 });
+    expect(await call(w, 'DELETE', `/environments/${environmentId}`, owner)).toMatchObject({
+      status: 200,
+    });
   });
 
   it('is told apart by a proof whose hash the account was made with', async () => {

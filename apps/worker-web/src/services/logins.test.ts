@@ -1,4 +1,4 @@
-/** Logins hold every project; any service account may expire; both carry what their maker said they are for. */
+/** Logins hold every environment; any service account may expire; both carry what their maker said they are for. */
 import { tokenHash } from '@baymutt/keys/wire';
 import { describe, expect, it } from 'vitest';
 import { call, ok, type StoreWorld, storeWorld } from '../test-store.ts';
@@ -6,11 +6,11 @@ import { keyLike, sealedLike } from '../test-support.ts';
 
 const DAY = 24 * 3600 * 1000;
 
-/** A service account a login makes, holding read and write on `projects`. */
+/** A service account a login makes, holding read and write on `environments`. */
 const scoped = async (
   { w }: StoreWorld,
   parent: { readonly headers: Record<string, string> },
-  projects: ReadonlyArray<string>,
+  environments: ReadonlyArray<string>,
   about: { readonly description?: string; readonly expiresAt?: number } = {},
 ) => {
   const id = crypto.randomUUID();
@@ -21,8 +21,8 @@ const scoped = async (
     name: 'ci',
     publicKey: keyLike('k'),
     bearerHash: await tokenHash(secret),
-    grants: projects.map(projectId => ({
-      projectId,
+    grants: environments.map(environmentId => ({
+      environmentId,
       canWrite: true,
       readWrap: sealedLike('child-wrap'),
       keyProof: sealedLike('proof'),
@@ -33,73 +33,80 @@ const scoped = async (
 };
 
 describe('a login', () => {
-  it('approved with every project in the same request can load each of them', async () => {
-    const { w, pair, project } = await storeWorld();
-    const projectIds = [
-      await project('app/production'),
-      await project('app/staging'),
-      await project('app/development'),
+  it('approved with every environment in the same request can load each of them', async () => {
+    const { w, pair, environment } = await storeWorld();
+    const environmentIds = [
+      await environment('app/production'),
+      await environment('app/staging'),
+      await environment('app/development'),
     ];
-    const login = await pair('laptop', { projects: projectIds });
+    const login = await pair('laptop', { environments: environmentIds });
 
-    for (const projectId of projectIds) {
-      expect(await call(w, 'GET', `/projects/${projectId}/bundle`, login.headers)).toMatchObject({
+    for (const environmentId of environmentIds) {
+      expect(
+        await call(w, 'GET', `/environments/${environmentId}/bundle`, login.headers),
+      ).toMatchObject({
         status: 200,
         body: { wrap: sealedLike('login-wrap') },
       });
     }
-    expect(await call(w, 'GET', '/projects', login.headers)).toMatchObject({
+    expect(await call(w, 'GET', '/environments', login.headers)).toMatchObject({
       body: {
-        projects: projectIds.map(() => ({ canRead: true, canWrite: true })),
+        environments: environmentIds.map(() => ({ canRead: true, canWrite: true })),
       },
     });
   });
 
-  it('is approved with none of a grant that names another account’s project', async () => {
+  it('is approved with none of a grant that names another account’s environment', async () => {
     const { w, pair } = await storeWorld();
     const stranger = await storeWorld('user-2');
-    const theirs = await stranger.project('their/production');
-    const login = await pair('laptop', { projects: [theirs] });
+    const theirs = await stranger.environment('their/production');
+    const login = await pair('laptop', { environments: [theirs] });
 
-    expect(await call(w, 'GET', '/projects', login.headers)).toEqual({
+    expect(await call(w, 'GET', '/environments', login.headers)).toEqual({
       status: 200,
-      body: { projects: [] },
+      body: { environments: [] },
     });
   });
 
-  it('gets a project the owner creates in the dashboard in the same request', async () => {
+  it('gets an environment the owner creates in the dashboard in the same request', async () => {
     const world = await storeWorld();
-    const { w, pair, project } = world;
+    const { w, pair, environment } = world;
     const login = await pair('laptop');
     const scopedOne = await scoped(world, login, []);
 
     // The dashboard names every login; a parented service account named here is dropped.
-    const projectId = await project('app/production', world.owner, [login.id, scopedOne.id]);
+    const environmentId = await environment('app/production', world.owner, [
+      login.id,
+      scopedOne.id,
+    ]);
 
-    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, login.headers)).toMatchObject({
+    expect(
+      await call(w, 'GET', `/environments/${environmentId}/bundle`, login.headers),
+    ).toMatchObject({
       status: 200,
     });
-    expect(await call(w, 'GET', '/projects', scopedOne.headers)).toEqual({
+    expect(await call(w, 'GET', '/environments', scopedOne.headers)).toEqual({
       status: 200,
-      body: { projects: [] },
+      body: { environments: [] },
     });
   });
 
-  it('waits for the owner’s dashboard on a project another service account made, then reads it', async () => {
-    const { w, pair, project, grant } = await storeWorld();
+  it('waits for the owner’s dashboard on an environment another service account made, then reads it', async () => {
+    const { w, pair, environment, grant } = await storeWorld();
     const laptop = await pair('laptop');
     const server = await pair('server');
-    const projectId = await project('app/production', server.headers);
+    const environmentId = await environment('app/production', server.headers);
 
-    const waiting = await call(w, 'GET', `/projects/${projectId}/bundle`, laptop.headers);
+    const waiting = await call(w, 'GET', `/environments/${environmentId}/bundle`, laptop.headers);
     expect(waiting).toMatchObject({ status: 403, body: { code: 'NoAccessError', need: 'read' } });
     expect((waiting.body as { message: string }).message).toContain('open the baymutt dashboard');
 
     // Listed, and nothing more: no names of its secrets, no versions, no grants.
     for (const path of [
-      `/projects/${projectId}`,
-      `/projects/${projectId}/secrets`,
-      `/projects/${projectId}/grants`,
+      `/environments/${environmentId}`,
+      `/environments/${environmentId}/secrets`,
+      `/environments/${environmentId}/grants`,
     ]) {
       expect(await call(w, 'GET', path, laptop.headers)).toMatchObject({
         status: 403,
@@ -108,20 +115,22 @@ describe('a login', () => {
     }
 
     // The dashboard's top-up: the owner's vault wraps it to the login.
-    await grant(projectId, laptop.id, { read: true, write: true });
+    await grant(environmentId, laptop.id, { read: true, write: true });
 
-    expect(await call(w, 'GET', `/projects/${projectId}/bundle`, laptop.headers)).toMatchObject({
+    expect(
+      await call(w, 'GET', `/environments/${environmentId}/bundle`, laptop.headers),
+    ).toMatchObject({
       status: 200,
     });
   });
 
-  it('cannot hand a new project to other logins, and finds access requests removed', async () => {
+  it('cannot hand a new environment to other logins, and finds access requests removed', async () => {
     const { w, pair } = await storeWorld();
     const laptop = await pair('laptop');
     const server = await pair('server');
 
     expect(
-      await call(w, 'POST', '/projects', laptop.headers, {
+      await call(w, 'POST', '/environments', laptop.headers, {
         id: crypto.randomUUID(),
         name: 'app/production',
         publicKey: keyLike('p'),
@@ -146,7 +155,7 @@ describe('a login', () => {
             ? undefined
             : {
                 id: crypto.randomUUID(),
-                projectName: 'app/production',
+                environmentName: 'app/production',
                 wantsRead: true,
                 wantsWrite: false,
                 reason: 'to deploy',
@@ -166,20 +175,20 @@ describe('a login', () => {
 describe('a service account a login made', () => {
   it('holds only what its maker handed on, and cannot widen itself', async () => {
     const world = await storeWorld();
-    const { w, pair, project } = world;
-    const handedOn = await project('app/production');
-    const other = await project('app/staging');
-    const login = await pair('laptop', { projects: [handedOn, other] });
+    const { w, pair, environment } = world;
+    const handedOn = await environment('app/production');
+    const other = await environment('app/staging');
+    const login = await pair('laptop', { environments: [handedOn, other] });
     const ci = await scoped(world, login, [handedOn]);
 
-    expect(await call(w, 'GET', '/projects', ci.headers)).toMatchObject({
-      body: { projects: [{ id: handedOn }] },
+    expect(await call(w, 'GET', '/environments', ci.headers)).toMatchObject({
+      body: { environments: [{ id: handedOn }] },
     });
-    expect(await call(w, 'GET', `/projects/${other}/bundle`, ci.headers)).toMatchObject({
+    expect(await call(w, 'GET', `/environments/${other}/bundle`, ci.headers)).toMatchObject({
       status: 404,
     });
     expect(
-      await call(w, 'PUT', `/projects/${other}/grants/${ci.id}`, ci.headers, {
+      await call(w, 'PUT', `/environments/${other}/grants/${ci.id}`, ci.headers, {
         canWrite: true,
         readWrap: sealedLike('self-made'),
         keyProof: sealedLike('proof'),
@@ -188,14 +197,14 @@ describe('a service account a login made', () => {
     ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
   });
 
-  it('cannot create a project, which the owner’s vault could never open', async () => {
+  it('cannot create an environment, which the owner’s vault could never open', async () => {
     const world = await storeWorld();
-    const { w, pair, project } = world;
+    const { w, pair, environment } = world;
     const login = await pair('laptop');
-    const ci = await scoped(world, login, [await project('app/production', login.headers)]);
+    const ci = await scoped(world, login, [await environment('app/production', login.headers)]);
 
     expect(
-      await call(w, 'POST', '/projects', ci.headers, {
+      await call(w, 'POST', '/environments', ci.headers, {
         id: crypto.randomUUID(),
         name: 'app/staging',
         publicKey: keyLike('p'),
@@ -221,15 +230,15 @@ describe('a service account a login made', () => {
 describe('expiry', () => {
   it('refuses an expired service account and every one its login made, until the owner extends it', async () => {
     const world = await storeWorld();
-    const { w, owner, pair, project } = world;
-    const projectId = await project('app/production');
-    const login = await pair('laptop', { projects: [projectId] });
-    const ci = await scoped(world, login, [projectId]);
+    const { w, owner, pair, environment } = world;
+    const environmentId = await environment('app/production');
+    const login = await pair('laptop', { environments: [environmentId] });
+    const ci = await scoped(world, login, [environmentId]);
 
     await ok(w, 'PUT', `/credentials/${login.id}/expiry`, owner, { expiresAt: Date.now() - 1 });
 
     for (const { headers } of [login, ci]) {
-      expect(await call(w, 'GET', `/projects/${projectId}/bundle`, headers)).toMatchObject({
+      expect(await call(w, 'GET', `/environments/${environmentId}/bundle`, headers)).toMatchObject({
         status: 401,
         body: { code: 'UnauthorizedError' },
       });
@@ -251,7 +260,7 @@ describe('expiry', () => {
     ).toMatchObject({ status: 200, body: { id: login.id, expiresAt: later } });
 
     for (const { headers } of [login, ci]) {
-      expect(await call(w, 'GET', `/projects/${projectId}/bundle`, headers)).toMatchObject({
+      expect(await call(w, 'GET', `/environments/${environmentId}/bundle`, headers)).toMatchObject({
         status: 200,
       });
     }
