@@ -1,7 +1,7 @@
 // Server state as atoms derived from the API definition, and the writes that change it. A write
 // that needs the vault takes the owner in its argument: the open vault is never module state an
 // atom reads behind a component's back.
-import type { Environment, LoginGrant, PairingRequest, ServiceAccount } from '@baymutt/api';
+import type { Environment, LoginGrant, Org, PairingRequest, ServiceAccount } from '@baymutt/api';
 import {
   approvePairing,
   createEnvironmentKey,
@@ -72,6 +72,43 @@ export const removePasswordAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['account'] },
 );
 
+// --- orgs --------------------------------------------------------------------------------------
+
+export const orgsAtom = ApiClient.query('orgs', 'list', { reactivityKeys: ['orgs'] }).pipe(
+  Atom.mapResult(({ orgs }) => orgs),
+);
+
+const PICKED_ORG = 'baymutt.org';
+
+/** The org the picker shows, by id, as this browser last picked it. */
+export const pickedOrgIdAtom = Atom.make<string | null>(localStorage.getItem(PICKED_ORG)).pipe(
+  Atom.keepAlive,
+);
+
+export const rememberPickedOrg = (id: string) => localStorage.setItem(PICKED_ORG, id);
+
+/** The picked org, or the first when the one picked is gone or none was. */
+export const pickedOrg = (orgs: ReadonlyArray<Org>, pickedId: string | null): Org | null =>
+  orgs.find(org => org.id === pickedId) ?? orgs[0] ?? null;
+
+export const createOrgAtom = ApiClient.runtime.fn(
+  (org: { readonly name: string; readonly slug: string }) =>
+    ApiClient.use(client => client.orgs.create({ payload: org })).pipe(faultsAsDefects),
+  { reactivityKeys: ['orgs', 'audit'] },
+);
+
+export const deleteOrgAtom = Atom.family((_id: string) =>
+  ApiClient.runtime.fn(
+    (id: string) =>
+      ApiClient.use(client => client.orgs.remove({ params: { id } })).pipe(faultsAsDefects),
+    { reactivityKeys: ['orgs', 'audit'] },
+  ),
+);
+
+/** An environment as it is named everywhere a name is taken: `<org slug>/<name>`. */
+export const addressOf = ({ orgSlug, name }: Pick<Environment, 'orgSlug' | 'name'>): string =>
+  `${orgSlug}/${name}`;
+
 // --- environments and secrets ----------------------------------------------------------------------
 
 type SecretKey = { readonly environmentId: string; readonly name: string };
@@ -113,9 +150,17 @@ const listLogins = ApiClient.use(client => client.credentials.list()).pipe(
   Effect.map(({ credentials }) => credentials.filter(isLogin)),
 );
 
-/** A new environment, its key made here and wrapped to the account and, in the same request, to every login. */
+/** A new environment in an org, its key made here and wrapped to the account and, in the same request, to every login. */
 export const createEnvironmentAtom = ApiClient.runtime.fn(
-  ({ owner, name }: { readonly owner: Owner; readonly name: string }) =>
+  ({
+    owner,
+    orgId,
+    name,
+  }: {
+    readonly owner: Owner;
+    readonly orgId: string;
+    readonly name: string;
+  }) =>
     Effect.gen(function* () {
       const id = crypto.randomUUID();
       const accountPublicKey = owner.accountKey.publicKey.toBase64({
@@ -130,7 +175,7 @@ export const createEnvironmentAtom = ApiClient.runtime.fn(
       const { publicKey, grants } = yield* keys(() =>
         createEnvironmentKey({
           voucherKey: owner.accountKey,
-          binding: { accountId: owner.accountId, environmentId: id, keyVersion: 1 },
+          binding: { environmentId: id, keyVersion: 1 },
           readers: [{ id: owner.accountId, publicKey: accountPublicKey }, ...logins],
         }),
       );
@@ -140,10 +185,11 @@ export const createEnvironmentAtom = ApiClient.runtime.fn(
         client.environments.create({
           payload: {
             id,
+            orgId,
             name,
             publicKey,
-            ownerWrap: own.wrap,
-            ownerProof: own.proof,
+            memberWrap: own.wrap,
+            memberProof: own.proof,
             creatorWrap: null,
             creatorProof: null,
             loginGrants: logins.flatMap((login, index) => {
@@ -156,13 +202,23 @@ export const createEnvironmentAtom = ApiClient.runtime.fn(
         }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['environments', 'serviceAccounts', 'grants'] },
+  { reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'orgs', 'audit'] },
 );
 
 export const deleteEnvironmentAtom = ApiClient.runtime.fn(
   (id: string) =>
     ApiClient.use(client => client.environments.remove({ params: { id } })).pipe(faultsAsDefects),
-  { reactivityKeys: ['environments', 'requests', 'serviceAccounts', 'grants', 'bin', 'audit'] },
+  {
+    reactivityKeys: [
+      'environments',
+      'pasteLinks',
+      'serviceAccounts',
+      'grants',
+      'bin',
+      'orgs',
+      'audit',
+    ],
+  },
 );
 
 // --- the bin -----------------------------------------------------------------------------------
@@ -175,7 +231,7 @@ export const restoreEnvironmentAtom = Atom.family((_id: string) =>
       ApiClient.use(client => client.environments.restore({ params: { id } })).pipe(
         faultsAsDefects,
       ),
-    { reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'bin', 'audit'] },
+    { reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'bin', 'orgs', 'audit'] },
   ),
 );
 
@@ -210,21 +266,14 @@ export const purgeSecretAtom = Atom.family((_slot: string) =>
 
 /**
  * The environment as the owner's vault proves it: the public key its creator vouched for (the owner,
- * or a service account the vault endorsed) and the private key the owner's wrap opens to. Nothing the
- * store lists beside the environment is used past this point.
+ * or a CLI login the vault endorsed) and the private key the owner's member copy opens to. Nothing
+ * the store lists beside the environment is used past this point.
  */
 const ownedEnvironment = Effect.fnUntraced(function* (owner: Owner, environmentId: string) {
-  const { ownerWrap, ownerProof, keyVersion, creator } = yield* ApiClient.use(client =>
-    client.environments.ownerWrap({ params: { id: environmentId } }),
+  const { memberWrap, memberProof, keyVersion, creator } = yield* ApiClient.use(client =>
+    client.environments.memberWrap({ params: { id: environmentId } }),
   );
-  const owned = {
-    accountId: owner.accountId,
-    environmentId,
-    keyVersion,
-    ownerWrap,
-    ownerProof,
-    creator,
-  };
+  const owned = { environmentId, keyVersion, memberWrap, memberProof, creator };
   const { publicKey, key } = yield* keys(() => openOwnedEnvironment(owner, owned));
   return { owned, publicKey, key, keyVersion };
 });
@@ -252,7 +301,6 @@ export const writeSecretAtom = ApiClient.runtime.fn(
         sealValue({
           environmentPublicKey: publicKey,
           slot: {
-            accountId: owner.accountId,
             environmentId: environment.id,
             keyVersion,
             name,
@@ -294,7 +342,6 @@ export const revealSecretAtom = Atom.family((_slot: string) =>
             openValue({
               environmentKey: key,
               slot: {
-                accountId: owner.accountId,
                 environmentId,
                 keyVersion: sealed.keyVersion,
                 name,
@@ -430,7 +477,7 @@ export const topUpLoginsAtom = ApiClient.runtime.fn(
       );
       return missing.length;
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['serviceAccounts', 'grants', 'requests', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'grants', 'pasteLinks', 'audit'] },
 );
 
 export const setExpiryAtom = ApiClient.runtime.fn(
@@ -444,7 +491,7 @@ export const setExpiryAtom = ApiClient.runtime.fn(
 export const revokeServiceAccountAtom = ApiClient.runtime.fn(
   (id: string) =>
     ApiClient.use(client => client.credentials.revoke({ params: { id } })).pipe(faultsAsDefects),
-  { reactivityKeys: ['serviceAccounts', 'grants', 'requests', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'grants', 'pasteLinks', 'audit'] },
 );
 
 /** What a scoped service account is to hold on one environment; neither read nor write takes it away. */
@@ -542,19 +589,17 @@ export const removeGrantAtom = ApiClient.runtime.fn(
   { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
 );
 
-// --- requests ----------------------------------------------------------------------------------
+// --- paste links -------------------------------------------------------------------------------
 
-export const pasteRequestsAtom = ApiClient.query('pasteRequests', 'list', {
-  reactivityKeys: ['requests'],
-}).pipe(Atom.mapResult(({ requests }) => requests));
+export const pasteLinksAtom = ApiClient.query('pasteLinks', 'list', {
+  reactivityKeys: ['pasteLinks'],
+}).pipe(Atom.mapResult(({ links }) => links));
 
-export const cancelPasteAtom = Atom.family((id: string) =>
+export const cancelPasteLinkAtom = Atom.family((id: string) =>
   ApiClient.runtime.fn(
     () =>
-      ApiClient.use(client => client.pasteRequests.cancel({ params: { id } })).pipe(
-        faultsAsDefects,
-      ),
-    { reactivityKeys: ['requests', 'audit'] },
+      ApiClient.use(client => client.pasteLinks.cancel({ params: { id } })).pipe(faultsAsDefects),
+    { reactivityKeys: ['pasteLinks', 'audit'] },
   ),
 );
 
@@ -596,9 +641,11 @@ export const fulfilPasteAtom = ApiClient.runtime.fn(
       // proves, or the one the link named in its fragment, which never reached the store. The key
       // the store sent with the target is only ever compared with it.
       const environmentPublicKey = yield* Effect.gen(function* () {
-        // Someone signed in to an account of their own is, for this request, a link holder.
-        if (owner !== null && owner.accountId === target.accountId) {
-          const proven = yield* ownedEnvironment(owner, target.request.environmentId);
+        // Someone signed in who is not an owner of the link's org is, for this request, a link holder.
+        const { orgs } =
+          owner === null ? { orgs: [] } : yield* ApiClient.use(client => client.orgs.list());
+        if (owner !== null && orgs.some(org => org.id === target.link.orgId)) {
+          const proven = yield* ownedEnvironment(owner, target.link.environmentId);
           return proven.keyVersion === target.keyVersion ? proven.publicKey : null;
         }
         if (fingerprint === undefined) return null;
@@ -608,17 +655,16 @@ export const fulfilPasteAtom = ApiClient.runtime.fn(
       if (environmentPublicKey === null || environmentPublicKey !== target.environmentPublicKey) {
         return yield* new OwnerError({
           message:
-            'The store shows a different environment key than the one this request was made for. Nothing was sent.',
+            'The store shows a different environment key than the one this link was made for. Nothing was sent.',
         });
       }
       const ciphertext = yield* keys(() =>
         sealValue({
           environmentPublicKey,
           slot: {
-            accountId: target.accountId,
-            environmentId: target.request.environmentId,
+            environmentId: target.link.environmentId,
             keyVersion: target.keyVersion,
-            name: target.request.name,
+            name: target.link.name,
             version: target.nextVersion,
           },
           value,
@@ -632,14 +678,15 @@ export const fulfilPasteAtom = ApiClient.runtime.fn(
         }),
       );
     }).pipe(faultsAsDefects),
-  { reactivityKeys: ['paste', 'requests', 'secrets', 'audit'] },
+  { reactivityKeys: ['paste', 'pasteLinks', 'secrets', 'audit'] },
 );
 
-// --- the audit log -----------------------------------------------------------------------------
+// --- activity ----------------------------------------------------------------------------------
 
-export const auditAtom = Atom.family((environmentId: string | null) =>
-  ApiClient.query('audit', 'list', {
-    query: { limit: 100, ...(environmentId === null ? {} : { environmentId }) },
+/** One org's activity, beside the account's own. */
+export const activityAtom = Atom.family((orgId: string) =>
+  ApiClient.query('activity', 'list', {
+    query: { limit: 100, orgId },
     reactivityKeys: ['audit'],
   }).pipe(Atom.mapResult(({ events }) => events)),
 );

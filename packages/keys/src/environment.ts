@@ -4,12 +4,16 @@
  *
  * ```
  * environmentKey = X25519 pair, one per environment and key version
- * wrap       = box(readerPub,  environmentPriv, info "baymutt-project-key",
- *                  aad = [accountId, environmentId, keyVersion, readerId])       → stored
- * value      = box(environmentPub, plaintext,   info "baymutt-secret-value",
- *                  aad = [accountId, environmentId, keyVersion, name, version])  → stored
- * proof      = vouched(voucherPriv → readerPub, environmentPub, info "baymutt-project-key-proof",
- *                      aad = [accountId, environmentId, keyVersion, readerId])   → stored
+ * wrap       = box(readerPub,  environmentPriv, info "baymutt-key-wrap",
+ *                  aad = [environmentId, keyVersion, readerId])                  → stored
+ * value      = box(environmentPub, plaintext,   info "baymutt-sealed-value",
+ *                  aad = [environmentId, keyVersion, name, version])             → stored
+ * proof      = vouched(voucherPriv → readerPub, environmentPub, info "baymutt-key-proof",
+ *                      aad = [environmentId, keyVersion, readerId])              → stored
+ *
+ * Every binding names the environment and nothing above it: an environment id is unique, so a
+ * wrap, a proof or a value can be answered for no other environment, and moving an environment to
+ * another org, or adding a member, reseals nothing.
  *
  * Sealing a value needs only the public key, so a writer holds no secret and can read nothing. A
  * wrap is bound to its reader and a value to its slot, so the store cannot answer one for another.
@@ -17,7 +21,7 @@
  * and can seal a key pair of its own making into a wrap.
  *
  * So **which public key is the environment's comes from the proof and from nothing else.** Only a
- * party the reader already trusts (the owner's account, the service account that made this one, itself)
+ * party the reader already trusts (the owner's account, the credential that made this one, itself)
  * can vouch for one, and a client seals to, and unwraps against, the key that was vouched for.
  */
 
@@ -40,7 +44,6 @@ import {
 import { sha256Base64Url, tuple } from './encoding.ts';
 
 export type EnvironmentKeyBinding = {
-  readonly accountId: string;
   readonly environmentId: string;
   readonly keyVersion: number;
 };
@@ -50,19 +53,17 @@ export type ValueSlot = EnvironmentKeyBinding & {
   readonly version: number;
 };
 
-// Every stored key and value was sealed under these while an environment was called a project: the
-// labels keep that word, since changing one makes them unreadable (the tests pin them).
-const WRAP_INFO = 'baymutt-project-key';
-const PROOF_INFO = 'baymutt-project-key-proof';
-const VALUE_INFO = 'baymutt-secret-value';
+// Each label names the job it does and no product noun, so renaming a product word never touches
+// a stored key or value (the tests pin them).
+const WRAP_INFO = 'baymutt-key-wrap';
+const PROOF_INFO = 'baymutt-key-proof';
+const VALUE_INFO = 'baymutt-sealed-value';
 
-const wrapAad = (
-  { accountId, environmentId, keyVersion }: EnvironmentKeyBinding,
-  readerId: string,
-) => tuple(accountId, environmentId, String(keyVersion), readerId);
+const wrapAad = ({ environmentId, keyVersion }: EnvironmentKeyBinding, readerId: string) =>
+  tuple(environmentId, String(keyVersion), readerId);
 
-const valueAad = ({ accountId, environmentId, keyVersion, name, version }: ValueSlot) =>
-  tuple(accountId, environmentId, String(keyVersion), name, String(version));
+const valueAad = ({ environmentId, keyVersion, name, version }: ValueSlot) =>
+  tuple(environmentId, String(keyVersion), name, String(version));
 
 export const generateEnvironmentKey = generateKeyPair;
 
@@ -79,7 +80,7 @@ export const wrapEnvironmentKey = async ({
   /** PKCS #8, base64url. */
   readonly environmentPrivateKey: string;
   readonly readerPublicKey: string;
-  /** A credential id, or the account id for the owner's own wrap. */
+  /** A credential id, or an account id for a member's own copy. */
   readonly readerId: string;
   readonly binding: EnvironmentKeyBinding;
 }): Promise<string> =>
@@ -186,7 +187,7 @@ export const vouchedEnvironmentKey = async ({
 };
 
 /**
- * A new environment's key pair. Each first reader (the owner's account always, and the service account that
+ * A new environment's key pair. Each first reader (the creator's account always, and the credential that
  * creates it) gets the private half wrapped to it and the creator's proof of the public half. The
  * private key never leaves this call unwrapped.
  */

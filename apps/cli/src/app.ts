@@ -5,7 +5,7 @@ import * as GlobalFlag from 'effect/cli/GlobalFlag';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
 import * as Logger from 'effect/Logger';
-import { auditCommand, serviceAccountsCommand } from './commands/access.ts';
+import { activityCommand, serviceAccountsCommand } from './commands/access.ts';
 import { binCommand } from './commands/bin.ts';
 import { environmentsCommand, whoamiCommand } from './commands/environments.ts';
 import { loginCommand, logoutCommand } from './commands/login.ts';
@@ -25,7 +25,7 @@ export const cli = Command.make('baymutt').pipe(
     ...secretCommands,
     binCommand,
     serviceAccountsCommand,
-    auditCommand,
+    activityCommand,
   ]),
   // Inside the tree, so `--help` and `--version` never read the settings or the key.
   Command.provide(KeyStore.layer.pipe(Layer.provideMerge(Settings.layer))),

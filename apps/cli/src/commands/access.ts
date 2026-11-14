@@ -1,4 +1,4 @@
-// Service accounts: making a narrower one for a job, changing what it holds, revoking; and the log.
+// Service accounts: making one for a job, changing what it holds, revoking; and the activity.
 import { type Environment, LabelSchema, type ServiceAccount as Listed } from '@baymutt/api';
 import {
   generateServiceAccountToken,
@@ -17,7 +17,7 @@ import * as ChildProcess from 'effect/process/ChildProcess';
 import * as ChildProcessSpawner from 'effect/process/ChildProcessSpawner';
 import * as Stream from 'effect/Stream';
 import { aboutFlags, aboutPayload } from '../about.ts';
-import { openEnvironment, resolveEnvironment, trustedKey } from '../environments.ts';
+import { addressOf, openEnvironment, resolveEnvironment, trustedKey } from '../environments.ts';
 import { crypto_, report, usage } from '../errors.ts';
 import { print } from '../output.ts';
 import { ServiceAccount } from '../service-account.ts';
@@ -30,7 +30,7 @@ const listServiceAccountsCommand = Command.make(
     yield* print(yield* api.credentials.list());
   }, report),
 ).pipe(
-  Command.withDescription('This service account and the service accounts it made'),
+  Command.withDescription('This CLI login or service account, and the service accounts it made'),
   Command.withAlias('ls'),
 );
 
@@ -64,13 +64,13 @@ const createServiceAccountCommand = Command.make(
     ),
     read: Flag.String('read').pipe(
       Flag.withDescription(
-        'An environment it may load (repeatable). This service account must be able to',
+        'An environment it may load (repeatable), as <org>/<name>. This CLI login must be able to',
       ),
       Flag.atLeast(0),
     ),
     write: Flag.String('write').pipe(
       Flag.withDescription(
-        'An environment it may write (repeatable). This service account must be able to',
+        'An environment it may write (repeatable), as <org>/<name>. This CLI login must be able to',
       ),
       Flag.atLeast(0),
     ),
@@ -97,13 +97,14 @@ const createServiceAccountCommand = Command.make(
     }
     const environments = yield* Effect.forEach(names, resolveEnvironment, { concurrency: 4 });
 
-    // The new service account's key carries this service account's public key, so it knows whose proofs to take.
+    // The new service account's key carries this login's public key, so it knows whose proofs to take.
     const token = generateServiceAccountToken(serviceAccount.key.publicKey);
     const made = yield* crypto_(() => serviceAccountKeyFromToken(token));
     const reader = { id: made.credentialId, publicKey: made.publicKey };
     const grantFor = Effect.fnUntraced(function* (environment: Environment) {
-      const canWrite = write.includes(environment.name) || write.includes(environment.id);
-      const canRead = read.includes(environment.name) || read.includes(environment.id);
+      const names = [addressOf(environment), environment.id];
+      const canWrite = names.some(name => write.includes(name));
+      const canRead = names.some(name => read.includes(name));
       const { publicKey, binding } = yield* trustedKey(environment);
       const keyProof = yield* crypto_(() =>
         vouchForEnvironmentKey({
@@ -115,7 +116,7 @@ const createServiceAccountCommand = Command.make(
       );
       if (!canRead) return { environmentId: environment.id, canWrite, readWrap: null, keyProof };
       // A read is the environment key wrapped to the new service account, which only a holder of the key
-      // can make: this service account opens it and seals it again.
+      // can make: this login opens it and seals it again.
       const { encodedEnvironmentKey } = yield* openEnvironment(environment);
       const readWrap = yield* crypto_(() =>
         wrapEnvironmentKey({
@@ -131,16 +132,19 @@ const createServiceAccountCommand = Command.make(
     // This login vouches for the new key, so its access can change later without anyone taking
     // the store's word for it. Only with an account key learned at pairing, never the store's.
     const account = yield* serviceAccount.account;
-    const vouchers = account.isPinned
-      ? yield* crypto_(() =>
-          vouchForServiceAccount({
-            makerKey: serviceAccount.key.privateKey,
-            accountId: account.id,
-            accountPublicKey: account.publicKey,
-            serviceAccount: reader,
-          }),
-        )
-      : undefined;
+    if (!account.isPinned) {
+      return yield* usage(
+        'This key comes from BAYMUTT_KEY, so it has no account key it can trust to vouch for a new service account to. Make it from a computer where `baymutt login` ran.',
+      );
+    }
+    const vouchers = yield* crypto_(() =>
+      vouchForServiceAccount({
+        makerKey: serviceAccount.key.privateKey,
+        accountId: account.id,
+        accountPublicKey: account.publicKey,
+        serviceAccount: reader,
+      }),
+    );
     const created = yield* serviceAccount.api.credentials.create({
       payload: {
         ...about,
@@ -149,7 +153,7 @@ const createServiceAccountCommand = Command.make(
         publicKey: made.publicKey,
         bearerHash: made.bearerHash,
         grants: yield* Effect.forEach(environments, grantFor, { concurrency: 4 }),
-        ...(vouchers === undefined ? {} : { vouchers }),
+        vouchers,
       },
     });
 
@@ -167,7 +171,7 @@ const createServiceAccountCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Make a service account that holds only the environments named here, with the access given. It cannot widen its own access, and makes no others; this login and the owner can change it later. Its key goes to the command after `--`, on stdin, and is never printed',
+    'Make a service account that holds only the environments named here, with the access given. It cannot widen its own access, and makes no others; this CLI login and the owner can change it later. Its key goes to the command after `--`, on stdin, and is never printed',
   ),
 );
 
@@ -187,7 +191,7 @@ const accessOn = Effect.fnUntraced(function* (
   const gainsRead = canRead && !held?.canRead;
   if ((gainsEnvironment || gainsRead) && reader === null) {
     return yield* usage(
-      `Nothing vouches for ${target.name}’s key: a CLI before 0.4.0 made it. It can lose access, and can gain only write on an environment it already holds.`,
+      `nothing vouches for ${target.name}’s key: the store shows no voucher from the CLI login that made it, so it can lose access and gain none that needs its key.`,
       'integrity',
     );
   }
@@ -236,7 +240,7 @@ const changeAccessCommand = Command.make(
   {
     id: Argument.String('id').pipe(
       Argument.withDescription(
-        'The id of a service account this login made (see `baymutt service-accounts`)',
+        'The id of a service account this CLI login made (see `baymutt service-accounts`)',
       ),
     ),
     read: Flag.String('read').pipe(
@@ -264,7 +268,7 @@ const changeAccessCommand = Command.make(
     const target = credentials.find(listed => listed.id === id);
     if (target?.parentId !== serviceAccount.key.credentialId) {
       return yield* usage(
-        `This login made no service account with id ${id}. See the ones it made with \`baymutt service-accounts\`.`,
+        `This CLI login made no service account with id ${id}. See the ones it made with \`baymutt service-accounts\`.`,
         'notFound',
       );
     }
@@ -297,7 +301,9 @@ const changeAccessCommand = Command.make(
     }
     const removed = yield* Effect.forEach(remove, resolveEnvironment);
     const clash = removed.find(environment => given.has(environment.id));
-    if (clash !== undefined) return yield* usage(`${clash.name} is both given and removed.`);
+    if (clash !== undefined) {
+      return yield* usage(`${addressOf(clash)} is both given and removed.`);
+    }
     const prepared = yield* Effect.forEach(
       [...given.values()],
       ({ environment, canRead, canWrite }) =>
@@ -314,7 +320,7 @@ const changeAccessCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Change what a service account this login made can reach, keeping its key: give it an environment, change read or write on one, or take one away. It cannot change its own access',
+    'Change what a service account this CLI login made can reach, keeping its key: give it an environment, change read or write on one, or take one away. It cannot change its own access',
   ),
 );
 
@@ -323,7 +329,7 @@ const revokeCommand = Command.make(
   {
     id: Argument.String('id').pipe(
       Argument.withDescription(
-        'The service account’s id (see `baymutt service-accounts`). To revoke this computer’s own login and forget its key, use `baymutt logout`',
+        'The id of a service account this one made, or of this one itself (see `baymutt service-accounts`). To revoke this computer’s own CLI login and forget its key, use `baymutt logout`',
       ),
     ),
   },
@@ -333,7 +339,7 @@ const revokeCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke a service account this one made, or this one itself by its id, with every service account it made. What it already read stays read: replace those values at their vendors',
+    'Revoke a service account this one made, or this one itself by its id, with every service account it made. What it already read stays read',
   ),
 );
 
@@ -348,11 +354,11 @@ export const serviceAccountsCommand = Command.make('service-accounts').pipe(
   Command.provide(ServiceAccount.layer),
 );
 
-export const auditCommand = Command.make(
-  'audit',
+export const activityCommand = Command.make(
+  'activity',
   {
     environment: Flag.String('environment').pipe(
-      Flag.withDescription('Only this environment’s entries'),
+      Flag.withDescription('Only this environment’s entries: <org>/<name>'),
       Flag.optional,
     ),
     limit: Flag.Int('limit').pipe(
@@ -366,13 +372,13 @@ export const auditCommand = Command.make(
       Flag.optional,
     ),
   },
-  Effect.fn('audit')(function* ({ environment, limit, before }) {
+  Effect.fn('activity')(function* ({ environment, limit, before }) {
     const { api } = yield* ServiceAccount;
     const environmentId = Option.isSome(environment)
       ? (yield* resolveEnvironment(environment.value)).id
       : undefined;
     yield* print(
-      yield* api.audit.list({
+      yield* api.activity.list({
         query: {
           limit,
           ...(environmentId === undefined ? {} : { environmentId }),
@@ -383,7 +389,7 @@ export const auditCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'What this service account did, newest first. The owner reads the whole log in the dashboard',
+    'What this CLI login or service account did, newest first. The owner reads all of an org’s activity in the dashboard',
   ),
   Command.provide(ServiceAccount.layer),
 );

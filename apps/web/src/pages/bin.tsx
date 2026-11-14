@@ -1,6 +1,7 @@
 import type { BinEnvironment, BinSecret } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
+import { usePickedOrg } from '../components/orgs.tsx';
 import {
   Code,
   Empty,
@@ -16,6 +17,7 @@ import {
 import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
 import {
+  addressOf,
   binAtom,
   purgeEnvironmentAtom,
   purgeSecretAtom,
@@ -96,7 +98,7 @@ const EnvironmentRow = ({ environment }: { readonly environment: BinEnvironment 
   const [purging, purge] = useAtom(purgeEnvironmentAtom(environment.id));
   return (
     <BinRow
-      name={<Code className="text-base font-medium">{environment.name}</Code>}
+      name={<Code className="text-base font-medium">{addressOf(environment)}</Code>}
       deleted={
         <>
           deleted <Time at={environment.deletedAt} />
@@ -109,7 +111,7 @@ const EnvironmentRow = ({ environment }: { readonly environment: BinEnvironment 
         error: failureMessage(restoring),
       }}
       purge={{
-        title: `Delete ${environment.name} for good?`,
+        title: `Delete ${addressOf(environment)} for good?`,
         body: 'Its secrets, every version of each, and who could reach it are removed from baymutt.',
         onConfirm: () => purge(environment.id),
         waiting: purging.waiting,
@@ -129,7 +131,8 @@ const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
       name={
         <p>
           <Code className="text-base font-medium">{secret.name}</Code>{' '}
-          <span className="text-muted">in</span> <Code>{secret.environmentName}</Code>
+          <span className="text-muted">in</span>{' '}
+          <Code>{addressOf({ orgSlug: secret.orgSlug, name: secret.environmentName })}</Code>
         </p>
       }
       deleted={
@@ -156,20 +159,28 @@ const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
 
 export const BinPage = () => {
   const result = useAtomValue(binAtom);
-  const bin = latest(result);
+  const { org } = usePickedOrg();
+  const all = latest(result);
+  const bin =
+    all === null || org === null
+      ? null
+      : {
+          environments: all.environments.filter(environment => environment.orgId === org.id),
+          secrets: all.secrets.filter(secret => secret.orgId === org.id),
+        };
   const failure = failureMessage(result);
   const isEmpty = bin !== null && bin.environments.length === 0 && bin.secrets.length === 0;
   return (
     <>
       <PageHeader
         title="Bin"
-        lede="Deleted environments and secrets. Each can be restored for 30 days, then it is removed for good."
+        lede={`Deleted environments and secrets${org === null ? '' : ` of ${org.name}`}. Each can be restored for 30 days, then it is removed for good.`}
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
       {bin === null && !failure && <Skeleton rows={2} />}
       {isEmpty && (
         <Empty title="The bin is empty">
-          <p>An environment or secret you or a service account deletes stays here for 30 days.</p>
+          <p>An environment or secret you or a CLI login deletes stays here for 30 days.</p>
         </Empty>
       )}
       {bin !== null && bin.environments.length > 0 && (

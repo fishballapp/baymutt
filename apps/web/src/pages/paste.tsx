@@ -54,7 +54,7 @@ export const PastePage = ({ id }: { readonly id: string }) => {
     );
   }
 
-  const { request } = target;
+  const { link } = target;
   return (
     <form
       className="space-y-6"
@@ -65,25 +65,28 @@ export const PastePage = ({ id }: { readonly id: string }) => {
     >
       <div>
         <h1 className="text-xl leading-tight">
-          Paste <Code className="text-xl font-[650]">{request.name}</Code>
+          Paste <Code className="text-xl font-[650]">{link.name}</Code>
         </h1>
         <p className="mt-2 text-muted">
-          <span className="text-foreground">{request.createdBy.name}</span> asks for it in{' '}
-          <Code className="text-foreground">{request.environmentName}</Code>.
+          <span className="text-foreground">{link.createdBy.name}</span> asks for it in{' '}
+          <Code className="text-foreground">
+            {link.orgSlug}/{link.environmentName}
+          </Code>
+          .
         </p>
       </div>
-      {(request.reason !== '' || request.hint !== '') && (
+      {(link.reason !== '' || link.hint !== '') && (
         <dl className="space-y-3 rounded-control border border-line bg-sunken px-4 py-3">
-          {request.reason !== '' && (
+          {link.reason !== '' && (
             <div>
               <dt className="text-sm text-muted">Why</dt>
-              <dd>{request.reason}</dd>
+              <dd>{link.reason}</dd>
             </div>
           )}
-          {request.hint !== '' && (
+          {link.hint !== '' && (
             <div>
               <dt className="text-sm text-muted">Where to find it</dt>
-              <dd>{request.hint}</dd>
+              <dd>{link.hint}</dd>
             </div>
           )}
         </dl>

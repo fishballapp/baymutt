@@ -1,7 +1,15 @@
 /** Who may do what: service accounts, environments and the grants between them. */
 import { tokenHash } from '@baymutt/keys/wire';
 import { describe, expect, it } from 'vitest';
-import { call, newAccount, ok, type StoreWorld, storeWorld, VAULT_PROOF } from '../test-store.ts';
+import {
+  call,
+  newAccount,
+  ok,
+  type StoreWorld,
+  storeWorld,
+  VAULT_PROOF,
+  VOUCHERS,
+} from '../test-store.ts';
 import { keyLike, sealedLike } from '../test-support.ts';
 
 const child = async (
@@ -23,6 +31,7 @@ const child = async (
   const id = crypto.randomUUID();
   const secret = keyLike('c');
   const answer = await call(w, 'POST', '/credentials', parent.headers, {
+    vouchers: VOUCHERS,
     ...about,
     id,
     name,
@@ -91,6 +100,7 @@ describe('a service account', () => {
       bearerHash: keyLike('h'),
       endorsement: sealedLike('e'),
       welcome: sealedLike('w'),
+      grants: [],
     };
 
     expect(await call(w, 'POST', '/credentials/pair', owner, pairing)).toMatchObject({
@@ -163,7 +173,7 @@ describe('a service account', () => {
   });
 
   it('creates an environment and holds read and write on what it created', async () => {
-    const { w, owner, pair, environment } = await storeWorld();
+    const { w, owner, pair, environment, orgId } = await storeWorld();
     const serviceAccount = await pair('laptop');
 
     const environmentId = await environment('app/development', serviceAccount.headers);
@@ -177,17 +187,17 @@ describe('a service account', () => {
             keyVersion: 1,
             canRead: true,
             canWrite: true,
-            createdBy: { kind: 'machine', id: serviceAccount.id, name: 'laptop' },
+            createdBy: { kind: 'credential', id: serviceAccount.id, name: 'laptop' },
           },
         ],
       },
     });
     // The owner reads every environment: the creator wrapped the key to the account too.
-    expect(await call(w, 'GET', `/environments/${environmentId}/owner-wrap`, owner)).toEqual({
+    expect(await call(w, 'GET', `/environments/${environmentId}/member-wrap`, owner)).toEqual({
       status: 200,
       body: {
-        ownerWrap: sealedLike('owner-wrap'),
-        ownerProof: sealedLike('owner-proof'),
+        memberWrap: sealedLike('member-wrap'),
+        memberProof: sealedLike('member-proof'),
         keyVersion: 1,
         creator: {
           id: serviceAccount.id,
@@ -197,15 +207,16 @@ describe('a service account', () => {
       },
     });
     expect(
-      await call(w, 'GET', `/environments/${environmentId}/owner-wrap`, serviceAccount.headers),
+      await call(w, 'GET', `/environments/${environmentId}/member-wrap`, serviceAccount.headers),
     ).toMatchObject({ status: 403 });
     expect(
       await call(w, 'POST', '/environments', owner, {
         id: crypto.randomUUID(),
+        orgId,
         name: 'app/development',
         publicKey: keyLike('p'),
-        ownerWrap: sealedLike('o'),
-        ownerProof: sealedLike('o'),
+        memberWrap: sealedLike('o'),
+        memberProof: sealedLike('o'),
         creatorWrap: null,
         creatorProof: null,
       }),
@@ -405,12 +416,6 @@ describe('what a caller is shown', () => {
   });
 });
 
-const VOUCHERS = {
-  keyToOwner: sealedLike('key-to-owner', 64),
-  keyToMaker: sealedLike('key-to-maker', 64),
-  accountKey: sealedLike('account-key', 64),
-};
-
 describe('a scoped service account’s access', () => {
   /** A login holding two environments, and a service account it made with read on the first. */
   const setup = async () => {
@@ -523,7 +528,7 @@ describe('a scoped service account’s access', () => {
     const audit = await ok<{ events: { action: string; detail: string | null }[] }>(
       w,
       'GET',
-      '/audit',
+      '/activity',
       owner,
     );
     const grants = audit.events.filter(({ action }) => action.startsWith('grant.'));
@@ -610,7 +615,7 @@ describe('the audit log', () => {
     await write(environmentId, 'API_KEY', 1, serviceAccount.headers);
     await ok(w, 'GET', `/environments/${environmentId}/bundle`, serviceAccount.headers);
 
-    const all = await ok<{ events: { action: string }[] }>(w, 'GET', '/audit', owner);
+    const all = await ok<{ events: { action: string }[] }>(w, 'GET', '/activity', owner);
 
     expect(all.events.map(({ action }) => action)).toEqual([
       'environment.load',
@@ -618,10 +623,11 @@ describe('the audit log', () => {
       'grant.set',
       'credential.pair',
       'environment.create',
+      'org.create',
       'account.create',
     ]);
     expect(all.events[1]).toMatchObject({
-      actor: { kind: 'machine', id: serviceAccount.id, name: 'laptop' },
+      actor: { kind: 'credential', id: serviceAccount.id, name: 'laptop' },
       environmentName: 'app/production',
       secretName: 'API_KEY',
       version: 1,
@@ -632,7 +638,7 @@ describe('the audit log', () => {
     });
     expect(
       (
-        await ok<{ events: { action: string }[] }>(w, 'GET', '/audit', serviceAccount.headers)
+        await ok<{ events: { action: string }[] }>(w, 'GET', '/activity', serviceAccount.headers)
       ).events.map(({ action }) => action),
     ).toEqual(['environment.load', 'secret.write']);
   });
@@ -645,39 +651,42 @@ describe('the audit log', () => {
     const first = await ok<{ events: { id: string }[]; nextBefore: string | null }>(
       w,
       'GET',
-      '/audit?limit=2',
+      '/activity?limit=2',
       owner,
     );
     const rest = await ok<{ events: { action: string }[]; nextBefore: string | null }>(
       w,
       'GET',
-      `/audit?limit=2&before=${first.nextBefore}`,
+      `/activity?limit=2&before=${first.nextBefore}`,
       owner,
     );
 
     expect(first.events).toHaveLength(2);
     expect(first.nextBefore).toBe(first.events[1]?.id);
-    expect(rest.events.map(({ action }) => action)).toEqual(['account.create']);
+    expect(rest.events.map(({ action }) => action)).toEqual(['org.create', 'account.create']);
     expect(rest.nextBefore).toBeNull();
   });
 });
 
 describe('the beta limits', () => {
   it('refuses one environment more than an account may hold, and makes room when one is deleted', async () => {
-    const { w, owner, environment, accountId } = await storeWorld();
+    const { w, owner, environment, org, orgId } = await storeWorld();
     const first = await environment('p/0');
+    // Counted across the person's orgs: the fillers sit in a second one.
+    const other = await org('other');
     w.sqlite.exec(
       `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 99)
-       INSERT INTO environment (id, account_id, name, public_key, key_version, owner_wrap, owner_proof, created_by, created_at)
-       SELECT 'filler-' || i, '${accountId}', 'p/' || i, 'k', 1, 'w', 'p', '{}', 0 FROM n`,
+       INSERT INTO environment (id, org_id, name, public_key, key_version, created_by, created_at)
+       SELECT 'filler-' || i, '${other}', 'p/' || i, 'k', 1, '{}', 0 FROM n`,
     );
     const another = () =>
       call(w, 'POST', '/environments', owner, {
         id: crypto.randomUUID(),
+        orgId,
         name: 'p/one-more',
         publicKey: keyLike('p'),
-        ownerWrap: sealedLike('o'),
-        ownerProof: sealedLike('o'),
+        memberWrap: sealedLike('o'),
+        memberProof: sealedLike('o'),
         creatorWrap: null,
         creatorProof: null,
       });

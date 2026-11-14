@@ -8,6 +8,7 @@ import * as Schema from 'effect/Schema';
 import {
   ActorSchema,
   EnvironmentNameSchema,
+  OrgSlugSchema,
   SecretNameSchema,
   TimestampSchema,
   VersionSchema,
@@ -19,6 +20,8 @@ export const BIN_DAYS = 30;
 
 export const BinEnvironmentSchema = Schema.Struct({
   id: Schema.String,
+  orgId: Schema.String,
+  orgSlug: OrgSlugSchema,
   name: EnvironmentNameSchema,
   deletedAt: TimestampSchema,
   /** When it is removed for good, with its secrets, versions and grants. */
@@ -27,6 +30,8 @@ export const BinEnvironmentSchema = Schema.Struct({
 export type BinEnvironment = typeof BinEnvironmentSchema.Type;
 
 export const BinSecretSchema = Schema.Struct({
+  orgId: Schema.String,
+  orgSlug: OrgSlugSchema,
   environmentId: Schema.String,
   environmentName: EnvironmentNameSchema,
   name: SecretNameSchema,
@@ -51,7 +56,7 @@ export class BinGroup extends HttpApiGroup.make('bin')
       OpenApi.annotations({
         summary: 'What is in the bin',
         description:
-          'Newest first. The owner and a login see the whole account; any other service account sees what is in the environments it holds a grant on. A secret is restored with a rollback; an environment, by the owner.',
+          'Newest first, across the caller’s orgs. The owner and a CLI login see all of it; a service account sees what is in the environments it holds a grant on. A secret is restored with a rollback; an environment, by the owner.',
       }),
     ),
   )

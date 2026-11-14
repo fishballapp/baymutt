@@ -1,7 +1,7 @@
 # baymutt
 
 A zero-knowledge secret store for people who run coding agents. Agents load, write and replace
-secrets with no approval prompt, through a login the owner approves once. The store keeps every
+secrets with no approval prompt, through a CLI login the owner approves once. The store keeps every
 value sealed, so it cannot read them.
 
 Hosted at **[baymutt.fsh.ba](https://baymutt.fsh.ba)**, free while it is in beta. The name is 秘密
@@ -9,32 +9,35 @@ Hosted at **[baymutt.fsh.ba](https://baymutt.fsh.ba)**, free while it is in beta
 
 ## Use it
 
-Create an account at [baymutt.fsh.ba](https://baymutt.fsh.ba/signup), then, where an agent runs:
+Create an account at [baymutt.fsh.ba](https://baymutt.fsh.ba/signup) and an org in it (`acme`
+below), then, where an agent runs:
 
 ```sh
 npm install -g baymutt            # or run any command as `npx baymutt …`
 baymutt login                     # makes a key here and prints a link; the owner opens it and approves
-baymutt environments create app/production
-baymutt generate app/production SESSION_SECRET
+baymutt environments create acme/app/production
+baymutt generate acme/app/production SESSION_SECRET
 ```
 
 Every command prints JSON on stdout and one JSON error line on stderr, and no command prints a
 value. `baymutt --help` lists them all.
 
-- **A login reads and writes every environment**, including ones made later: approving it is the
-  owner's one decision. `--description` says what it is for, `--expires 90d` when it stops, and
-  `baymutt logout` revokes it and forgets its key.
-- **A value only the owner can fetch** (a vendor's API key) is asked for with
-  `baymutt request <environment> <NAME>`, which prints a single-use link to a page where they paste it.
-- **A login can make a scoped service account.** It holds only the environments named, cannot widen
+- **An environment belongs to an org** and is named with the org's slug first, `<org>/<name>`. Orgs
+  are made in the dashboard; their creator owns them.
+- **A CLI login reads and writes every environment of its account's orgs**, including ones made
+  later: approving it is the owner's one decision. `--description` says what it is for,
+  `--expires 90d` when it stops, and `baymutt logout` revokes it and forgets its key.
+- **A value only the owner can fetch** (a vendor's API key) arrives through a paste link:
+  `baymutt paste-link <environment> <NAME>` prints a single-use link to a page where they paste it.
+- **A CLI login can make a service account.** It holds only the environments named, cannot widen
   its own access, and its key goes to the command after `--` on stdin, never onto a screen:
 
   ```sh
-  baymutt service-accounts create --name "CI: deploy" --read app/production --expires 90d -- gh secret set BAYMUTT_KEY -R owner/repo
+  baymutt service-accounts create --name "CI: deploy" --read acme/app/production --expires 90d -- gh secret set BAYMUTT_KEY -R owner/repo
   ```
 
-  Its login, or the owner in the dashboard, changes what it reaches later, and its key stays the
-  same: `baymutt service-accounts access <id> --read app/staging --remove app/production`.
+  Its CLI login, or the owner in the dashboard, changes what it reaches later, and its key stays the
+  same: `baymutt service-accounts access <id> --read acme/app/staging --remove acme/app/production`.
 
 ### Loading values with varlock
 
@@ -44,27 +47,28 @@ value. `baymutt --help` lists them all.
 ```sh
 # @plugin(@baymutt/varlock-plugin)
 # @initBaymutt(key=$BAYMUTT_KEY)
-# @setValuesBulk(baymuttLoad("app/production"))
+# @setValuesBulk(baymuttLoad("acme/app/production"))
 # ---
 DATABASE_URL=
 SESSION_SECRET=
 ```
 
-Then `varlock run -- <command>`. Where you ran `baymutt login`, `BAYMUTT_KEY` stays unset and the plugin reads
-the key it stored; in CI it is the job's secret.
+Then `varlock run -- <command>`. Where you ran `baymutt login`, `BAYMUTT_KEY` stays unset and the
+plugin reads the key it stored; in CI it is the job's secret.
 
 ## How it keeps values from the host
 
 - **Values are sealed and opened on the client**, with keys the host never holds: the owner's vault
-  is opened in the browser by a passkey or a password, and a service account's key is made where it is used
-  and never sent.
-- **Read access is cryptographic.** Reading an environment means holding its key, wrapped to yours by
-  someone who already holds it: the owner's browser wraps every environment to each login it approves,
-  and a login hands a scoped service account only what it holds. The owner can hand one more,
-  to the key its login vouched for when it made it. The Worker stores ciphertext,
-  public keys, wraps, grants and the audit log.
-- **A client does not trust a public key the store serves.** Which key belongs to an environment or a
-  service account is vouched for by a party the reader already trusts, in a box only those two can make.
+  is opened in the browser by a passkey or a password, and a CLI login's or service account's key
+  is made where it is used and never sent.
+- **Read access is cryptographic.** Reading an environment means holding its key, wrapped to yours
+  by someone who already holds it: the owner's browser wraps every environment to each CLI login it
+  approves, and a CLI login hands a service account only what it holds. The owner can hand one
+  more, to the key its CLI login vouched for when it made it. The Worker stores ciphertext, public
+  keys, wraps, grants and the activity log.
+- **A client does not trust a public key the store serves.** Which key belongs to an environment or
+  a service account is vouched for by a party the reader already trusts, in a box only those two
+  can make.
 - **The dashboard reveals a value only with the vault open.** The owner's browser fetches one
   version's ciphertext and opens it with the vault; the store logs the request and never sees the
   value. A session an email link made cannot.
@@ -73,7 +77,7 @@ the key it stored; in CI it is the job's secret.
   back, for 30 days; then it is removed for good. Only the owner, in the dashboard, removes
   something sooner.
 
-What it does not hide: environment and secret names, sizes, and who read or wrote what when. What it
+What it does not hide: org, environment and secret names, sizes, and who read or wrote what when. What it
 does not protect yet: a compromised host could swap a value for one of its own or answer with an
 older version; the audit log and the version history are what would show it.
 

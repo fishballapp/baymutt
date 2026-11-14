@@ -1,8 +1,7 @@
 // Secrets: named values in an environment. Every write adds a version and nothing is overwritten, which
-// is what makes it safe for a service account to write without asking.
+// is what makes it safe for a credential to write without asking.
 
 import { coded } from '@internal/effect-api';
-import * as Effect from 'effect/Effect';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as OpenApi from 'effect/http-api/OpenApi';
@@ -30,11 +29,8 @@ export const SecretSchema = Schema.Struct({
   size: Schema.NullOr(Schema.Int),
   updatedAt: TimestampSchema,
   updatedBy: ActorSchema,
-  /**
-   * When a deleted secret leaves the bin for good, every version with it; null while it is live.
-   * A store from before the bin sends no such key, which reads as null.
-   */
-  purgeAt: Schema.NullOr(TimestampSchema).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** When a deleted secret leaves the bin for good, every version with it; null while it is live. */
+  purgeAt: Schema.NullOr(TimestampSchema),
 }).annotate({ identifier: 'Secret' });
 export type Secret = typeof SecretSchema.Type;
 
@@ -52,7 +48,6 @@ export type SecretVersion = typeof SecretVersionSchema.Type;
 export const BundleSchema = Schema.Struct({
   environment: Schema.Struct({
     id: Schema.String,
-    accountId: Schema.String,
     name: EnvironmentNameSchema,
     publicKey: PublicKeySchema,
     keyVersion: Schema.Int,

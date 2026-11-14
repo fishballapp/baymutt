@@ -69,11 +69,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
           source: 'environment',
           read: Effect.succeed(fromEnvironment),
           write: () =>
-            Effect.fail(
-              usage(
-                'BAYMUTT_KEY is set, so this service account’s key comes from it. Unset it to log in.',
-              ),
-            ),
+            Effect.fail(usage('BAYMUTT_KEY is set, so the key comes from it. Unset it to log in.')),
           remove: Effect.fail(
             usage(
               'BAYMUTT_KEY is set, so this key belongs to whatever set it, not to this computer. Revoke it with `baymutt service-accounts revoke <id>` or in the dashboard, and remove it from where it is kept.',
@@ -114,7 +110,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
                 exitCode === 0
                   ? Effect.void
                   : Effect.fail(
-                      usage('The login keychain refused the service account key. Is it unlocked?'),
+                      usage('The login keychain refused the CLI login’s key. Is it unlocked?'),
                     ),
             ),
           // Exit 44 is "no such item": already gone.
@@ -125,7 +121,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
                 ? Effect.void
                 : Effect.fail(
                     usage(
-                      'The login keychain refused to delete the service account key. Is it unlocked?',
+                      'The login keychain refused to delete the CLI login’s key. Is it unlocked?',
                     ),
                   ),
           ),

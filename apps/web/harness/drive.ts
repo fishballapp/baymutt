@@ -168,14 +168,22 @@ const main = async (browser: Browser) => {
   );
   await shoot(page, '03-recovery-key');
   await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByText('No environments yet').waitFor();
+  // No org yet: the Environments page makes one first.
+  await page.getByLabel('Org name').fill('Acme');
+  check(
+    'a new org’s slug follows its name',
+    (await page.getByLabel('Slug').inputValue()) === 'acme',
+  );
+  await shoot(page, '04-new-org');
+  await page.getByRole('button', { name: 'Create org' }).click();
+  await page.getByText('No environments in Acme yet').waitFor();
   await shoot(page, '04-environments-empty');
 
   // --- an environment and a secret, from the dashboard -------------------------------------------
   await page.getByLabel('New environment').fill('app/production');
   await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/production/ }).click();
-  await page.getByRole('heading', { name: 'app/production' }).waitFor();
+  await page.getByRole('heading', { name: 'acme/app/production' }).waitFor();
   await shoot(page, '05-environment-empty');
   await page.getByRole('button', { name: 'Add a secret' }).click();
   await page.getByLabel('Name').fill('SIGNING_KEY');
@@ -289,12 +297,12 @@ const main = async (browser: Browser) => {
       ) === true,
   );
 
-  const set = laptop.cli(['set', 'app/production', 'API_KEY'], 'value-from-the-cli\n');
+  const set = laptop.cli(['set', 'acme/app/production', 'API_KEY'], 'value-from-the-cli\n');
   check(
     'the service account sets a value from stdin',
     set.json?.version === 1 && set.json?.length === 18,
   );
-  const generated = laptop.cli(['generate', 'app/production', 'SESSION_SECRET']);
+  const generated = laptop.cli(['generate', 'acme/app/production', 'SESSION_SECRET']);
   check('the service account generates a value without showing it', generated.json?.length === 43);
 
   // The varlock plugin loads the environment and gives the values to a child process only.
@@ -302,7 +310,7 @@ const main = async (browser: Browser) => {
   copyFileSync(pluginFile, join(schemaDir, 'plugin.cjs'));
   writeFileSync(
     join(schemaDir, '.env.schema'),
-    '# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("app/production"))\n# ---\nAPI_KEY=\nSIGNING_KEY=\nSESSION_SECRET=\n',
+    '# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("acme/app/production"))\n# ---\nAPI_KEY=\nSIGNING_KEY=\nSESSION_SECRET=\n',
   );
   const probe =
     "const e=process.env;process.exit(e.API_KEY==='value-from-the-cli'&&e.SIGNING_KEY.split('\\n').length===3&&e.SESSION_SECRET.length===43?0:1)";
@@ -317,24 +325,24 @@ const main = async (browser: Browser) => {
   );
   check(
     '`baymutt check` finds the schema satisfied',
-    laptop.cli(['check', 'app/production', '--schema', join(schemaDir, '.env.schema')]).status ===
-      0,
+    laptop.cli(['check', 'acme/app/production', '--schema', join(schemaDir, '.env.schema')])
+      .status === 0,
   );
 
   // --- a paste link, answered by someone with no session --------------------------------------
-  const request = laptop.cli([
-    'request',
-    'app/production',
+  const pasteLink = laptop.cli([
+    'paste-link',
+    'acme/app/production',
     'STRIPE_SECRET_KEY',
     '--reason',
     'to take payments',
     '--where',
     'Stripe dashboard, Developers, API keys',
   ]);
-  check('`baymutt request` prints a paste link', typeof request.json?.url === 'string');
+  check('`baymutt paste-link` prints a paste link', typeof pasteLink.json?.url === 'string');
   const stranger = await browser.newContext({ viewport: { width: 420, height: 800 } });
   const pastePage = await stranger.newPage();
-  await pastePage.goto(request.json.url);
+  await pastePage.goto(pasteLink.json.url);
   await pastePage.getByLabel('Value').fill('sk_made_up_for_this_run');
   await shoot(pastePage, '09-paste-phone');
   await pastePage.getByRole('button', { name: 'Seal and save' }).click();
@@ -345,7 +353,7 @@ const main = async (browser: Browser) => {
   await stranger.close();
   check(
     'the pasted value is the environment’s',
-    laptop.cli(['secrets', 'app/production']).json?.secrets.length === 5,
+    laptop.cli(['secrets', 'acme/app/production']).json?.secrets.length === 5,
   );
 
   // --- a second login; an environment one login makes reaches the other through the dashboard ------
@@ -356,9 +364,9 @@ const main = async (browser: Browser) => {
   await page.getByRole('button', { name: 'The codes match: approve it' }).click();
   await page.getByRole('heading', { name: /is approved/ }).waitFor();
   server.cli(['login', '--wait', '0']);
-  laptop.cli(['environments', 'create', 'app/staging']);
-  laptop.cli(['set', 'app/staging', 'API_KEY'], 'staging-value');
-  const waiting = server.cli(['secrets', 'app/staging']);
+  laptop.cli(['environments', 'create', 'acme/app/staging']);
+  laptop.cli(['set', 'acme/app/staging', 'API_KEY'], 'staging-value');
+  const waiting = server.cli(['secrets', 'acme/app/staging']);
   check(
     'another login waits for the dashboard on an environment a login made, and is told so',
     waiting.status === 4 && waiting.stderr.includes('open the baymutt dashboard'),
@@ -367,7 +375,7 @@ const main = async (browser: Browser) => {
   await page.getByRole('link', { name: /app\/staging/ }).waitFor();
   let toppedUp = false;
   for (let attempt = 0; attempt < 20 && !toppedUp; attempt++) {
-    toppedUp = server.cli(['secrets', 'app/staging']).status === 0;
+    toppedUp = server.cli(['secrets', 'acme/app/staging']).status === 0;
     if (!toppedUp) await page.waitForTimeout(250);
   }
   check('opening the dashboard grants it to every login', toppedUp);
@@ -375,11 +383,11 @@ const main = async (browser: Browser) => {
   await page.getByLabel('New environment').fill('app/preview');
   await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/preview/ }).waitFor();
-  laptop.cli(['set', 'app/preview', 'API_KEY'], 'preview-value');
+  laptop.cli(['set', 'acme/app/preview', 'API_KEY'], 'preview-value');
   check(
     'an environment made in the dashboard reaches every login at once',
-    laptop.cli(['secrets', 'app/preview']).status === 0 &&
-      server.cli(['secrets', 'app/preview']).status === 0,
+    laptop.cli(['secrets', 'acme/app/preview']).status === 0 &&
+      server.cli(['secrets', 'acme/app/preview']).status === 0,
   );
 
   // --- a narrower service account for CI --------------------------------------------------------------
@@ -394,7 +402,7 @@ const main = async (browser: Browser) => {
     '--expires',
     '30d',
     '--read',
-    'app/production',
+    'acme/app/production',
     '--',
     'sh',
     '-c',
@@ -408,7 +416,7 @@ const main = async (browser: Browser) => {
   );
   const ci = serviceAccount('ci');
   const ciEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(ciKey, 'utf8') };
-  const ciAsked = spawnSync('node', [cliBin, 'secrets', 'app/staging'], {
+  const ciAsked = spawnSync('node', [cliBin, 'secrets', 'acme/app/staging'], {
     env: ciEnv,
     encoding: 'utf8',
   });
@@ -437,22 +445,22 @@ const main = async (browser: Browser) => {
     );
   };
   const ciId: string = created.json.id;
-  const handedOn = laptop.cli(['service-accounts', 'access', ciId, '--read', 'app/staging']);
+  const handedOn = laptop.cli(['service-accounts', 'access', ciId, '--read', 'acme/app/staging']);
   check(
     'its login hands it another environment from the CLI, and it loads it with the key it already had',
-    handedOn.status === 0 && ciLoads('app/staging', 'staging-value'),
+    handedOn.status === 0 && ciLoads('acme/app/staging', 'staging-value'),
   );
   check(
     'it cannot change its own access',
-    spawnSync('node', [cliBin, 'service-accounts', 'access', ciId, '--read', 'app/preview'], {
+    spawnSync('node', [cliBin, 'service-accounts', 'access', ciId, '--read', 'acme/app/preview'], {
       env: ciEnv,
       encoding: 'utf8',
-    }).status !== 0 && !ciLoads('app/preview', 'preview-value'),
+    }).status !== 0 && !ciLoads('acme/app/preview', 'preview-value'),
   );
 
   // A secret an agent deleted: it is in the bin, not in the environment's list.
-  laptop.cli(['set', 'app/production', 'OLD_TOKEN'], 'old-value');
-  const binned = laptop.cli(['delete', 'app/production', 'OLD_TOKEN']);
+  laptop.cli(['set', 'acme/app/production', 'OLD_TOKEN'], 'old-value');
+  const binned = laptop.cli(['delete', 'acme/app/production', 'OLD_TOKEN']);
   check(
     'a deleted secret goes to the bin, and the CLI lists it there',
     typeof binned.json?.purgeAt === 'number' &&
@@ -505,7 +513,7 @@ const main = async (browser: Browser) => {
   await accessDialog.waitFor();
   await accessDialog
     .getByRole('listitem')
-    .filter({ hasText: 'app/preview' })
+    .filter({ hasText: 'acme/app/preview' })
     .getByLabel('read')
     .check();
   await page.waitForTimeout(300);
@@ -516,10 +524,10 @@ const main = async (browser: Browser) => {
   await page.setViewportSize(DESKTOP);
   await page.getByRole('button', { name: 'Save access' }).click();
   await accessDialog.waitFor({ state: 'hidden' });
-  await page.getByText('app/preview', { exact: true }).waitFor();
+  await page.getByText('acme/app/preview', { exact: true }).waitFor();
   check(
     'the owner hands it an environment from the dashboard, and it loads it with the key it already had',
-    ciLoads('app/preview', 'preview-value'),
+    ciLoads('acme/app/preview', 'preview-value'),
   );
   await shoot(page, '11g-service-accounts-after-access');
   await page.getByRole('button', { name: 'Expiry' }).last().click();
@@ -536,7 +544,7 @@ const main = async (browser: Browser) => {
   );
   await shoot(page, '11d-service-accounts-after-expiry');
   // --- the bin ---------------------------------------------------------------------------------
-  laptop.cli(['environments', 'create', 'app/old']);
+  laptop.cli(['environments', 'create', 'acme/app/old']);
   await page.goto(`${WEB}/environments`);
   await page.getByRole('link', { name: /app\/old/ }).click();
   await page.getByRole('button', { name: 'Delete environment' }).click();
@@ -544,7 +552,7 @@ const main = async (browser: Browser) => {
   await page.waitForURL(`${WEB}/environments`);
   await page.getByRole('link', { name: 'Bin' }).first().click();
   await page.getByText('OLD_TOKEN').waitFor();
-  await page.getByText('app/old').waitFor();
+  await page.getByText('acme/app/old').waitFor();
   await shoot(page, '11g-bin');
   await shootPhone(page, '11h-bin-phone');
   const secretRow = page.getByRole('listitem').filter({ hasText: 'OLD_TOKEN' });
@@ -553,10 +561,10 @@ const main = async (browser: Browser) => {
   check(
     'the owner restores a secret from the bin, and the CLI loads it again',
     laptop
-      .cli(['secrets', 'app/production'])
+      .cli(['secrets', 'acme/app/production'])
       .json?.secrets?.some((secret: { name: string }) => secret.name === 'OLD_TOKEN') === true,
   );
-  const environmentRow = page.getByRole('listitem').filter({ hasText: 'app/old' });
+  const environmentRow = page.getByRole('listitem').filter({ hasText: 'acme/app/old' });
   await environmentRow.getByRole('button', { name: 'Delete for good' }).click();
   await page.getByRole('alertdialog').waitFor();
   await page.waitForTimeout(300);
@@ -565,7 +573,7 @@ const main = async (browser: Browser) => {
   await page.getByText('The bin is empty').waitFor();
   check(
     'the owner deletes an environment in the bin for good, and its name is free again',
-    laptop.cli(['environments', 'create', 'app/old']).status === 0,
+    laptop.cli(['environments', 'create', 'acme/app/old']).status === 0,
   );
 
   await page.goto(`${WEB}/activity`);
@@ -577,7 +585,29 @@ const main = async (browser: Browser) => {
   await shoot(page, '13-account');
   await shootPhone(page, '13b-account-phone');
 
+  // A second org, made in the dashboard: the CLI has none to make, and the picker scopes
+  // Environments to it.
+  check(
+    'the CLI has no orgs command: orgs are made in the dashboard',
+    laptop.cli(['orgs', 'list']).status !== 0,
+  );
+  await page.goto(`${WEB}/account`);
+  await page.getByLabel('Org name').fill('Globex Corp');
+  await page.getByLabel('Slug').fill('globex');
+  await page.getByRole('button', { name: 'Create org' }).click();
+  await page.getByRole('main').getByText('Globex Corp').waitFor();
+  await shoot(page, '13e-account-orgs');
+  await page.goto(`${WEB}/environments`);
+  await page.getByText('No environments in Globex Corp yet').waitFor();
+  check('a new org is the one the picker shows', true);
+  await shoot(page, '13c-environments-other-org');
+  await shootPhone(page, '13d-environments-other-org-phone');
+  const picker = page.getByLabel('Org', { exact: true });
+  await picker.selectOption({ label: 'Acme' });
+  await page.getByRole('link', { name: /acme\/app\/production/ }).waitFor();
+
   // The vault stays open across a reload, and a change still goes through.
+  await page.goto(`${WEB}/account`);
   await page.reload();
   await page.getByRole('heading', { name: 'Passkeys' }).waitFor();
   check('a reload leaves the vault open', await keepsVaultOpen(page));
@@ -600,10 +630,10 @@ const main = async (browser: Browser) => {
   await page.getByText('No service accounts yet').waitFor();
   await shoot(page, '14b-service-accounts-empty');
   check('a revoked service account is refused', server.cli(['environments', 'list']).status === 3);
-  await page.goto(`${WEB}/requests`);
+  await page.goto(`${WEB}/paste-links`);
   await page.getByText('Nothing is waiting on you').waitFor();
-  await shoot(page, '14c-requests-empty');
-  await shootPhone(page, '14d-requests-empty-phone');
+  await shoot(page, '14c-paste-links-empty');
+  await shootPhone(page, '14d-paste-links-empty-phone');
 
   // --- dark, and a phone ----------------------------------------------------------------------
   // The same page: the virtual authenticator belongs to its target.
@@ -630,8 +660,12 @@ const main = async (browser: Browser) => {
   await otherPage.getByRole('button', { name: 'Use this password' }).click();
   await keepRecoveryKey(otherPage);
   await otherPage.getByRole('button', { name: 'Continue' }).click();
-  await otherPage.getByText('No environments yet').waitFor();
-  check('an email link and a password make a vault, and one account sees nothing of another', true);
+  // No org of their own, and none of the first person's: the Environments page makes one first.
+  await otherPage.getByLabel('Org name').waitFor();
+  check(
+    'an email link and a password make a vault, and one account sees nothing of another',
+    (await otherPage.getByLabel('Org', { exact: true }).count()) === 0,
+  );
   await otherPage.goto(`${WEB}/account`);
   await otherPage.getByRole('heading', { name: 'Password' }).waitFor();
   await shoot(otherPage, '18-account-password');

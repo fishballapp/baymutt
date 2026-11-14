@@ -1,5 +1,5 @@
-// A caller is the owner (the dashboard's session cookie) or a service account (its bearer). A credential
-// that doesn't verify is refused, never downgraded.
+// A caller is the owner (the dashboard's session cookie) or a credential, a CLI login or a service
+// account (its bearer). One that doesn't verify is refused, never downgraded.
 
 import { coded, ErrorMessageSchema } from '@internal/effect-api';
 import * as Context from 'effect/Context';
@@ -9,10 +9,10 @@ import * as OpenApi from 'effect/http-api/OpenApi';
 import type * as Redacted from 'effect/Redacted';
 import * as Schema from 'effect/Schema';
 
-export const ServiceAccountSecurity = HttpApiSecurity.bearer.pipe(
+export const CredentialSecurity = HttpApiSecurity.bearer.pipe(
   HttpApiSecurity.annotate(
     OpenApi.Description,
-    'A service account’s bearer (`Authorization: Bearer baymutt_<credentialId>_<secret>`), derived from its service account key.',
+    'A CLI login’s or service account’s bearer (`Authorization: Bearer baymutt_<credentialId>_<secret>`), derived from its key.',
   ),
 );
 
@@ -54,7 +54,7 @@ export class VaultLockedError extends Schema.TaggedError<VaultLockedError>()(
 /** Carries the open vault's proof (`vaultProof` in `@baymutt/keys`) on every request from the dashboard that has one. */
 export const VAULT_PROOF_HEADER = 'x-baymutt-vault-proof';
 
-/** Only the owner, signed in at the dashboard, may do this: it lets a new party read, or it cannot be undone. */
+/** Only an owner, signed in at the dashboard, may do this: it lets a new party read, or it cannot be undone. */
 export class OwnerRequiredError extends Schema.TaggedError<OwnerRequiredError>()(
   'OwnerRequiredError',
   { message: ErrorMessageSchema },
@@ -76,16 +76,16 @@ export type OwnerActor = {
   readonly userId: string;
 };
 
-export type ServiceAccountActor = {
-  readonly _tag: 'ServiceAccount';
+export type CredentialActor = {
+  readonly _tag: 'Credential';
   readonly accountId: string;
   readonly credentialId: string;
   readonly name: string;
-  /** The service account that made this one, which bounds what it can ever hold. */
+  /** The CLI login that made this one, which bounds what it can ever hold; null for a CLI login. */
   readonly parentId: string | null;
 };
 
-export type ActorIdentity = OwnerActor | ServiceAccountActor;
+export type ActorIdentity = OwnerActor | CredentialActor;
 
 export class CurrentActor extends Context.Service<CurrentActor, ActorIdentity>()(
   '@baymutt/api/CurrentActor',
@@ -120,10 +120,10 @@ export class Credentials extends HttpApiMiddleware.Service<
   { provides: CurrentCredential }
 >()('@baymutt/api/Credentials', {
   error: coded(UnauthorizedError),
-  security: { serviceAccount: ServiceAccountSecurity, session: SessionSecurity },
+  security: { credential: CredentialSecurity, session: SessionSecurity },
 }) {}
 
-/** The owner with the vault open (a locked session may only read), or a service account of an account. */
+/** The owner with the vault open (a locked session may only read), or a credential of an account. */
 export class Authenticated extends HttpApiMiddleware.Service<
   Authenticated,
   { requires: CurrentCredential; provides: CurrentActor }
@@ -131,7 +131,7 @@ export class Authenticated extends HttpApiMiddleware.Service<
   error: [coded(UnauthorizedError), coded(AccountRequiredError), coded(VaultLockedError)],
 }) {}
 
-/** A dashboard session; a service account's bearer is refused. */
+/** A dashboard session; a credential's bearer is refused. */
 export class SignedIn extends HttpApiMiddleware.Service<
   SignedIn,
   { requires: CurrentCredential; provides: CurrentUser }

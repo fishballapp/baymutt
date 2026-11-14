@@ -6,7 +6,7 @@ import { MAC_MINI, MACBOOK } from '../example.ts';
 
 type Cell = { kind: 'grant'; grant: string; by: string } | { kind: 'none' };
 
-const ENVIRONMENTS = ['app/dev', 'app/production'] as const;
+const ENVIRONMENTS = ['acme/app/dev', 'acme/app/production'] as const;
 
 const EVERY = { kind: 'grant', grant: 'read + write', by: 'every environment' } as const;
 

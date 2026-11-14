@@ -129,7 +129,7 @@ export const crypto_ = <A>(run: () => Promise<A>): Effect.Effect<A, IntegrityErr
       cause instanceof VaultError
         ? Effect.fail(
             new IntegrityError({
-              message: `${cause.message}. Nothing was used. If the service account key is right, the store answered with something this computer did not seal.`,
+              message: `${cause.message}. Nothing was used. If the key is right, the store answered with something this computer did not seal.`,
             }),
           )
         : Effect.die(cause),

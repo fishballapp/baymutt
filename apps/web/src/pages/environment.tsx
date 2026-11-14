@@ -27,6 +27,7 @@ import { Confirm } from '../components/ui/confirm.tsx';
 import { TextArea, TextField } from '../components/ui/field.tsx';
 import { copyWhenReady } from '../lib/clipboard.ts';
 import {
+  addressOf,
   deleteEnvironmentAtom,
   environmentAtom,
   grantsAtom,
@@ -356,10 +357,10 @@ const Secrets = ({ environment }: { readonly environment: Environment }) => {
           <p>
             Add one here, or from a service account that can write here, with the value on stdin:
           </p>
-          <CommandLine>{`baymutt set ${environment.name} NAME < file`}</CommandLine>
+          <CommandLine>{`baymutt set ${addressOf(environment)} NAME < file`}</CommandLine>
           <p>
-            For a value only you can fetch, an agent runs <Code>baymutt request</Code> and you paste
-            it from the link it prints, or from Requests.
+            For a value only you can fetch, <Code>baymutt paste-link</Code> prints a link where you
+            paste it; it waits under Paste links too.
           </p>
         </Empty>
       )}
@@ -395,7 +396,7 @@ const GrantRow = ({
             can {grantWords(grant)}
             {isLogin(grant)
               ? ' · a CLI login, which holds every environment'
-              : ' · made by a login; its access changes under Service accounts'}
+              : ' · made by a CLI login; its access changes under Service accounts'}
           </p>
         </div>
         {/* A login holds every environment: revoking it, under Service accounts, is the way to end that. */}
@@ -422,14 +423,14 @@ const Access = ({ environment }: { readonly environment: Environment }) => {
   return (
     <Section
       title="Who can reach it"
-      lede="You and every CLI login can read and write it. A service account a login made reaches it only if it was handed it, by that login or by you. One that reads keeps what it read: taking access away stops the next load, not the last one."
+      lede="You and every CLI login can read and write it. A service account reaches it only if it was handed it, by the CLI login that made it or by you. One that reads keeps what it read: taking access away stops the next load, not the last one."
     >
       {grants === null && <Skeleton rows={2} />}
       {grants?.length === 0 && (
         <Empty title="Only you, so far">
           <p>
-            Run <Code>baymutt login</Code> and approve it here: a login reads and writes every
-            environment.
+            Run <Code>baymutt login</Code> and approve it here: a CLI login reads and writes every
+            environment of your orgs.
           </p>
         </Empty>
       )}
@@ -455,7 +456,7 @@ const DeleteEnvironment = ({ environment }: { readonly environment: Environment 
       action={
         <Confirm
           trigger={<Button intent="danger">Delete environment</Button>}
-          title={`Delete ${environment.name}?`}
+          title={`Delete ${addressOf(environment)}?`}
           keepLabel="Keep environment"
           confirmLabel="Delete environment"
           pendingLabel="Deleting…"
@@ -504,7 +505,7 @@ export const EnvironmentPage = ({ id }: { readonly id: string }) => {
         Environments
       </Link>
       <PageHeader
-        title={<Code className="text-xl font-[650] tracking-tight">{environment.name}</Code>}
+        title={<Code className="text-xl font-[650] tracking-tight">{addressOf(environment)}</Code>}
         lede={`Made by ${environment.createdBy.name} on ${exactTime(environment.createdAt)}.`}
       />
       <Secrets environment={environment} />

@@ -7,7 +7,7 @@
  * accountKey     = X25519 pair; its private half is a vault record   → every environment key is wrapped to its public half
  * endorsement    = vault record [credentialId → service account public key]  → written when the owner pairs a service account
  * recoveryKey    = random 256 bits, shown once, kept by the owner; wraps the DEK like a passkey
- * vaultProof     = HMAC(indexKey, ["vault-proof", accountId])        → the store keeps SHA-256(vaultProof)
+ * vaultProof     = HMAC(indexKey, ["unlock-proof", accountId])        → the store keeps SHA-256(vaultProof)
  * ```
  *
  * The endorsement is why the store cannot hand the owner a key of its own to wrap an environment key
@@ -53,9 +53,9 @@ export const derivePasswordKeys = scheme.deriveAccountKeys;
 export type OwnerVault = Vault;
 
 /** The WebAuthn PRF input. Versioned, so a later scheme can ask the same passkey for a different key. */
-export const PRF_INPUT_LABEL = 'baymutt-vault-prf-v1';
+export const PRF_INPUT_LABEL = 'baymutt-prf-v1';
 
-const ACCOUNT_KEY = { type: 'account-key', naturalKey: 'x25519' } as const;
+const ACCOUNT_KEY = { type: 'private-key', naturalKey: 'x25519' } as const;
 
 export const createAccountKey = async (
   vault: OwnerVault,
@@ -88,7 +88,7 @@ export const openAccountKey = async (
   return key;
 };
 
-const ENDORSEMENT_TYPE = 'credential';
+const ENDORSEMENT_TYPE = 'endorsement';
 
 export const endorseCredential = async (
   vault: OwnerVault,
@@ -122,7 +122,7 @@ export const endorsedPublicKey = async (
  * whose vault is open from one that merely signed in.
  */
 export const vaultProof = (vault: OwnerVault, accountId: string): Promise<string> =>
-  vault.recordId('vault-proof', accountId);
+  vault.recordId('unlock-proof', accountId);
 
 const RECOVERY_KEY_BYTES = 32;
 
@@ -175,8 +175,8 @@ export const approvePairing = async (
 
 /** An environment as the store hands it to the owner: nothing in it is trusted until `openOwnedEnvironment` has passed. */
 export type OwnedEnvironment = EnvironmentKeyBinding & {
-  readonly ownerWrap: string;
-  readonly ownerProof: string;
+  readonly memberWrap: string;
+  readonly memberProof: string;
   /** The service account that created it and vouched for its key; null when the owner did. */
   readonly creator: {
     readonly id: string;
@@ -191,7 +191,7 @@ export type OwnedEnvironment = EnvironmentKeyBinding & {
  */
 export const openOwnedEnvironment = async (
   owner: OwnerKeys,
-  { ownerWrap, ownerProof, creator, ...binding }: OwnedEnvironment,
+  { memberWrap, memberProof, creator, ...binding }: OwnedEnvironment,
 ): Promise<{ readonly publicKey: string; readonly encoded: string; readonly key: PrivateKey }> => {
   const voucher = await (async () => {
     if (creator === null) return toBase64Url(owner.accountKey.publicKey);
@@ -211,14 +211,14 @@ export const openOwnedEnvironment = async (
     return endorsed;
   })();
   const publicKey = await vouchedEnvironmentKey({
-    proof: ownerProof,
+    proof: memberProof,
     readerKey: owner.accountKey,
     readerId: owner.accountId,
     vouchers: [voucher],
     binding,
   });
   const { key, encoded } = await unwrapEnvironmentKey({
-    wrap: ownerWrap,
+    wrap: memberWrap,
     readerKey: owner.accountKey,
     readerId: owner.accountId,
     binding,
@@ -267,7 +267,7 @@ export const grantToTrustedReader = async (
   reader: { readonly id: string; readonly publicKey: string },
   { canRead }: { readonly canRead: boolean },
 ): Promise<{ readonly keyProof: string; readonly readWrap: string | null }> => {
-  const { ownerWrap: _, ownerProof: __, creator: ___, ...binding } = environment;
+  const { memberWrap: _, memberProof: __, creator: ___, ...binding } = environment;
   const opened = await openOwnedEnvironment(owner, environment);
   return {
     keyProof: await vouchForEnvironmentKey({

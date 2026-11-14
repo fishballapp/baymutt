@@ -1,8 +1,4 @@
-/** The bin: deleting, restoring, the owner removing for good, and the 30-day sweep. */
-import { SecretSchema } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
-import * as Schema from 'effect/Schema';
-import * as Struct from 'effect/Struct';
 import { describe, expect, it } from 'vitest';
 import { call, ok, type StoreWorld, storeWorld } from '../test-store.ts';
 import { sealedLike, send } from '../test-support.ts';
@@ -46,7 +42,7 @@ const count = (w: StoreWorld['w'], table: string) =>
   (w.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
 
 const actions = (w: StoreWorld['w']) =>
-  w.sqlite.prepare('SELECT action, actor, detail FROM audit_event ORDER BY id').all() as Array<{
+  w.sqlite.prepare('SELECT action, actor, detail FROM activity_event ORDER BY id').all() as Array<{
     action: string;
     actor: string;
     detail: string | null;
@@ -54,7 +50,7 @@ const actions = (w: StoreWorld['w']) =>
 
 describe('a deleted secret', () => {
   it('goes to the bin for 30 days, and a rollback by whoever could delete it brings it back', async () => {
-    const { w, owner, scoped, environmentId } = await setup();
+    const { w, owner, scoped, environmentId, orgId } = await setup();
 
     const deleted = await ok<{ updatedAt: number; purgeAt: number }>(
       w,
@@ -75,12 +71,14 @@ describe('a deleted secret', () => {
       environments: [],
       secrets: [
         {
+          orgId,
+          orgSlug: 'org-user-1',
           environmentId,
           environmentName: 'app/production',
           name: 'API_KEY',
           latestVersion: 2,
           deletedAt: deleted.updatedAt,
-          deletedBy: { kind: 'machine', id: scoped.id, name: 'ci' },
+          deletedBy: { kind: 'credential', id: scoped.id, name: 'ci' },
           purgeAt: deleted.purgeAt,
         },
       ],
@@ -160,7 +158,7 @@ describe('a deleted secret', () => {
 
 describe('a deleted environment', () => {
   it('goes to the bin, keeps its name, and the owner restores it whole', async () => {
-    const { w, owner, login, scoped, environmentId } = await setup();
+    const { w, owner, login, scoped, environmentId, orgId } = await setup();
     expect(await call(w, 'DELETE', `/environments/${environmentId}`, login.headers)).toMatchObject({
       status: 403,
       body: { code: 'OwnerRequiredError' },
@@ -173,7 +171,16 @@ describe('a deleted environment', () => {
     );
     expect(purgeAt - deletedAt).toBe(BIN_MS);
     expect(await ok(w, 'GET', '/bin', login.headers)).toEqual({
-      environments: [{ id: environmentId, name: 'app/production', deletedAt, purgeAt }],
+      environments: [
+        {
+          id: environmentId,
+          orgId,
+          orgSlug: 'org-user-1',
+          name: 'app/production',
+          deletedAt,
+          purgeAt,
+        },
+      ],
       secrets: [],
     });
     expect(
@@ -185,10 +192,11 @@ describe('a deleted environment', () => {
     // Its name stays taken while it is in the bin, and the refusal says where it is.
     const taken = await call(w, 'POST', '/environments', owner, {
       id: crypto.randomUUID(),
+      orgId,
       name: 'app/production',
       publicKey: 'p'.repeat(42) + 'A',
-      ownerWrap: sealedLike('owner-wrap'),
-      ownerProof: sealedLike('owner-proof'),
+      memberWrap: sealedLike('member-wrap'),
+      memberProof: sealedLike('member-proof'),
       creatorWrap: null,
       creatorProof: null,
     });
@@ -305,35 +313,5 @@ describe('what a scoped service account sees in the bin', () => {
     expect((await ok<{ secrets: Array<unknown> }>(w, 'GET', '/bin', owner)).secrets).toHaveLength(
       1,
     );
-  });
-});
-
-describe('clients on either side of the bin', () => {
-  const v041Secret = SecretSchema.mapFields(Struct.omit(['purgeAt']));
-
-  it('a store from before it still reads to a newer client: purgeAt is null', () => {
-    const secret = Schema.decodeUnknownSync(SecretSchema)({
-      name: 'API_KEY',
-      currentVersion: null,
-      latestVersion: 2,
-      size: null,
-      updatedAt: 1,
-      updatedBy: { kind: 'owner', id: 'a', name: 'Owner' },
-    });
-    expect(secret.purgeAt).toBeNull();
-  });
-
-  it('a 0.4.1 client reads this store’s secrets', async () => {
-    const { w, owner, environmentId } = await setup();
-    await ok(w, 'DELETE', `/environments/${environmentId}/secrets/API_KEY`, owner);
-    const { secrets } = await ok<{ secrets: Array<unknown> }>(
-      w,
-      'GET',
-      `/environments/${environmentId}/secrets`,
-      owner,
-    );
-    expect(Schema.decodeUnknownSync(Schema.Array(v041Secret))(secrets)).toEqual([
-      expect.objectContaining({ name: 'API_KEY', currentVersion: null, latestVersion: 2 }),
-    ]);
   });
 });

@@ -2,9 +2,10 @@
 //
 //   # @plugin(@baymutt/varlock-plugin)
 //   # @initBaymutt(key=$BAYMUTT_KEY)
-//   # @setValuesBulk(baymuttLoad("app/production"))
+//   # @setValuesBulk(baymuttLoad("acme/app/production"))
 //
-// `key` is the service account key where the process holds one (CI). Left unset or empty, the key is
+// The environment is named with its org first, `<org>/<name>`. `key` is a service account key where
+// the process holds one (CI). Left unset or empty, the key is
 // read from where `baymutt login` put it: the login keychain on a Mac, an owner-only file elsewhere.
 import { loadEnvironment } from '@baymutt/cli/load';
 import { plugin } from 'varlock/plugin-lib';
@@ -55,7 +56,7 @@ plugin.registerResolverFunction({
     }
     const environment = await environmentResolver?.resolve();
     if (typeof environment !== 'string') {
-      throw new SchemaError('Expected the environment name to resolve to a string');
+      throw new SchemaError('Expected the environment (`<org>/<name>`) to resolve to a string');
     }
     try {
       return JSON.stringify(await loadEnvironment(environment, connection));

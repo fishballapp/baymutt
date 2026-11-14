@@ -2,7 +2,6 @@
 // account may make another that holds no more than it does.
 
 import { coded } from '@internal/effect-api';
-import * as Effect from 'effect/Effect';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
@@ -16,6 +15,7 @@ import {
   IdSchema,
   KeyProofSchema,
   LabelSchema,
+  OrgSlugSchema,
   PublicKeySchema,
   SealedSchema,
   TimestampSchema,
@@ -26,26 +26,19 @@ import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const CredentialGrantSchema = Schema.Struct({
   environmentId: Schema.String,
+  orgSlug: OrgSlugSchema,
   environmentName: Schema.String,
   canRead: Schema.Boolean,
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
-
-/**
- * A voucher, or null. A store that predates vouchers sends no such key, which reads as null: a
- * newer client still works against it, as the deploy that brings the store up to date must.
- */
-const voucherOrNull = Schema.NullOr(VoucherSchema).pipe(
-  Schema.withDecodingDefaultKey(Effect.succeed(null)),
-);
 
 export const ServiceAccountSchema = Schema.Struct({
   id: Schema.String,
   name: LabelSchema,
   publicKey: PublicKeySchema,
   /**
-   * The service account that made this one. Null for a login: one `baymutt login` made and the
-   * owner approved, which holds read and write on every environment of the account.
+   * The CLI login that made this one. Null for a CLI login: one `baymutt login` made and the
+   * owner approved, which holds read and write on every environment of every org of the person.
    */
   parentId: Schema.NullOr(Schema.String),
   description: Schema.NullOr(DescriptionSchema),
@@ -55,10 +48,9 @@ export const ServiceAccountSchema = Schema.Struct({
   endorsement: Schema.NullOr(SealedSchema),
   /**
    * The login that made this one vouching for `publicKey`, to the caller: the owner, or that
-   * login. Null for a login, for any other caller, and for a service account made by a CLI before
-   * 0.4.0, which nothing vouches for: it can lose access, and gain none that needs its key.
+   * login. Null for a login, and for any other caller.
    */
-  keyVoucher: voucherOrNull,
+  keyVoucher: Schema.NullOr(VoucherSchema),
   createdAt: TimestampSchema,
   lastUsedAt: Schema.NullOr(TimestampSchema),
   grants: Schema.Array(CredentialGrantSchema),
@@ -72,7 +64,7 @@ const newCredential = {
   bearerHash: HashSchema,
 };
 
-/** What its maker may say about a new service account. Both optional, so older clients still send a valid request. */
+/** What its maker may say about a new credential. */
 const aboutNewCredential = {
   description: Schema.optionalKey(DescriptionSchema),
   /** When it stops working. Omitted: never. */
@@ -113,7 +105,7 @@ export type LoginGrant = typeof LoginGrantSchema.Type;
 /** What the pairing link carries in its fragment, from the service account to the owner's browser. */
 export const PairingRequestSchema = Schema.Struct({
   ...newCredential,
-  /** What the terminal says it is for. A claim, shown as one; links from CLIs before 0.3.0 have none. */
+  /** What the terminal says it is for. A claim, shown as one. */
   ...aboutNewCredential,
   /** Seals the browser's answer, so the store cannot write one. */
   pairingSecret: HashSchema,
@@ -131,8 +123,8 @@ export const MeSchema = Schema.Struct({
       name: LabelSchema,
       parentId: Schema.NullOr(Schema.String),
       welcome: Schema.NullOr(SealedSchema),
-      /** Its maker vouching for the account's public key; null for a login, or one made before 0.4.0. */
-      accountVoucher: voucherOrNull,
+      /** Its maker vouching for the account's public key; null for a login. */
+      accountVoucher: Schema.NullOr(VoucherSchema),
     }),
   ),
 }).annotate({ identifier: 'Me' });
@@ -141,7 +133,7 @@ export type Me = typeof MeSchema.Type;
 export class CredentialsGroup extends HttpApiGroup.make('credentials')
   .add(
     HttpApiEndpoint.get('me', '/me', { success: MeSchema }).annotateMerge(
-      OpenApi.annotations({ summary: 'Who this credential is' }),
+      OpenApi.annotations({ summary: 'Who this key is' }),
     ),
     HttpApiEndpoint.get('list', '/credentials', {
       success: Schema.Struct({ credentials: Schema.Array(ServiceAccountSchema) }),
@@ -159,7 +151,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
         endorsement: SealedSchema,
         welcome: SealedSchema,
         /** Read and write on every environment, written in the same batch as the approval. */
-        grants: Schema.optionalKey(Schema.Array(LoginGrantSchema)),
+        grants: Schema.Array(LoginGrantSchema),
       }),
       success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [coded(OwnerRequiredError), coded(AlreadyExistsError), coded(LimitReachedError)],
@@ -167,7 +159,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Approve a service account',
         description:
-          'The owner’s approval of the link `baymutt login` prints. A login holds read and write on every environment: the owner’s browser wraps each environment key to it in the same request, and to every environment made later.',
+          'The owner’s approval of the link `baymutt login` prints. A CLI login holds read and write on every environment of the person’s orgs: the owner’s browser wraps each environment key to it in the same request, and to every environment made later.',
       }),
     ),
     HttpApiEndpoint.post('create', '/credentials', {
@@ -184,8 +176,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
             keyProof: KeyProofSchema,
           }),
         ),
-        /** Optional, so older clients still send a valid request; without them its access can only shrink. */
-        vouchers: Schema.optionalKey(ServiceAccountVouchersSchema),
+        vouchers: ServiceAccountVouchersSchema,
       }),
       success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [

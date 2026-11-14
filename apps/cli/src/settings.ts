@@ -49,8 +49,7 @@ const resolve = Effect.gen(function* () {
   return {
     origin: url.origin,
     stateFile: path.join(directory, 'state.json'),
-    // The file's name predates "service account"; renaming it would strand keys already kept there.
-    keyFile: path.join(directory, 'machine-key'),
+    keyFile: path.join(directory, 'key'),
     keychainService: `baymutt ${url.origin}`,
   };
 });

@@ -1,5 +1,5 @@
-// This service account as the store knows it: its key, a client that sends its bearer, and the account it
-// belongs to.
+// This credential (a CLI login or a service account) as the store knows it: its key, a client that
+// sends its bearer, and the account it belongs to.
 import { Api } from '@baymutt/api';
 import {
   type ServiceAccountKey,
@@ -104,8 +104,8 @@ export class ServiceAccount extends Context.Service<
     readonly vouchers: ReadonlyArray<string>;
     /**
      * The account's public key as the login that made this service account vouched for it, or
-     * null: a login, or a service account made before its maker wrote one. With it, this service
-     * account also takes the owner's proof, for an environment the owner handed it from the dashboard.
+     * null for a login. With it, a service account also takes the owner's proof, for an
+     * environment the owner handed it from the dashboard.
      */
     readonly vouchedAccount: Effect.Effect<string | null>;
     /**

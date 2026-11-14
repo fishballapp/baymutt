@@ -1,7 +1,7 @@
 /** Logins hold every environment; any service account may expire; both carry what their maker said they are for. */
 import { tokenHash } from '@baymutt/keys/wire';
 import { describe, expect, it } from 'vitest';
-import { call, ok, type StoreWorld, storeWorld } from '../test-store.ts';
+import { call, ok, type StoreWorld, storeWorld, VOUCHERS } from '../test-store.ts';
 import { keyLike, sealedLike } from '../test-support.ts';
 
 const DAY = 24 * 3600 * 1000;
@@ -17,6 +17,7 @@ const scoped = async (
   const secret = keyLike('s');
   const answer = await call(w, 'POST', '/credentials', parent.headers, {
     ...about,
+    vouchers: VOUCHERS,
     id,
     name: 'ci',
     publicKey: keyLike('k'),
@@ -124,18 +125,19 @@ describe('a login', () => {
     });
   });
 
-  it('cannot hand a new environment to other logins, and finds access requests removed', async () => {
-    const { w, pair } = await storeWorld();
+  it('cannot hand a new environment to other logins', async () => {
+    const { w, pair, orgId } = await storeWorld();
     const laptop = await pair('laptop');
     const server = await pair('server');
 
     expect(
       await call(w, 'POST', '/environments', laptop.headers, {
         id: crypto.randomUUID(),
+        orgId,
         name: 'app/production',
         publicKey: keyLike('p'),
-        ownerWrap: sealedLike('owner-wrap'),
-        ownerProof: sealedLike('owner-proof'),
+        memberWrap: sealedLike('member-wrap'),
+        memberProof: sealedLike('member-proof'),
         creatorWrap: sealedLike('creator-wrap'),
         creatorProof: sealedLike('creator-proof'),
         loginGrants: [
@@ -143,32 +145,6 @@ describe('a login', () => {
         ],
       }),
     ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
-    // What `baymutt access request` and `access list` call from a CLI before 0.4.0.
-    for (const method of ['POST', 'GET'] as const) {
-      expect(
-        await call(
-          w,
-          method,
-          '/access-requests',
-          laptop.headers,
-          method === 'GET'
-            ? undefined
-            : {
-                id: crypto.randomUUID(),
-                environmentName: 'app/production',
-                wantsRead: true,
-                wantsWrite: false,
-                reason: 'to deploy',
-              },
-        ),
-      ).toMatchObject({
-        status: 403,
-        body: {
-          code: 'OwnerRequiredError',
-          message: expect.stringContaining('Access requests were removed'),
-        },
-      });
-    }
   });
 });
 
@@ -199,17 +175,18 @@ describe('a service account a login made', () => {
 
   it('cannot create an environment, which the owner’s vault could never open', async () => {
     const world = await storeWorld();
-    const { w, pair, environment } = world;
+    const { w, pair, environment, orgId } = world;
     const login = await pair('laptop');
     const ci = await scoped(world, login, [await environment('app/production', login.headers)]);
 
     expect(
       await call(w, 'POST', '/environments', ci.headers, {
         id: crypto.randomUUID(),
+        orgId,
         name: 'app/staging',
         publicKey: keyLike('p'),
-        ownerWrap: sealedLike('owner-wrap'),
-        ownerProof: sealedLike('owner-proof'),
+        memberWrap: sealedLike('member-wrap'),
+        memberProof: sealedLike('member-proof'),
         creatorWrap: sealedLike('creator-wrap'),
         creatorProof: sealedLike('creator-proof'),
       }),
@@ -247,7 +224,7 @@ describe('expiry', () => {
       message: expect.stringContaining('expired'),
     });
     expect((await call(w, 'GET', '/me', ci.headers)).body).toMatchObject({
-      message: expect.stringContaining('The login that made this service account expired'),
+      message: expect.stringContaining('The CLI login that made this service account expired'),
     });
     // Still listed, so the owner can see it and extend it.
     expect(await call(w, 'GET', '/credentials', owner)).toMatchObject({
@@ -267,7 +244,7 @@ describe('expiry', () => {
     const { events } = await ok<{ events: { action: string; detail: string | null }[] }>(
       w,
       'GET',
-      '/audit',
+      '/activity',
       owner,
     );
     expect(events.filter(({ action }) => action === 'credential.expiry')).toHaveLength(2);
@@ -331,6 +308,7 @@ describe('a description', () => {
         publicKey: keyLike('k'),
         bearerHash: keyLike('h'),
         grants: [],
+        vouchers: VOUCHERS,
         description: 'x'.repeat(141),
       }),
     ).toMatchObject({ status: 400 });

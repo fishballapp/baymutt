@@ -23,6 +23,7 @@ import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
 import {
   type AccessChange,
+  addressOf,
   changeAccessAtom,
   environmentsAtom,
   isLogin,
@@ -184,7 +185,9 @@ const ChangeAccess = ({
             setChosen(current => ({ ...current, [environment.id]: next }));
           return (
             <li key={environment.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
-              <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">{environment.name}</Code>
+              <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                {addressOf(environment)}
+              </Code>
               <AccessBox
                 label="read"
                 checked={after.canRead}
@@ -218,7 +221,7 @@ const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) 
   if (isLogin(serviceAccount)) {
     return (
       <p className="mt-2 text-sm">
-        <span className="text-muted">can read + write</span> every environment
+        <span className="text-muted">can read + write</span> every environment of your orgs
       </p>
     );
   }
@@ -230,7 +233,7 @@ const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) 
       {serviceAccount.grants.map(grant => (
         <li key={grant.environmentId}>
           <span className="text-muted">can {grantWords(grant)}</span>{' '}
-          <Code>{grant.environmentName}</Code>
+          <Code>{addressOf({ orgSlug: grant.orgSlug, name: grant.environmentName })}</Code>
         </li>
       ))}
     </ul>
@@ -325,7 +328,7 @@ export const ServiceAccountsPage = () => {
     <>
       <PageHeader
         title="Service accounts"
-        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every environment; a service account a login made reaches only what it was handed, by that login or by you."
+        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every environment of your orgs; a service account a CLI login made reaches only what it was handed, by that login or by you."
       />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
       {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
@@ -336,8 +339,8 @@ export const ServiceAccountsPage = () => {
           <CommandLine>baymutt login</CommandLine>
           <p>
             It prints a link and a code. Open the link here and approve it if the codes match. The
-            login can then read and write every environment, and make service accounts that hold
-            part of its access.
+            CLI login can then read and write every environment of your orgs, and make service
+            accounts that hold part of its access.
           </p>
         </Empty>
       )}

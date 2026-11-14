@@ -1,7 +1,9 @@
-// Service accounts: recognising one by its bearer, approving its login, making a narrower one, revoking.
+// Credentials: recognising one by its bearer, approving a CLI login, making a service account,
+// changing its access, revoking.
 import {
   type ActorIdentity,
   AlreadyExistsError,
+  type CredentialActor,
   InvalidRequestError,
   type LoginGrant,
   type Me,
@@ -9,7 +11,6 @@ import {
   NotFoundError,
   OwnerRequiredError,
   type ServiceAccount,
-  type ServiceAccountActor,
   type ServiceAccountVouchers,
   type SetAccessPayload,
   UnauthorizedError,
@@ -25,7 +26,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
 import type { environments } from './environments.ts';
-import { type Lookups, type ServiceAccountRow, ServiceAccountRowSchema } from './rows.ts';
+import { type Lookups, orgsOf, type ServiceAccountRow, ServiceAccountRowSchema } from './rows.ts';
 
 const LAST_USED_RESOLUTION_MS = 60_000;
 
@@ -97,17 +98,21 @@ export const serviceAccounts = ({
     Result: Schema.Struct({
       credentialId: Schema.String,
       environmentId: Schema.String,
+      orgSlug: Schema.String,
       environmentName: Schema.String,
       canWrite: Schema.Finite,
       canRead: Schema.Finite,
     }),
     execute: accountId =>
-      sql`SELECT g.credential_id, g.environment_id, e.name AS environment_name,
-            g.can_write,
-            g.read_wrap IS NOT NULL AS can_read
-          FROM environment_grant g JOIN environment e ON e.id = g.environment_id
-          WHERE g.account_id = ${accountId} AND e.deleted_at IS NULL
-          ORDER BY e.name`,
+      sql`SELECT g.credential_id, g.environment_id, o.slug AS org_slug,
+            e.name AS environment_name, g.can_write, g.read_wrap IS NOT NULL AS can_read
+          FROM environment_grant g
+          JOIN credential c ON c.id = g.credential_id
+          JOIN environment e ON e.id = g.environment_id
+          JOIN organization o ON o.id = e.org_id
+          WHERE c.account_id = ${accountId} AND e.deleted_at IS NULL
+            AND e.org_id IN (${orgsOf(sql, accountId)})
+          ORDER BY o.slug, e.name`,
   });
 
   const accountOf = SqlSchema.findOne({
@@ -127,7 +132,7 @@ export const serviceAccounts = ({
       [
         visible({
           accountId: actor.accountId,
-          self: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
+          self: actor._tag === 'Credential' ? actor.credentialId : null,
         }),
         grantsOf(actor.accountId),
       ],
@@ -148,8 +153,9 @@ export const serviceAccounts = ({
         lastUsedAt: row.lastUsedAt,
         grants: grants
           .filter(grant => grant.credentialId === row.id)
-          .map(({ environmentId, environmentName, canRead, canWrite }) => ({
+          .map(({ environmentId, orgSlug, environmentName, canRead, canWrite }) => ({
             environmentId,
+            orgSlug,
             environmentName,
             canRead: canRead !== 0,
             canWrite: canWrite !== 0,
@@ -177,7 +183,7 @@ export const serviceAccounts = ({
       readonly parentId?: string | null;
       readonly endorsement?: string | null;
       readonly welcome?: string | null;
-      readonly vouchers?: ServiceAccountVouchers | undefined;
+      readonly vouchers?: ServiceAccountVouchers;
     }) =>
       sql`INSERT OR IGNORE INTO credential
           (id, account_id, name, public_key, bearer_hash, parent_id, description, endorsement,
@@ -196,8 +202,7 @@ export const serviceAccounts = ({
                   AND bearer_hash = ${serviceAccount.bearerHash})`;
 
   const taken = new AlreadyExistsError({
-    message:
-      'A service account with this id exists. Make a new service account key and log in again.',
+    message: 'A CLI login or service account with this id exists. Make a new key and try again.',
   });
 
   /**
@@ -210,15 +215,15 @@ export const serviceAccounts = ({
     if (target.parentId === null) {
       return yield* new OwnerRequiredError({
         message:
-          'A CLI login reads and writes every environment, so its access does not change. Revoke it to end it.',
+          'A CLI login reads and writes every environment of its person’s orgs, so its access does not change. Revoke it to end it.',
       });
     }
-    if (actor._tag === 'ServiceAccount' && actor.credentialId !== target.parentId) {
+    if (actor._tag === 'Credential' && actor.credentialId !== target.parentId) {
       return yield* new OwnerRequiredError({
         message:
           actor.credentialId === target.id
-            ? 'A service account cannot change its own access. The login that made it can, or the owner from the dashboard.'
-            : 'Only the login that made this service account, or the owner from the dashboard, changes its access.',
+            ? 'A service account cannot change its own access. The CLI login that made it can, or the owner from the dashboard.'
+            : 'Only the CLI login that made this service account, or the owner from the dashboard, changes its access.',
       });
     }
     return target;
@@ -228,7 +233,7 @@ export const serviceAccounts = ({
     authenticate: Effect.fn('Access.authenticate')(function* (bearer: Redacted.Redacted<string>) {
       const refused = new UnauthorizedError({
         message:
-          'This service account key is not approved, or was revoked. Log in with `baymutt login`, after `baymutt logout` if this computer was logged in before, or check BAYMUTT_KEY.',
+          'This key is not approved, or was revoked. Log in with `baymutt login`, after `baymutt logout` if this computer was logged in before, or check BAYMUTT_KEY.',
       });
       const parsed = yield* Effect.promise(() => parseBearer(Redacted.value(bearer)));
       if (parsed === null) return yield* refused;
@@ -240,27 +245,27 @@ export const serviceAccounts = ({
       const now = yield* Clock.currentTimeMillis;
       if (expiresAt !== null && expiresAt <= now) {
         return yield* new UnauthorizedError({
-          message: `This service account expired on ${dayOf(expiresAt)}. The owner can extend it under Service accounts in the dashboard; otherwise make a new one.`,
+          message: `This key expired on ${dayOf(expiresAt)}. The owner can extend it under Service accounts in the dashboard; otherwise make a new one.`,
         });
       }
       if (parentExpiresAt !== null && parentExpiresAt <= now) {
         return yield* new UnauthorizedError({
-          message: `The login that made this service account expired on ${dayOf(parentExpiresAt)}, so this one stopped with it. The owner can extend that login in the dashboard.`,
+          message: `The CLI login that made this service account expired on ${dayOf(parentExpiresAt)}, so this one stopped with it. The owner can extend that login in the dashboard.`,
         });
       }
       // Coarse on purpose: one write a minute per service account, not one a request.
       yield* sql`UPDATE credential SET last_used_at = ${now}
           WHERE id = ${id}
             AND (last_used_at IS NULL OR last_used_at < ${now - LAST_USED_RESOLUTION_MS})`.pipe(
-        Effect.ignoreCause({ log: true, message: 'could not stamp a service account’s last use' }),
+        Effect.ignoreCause({ log: true, message: 'could not stamp a credential’s last use' }),
       );
       return {
-        _tag: 'ServiceAccount',
+        _tag: 'Credential',
         accountId,
         credentialId: id,
         name,
         parentId,
-      } satisfies ServiceAccountActor;
+      } satisfies CredentialActor;
     }),
 
     me: Effect.fn('Access.me')(function* (actor: ActorIdentity) {
@@ -294,32 +299,34 @@ export const serviceAccounts = ({
       readonly serviceAccount: NewServiceAccount;
       readonly endorsement: string;
       readonly welcome: string;
-      /** Read and write on each environment, wrapped by the owner's vault: a login holds every one. */
+      /** Read and write on each environment, wrapped by the owner's vault: a CLI login holds every one. */
       readonly grants: ReadonlyArray<LoginGrant>;
     }) {
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'Only the owner approves a service account, from the link `baymutt login` prints. A service account makes a narrower one with `baymutt service-accounts create`.',
+            'Only the owner approves a CLI login, from the link `baymutt login` prints. A CLI login makes a service account with `baymutt service-accounts create`.',
         });
       }
       yield* underLimit(actor.accountId, 'serviceAccounts');
       const now = yield* Clock.currentTimeMillis;
       const made = madeBy(serviceAccount, now);
-      // One batch: approved and holding its environments, or neither. A grant names a live environment of
-      // this account or is dropped; one made meanwhile is the dashboard's top-up to add.
+      // One batch: approved and holding its environments, or neither. A grant names a live
+      // environment of the person's orgs or is dropped; one made meanwhile is the dashboard's
+      // top-up to add.
       const [inserted] = yield* sql
         .batch([
           insert(actor.accountId, serviceAccount, now)({ endorsement, welcome }),
           ...grants.map(
             grant =>
               sql`INSERT INTO environment_grant
-                    (environment_id, credential_id, account_id, can_write, read_wrap, key_proof,
-                     key_version, created_at)
-                  SELECT id, ${serviceAccount.id}, account_id, 1, ${grant.readWrap},
-                    ${grant.keyProof}, ${grant.keyVersion}, ${now}
+                    (environment_id, credential_id, can_write, read_wrap, key_proof, key_version,
+                     created_at)
+                  SELECT id, ${serviceAccount.id}, 1, ${grant.readWrap}, ${grant.keyProof},
+                    ${grant.keyVersion}, ${now}
                   FROM environment
-                  WHERE id = ${grant.environmentId} AND account_id = ${actor.accountId}
+                  WHERE id = ${grant.environmentId}
+                    AND org_id IN (${orgsOf(sql, actor.accountId)})
                     AND deleted_at IS NULL AND ${made}`,
           ),
           yield* audit.entry(
@@ -351,14 +358,14 @@ export const serviceAccounts = ({
         readonly readWrap: string | null;
         readonly keyProof: string;
       }>;
-      readonly vouchers?: ServiceAccountVouchers | undefined;
+      readonly vouchers: ServiceAccountVouchers;
     }) {
-      if (actor._tag !== 'ServiceAccount' || actor.parentId !== null) {
+      if (actor._tag !== 'Credential' || actor.parentId !== null) {
         return yield* new OwnerRequiredError({
           message:
             actor._tag === 'Owner'
-              ? 'A service account makes a narrower service account, with `baymutt service-accounts create`; the owner approves one made by `baymutt login`.'
-              : 'A service account made by another service account can make no others. Run this from a service account the owner approved.',
+              ? 'A CLI login makes a service account, with `baymutt service-accounts create`; the owner approves the CLI login `baymutt login` makes.'
+              : 'A service account can make no others. Run this from a CLI login.',
         });
       }
       // It can hand on only what it holds: the store checks the grant, and a read is a wrap only
@@ -368,7 +375,7 @@ export const serviceAccounts = ({
         const access = held.find(({ environment }) => environment.id === grant.environmentId);
         if (access === undefined) {
           return yield* new NotFoundError({
-            message: `No environment ${grant.environmentId} is granted to this service account.`,
+            message: `No environment ${grant.environmentId} is granted to this CLI login.`,
           });
         }
         for (const need of ['read', 'write'] as const) {
@@ -377,7 +384,7 @@ export const serviceAccounts = ({
           if (wants && !holds) {
             return yield* new NoAccessError({
               need,
-              message: `This service account has no ${need} access to ${access.environment.name}, so it cannot hand it on.`,
+              message: `This CLI login has no ${need} access to ${access.environment.name}, so it cannot hand it on.`,
             });
           }
         }
@@ -393,11 +400,10 @@ export const serviceAccounts = ({
               held.find(({ environment }) => environment.id === grant.environmentId)?.environment
                 .keyVersion ?? 0;
             return sql`INSERT INTO environment_grant
-                (environment_id, credential_id, account_id, can_write, read_wrap, key_proof,
-                 key_version, created_at)
-              SELECT ${grant.environmentId}, ${serviceAccount.id}, ${actor.accountId},
-                ${grant.canWrite ? 1 : 0}, ${grant.readWrap}, ${grant.keyProof}, ${keyVersion},
-                ${now}
+                (environment_id, credential_id, can_write, read_wrap, key_proof, key_version,
+                 created_at)
+              SELECT ${grant.environmentId}, ${serviceAccount.id}, ${grant.canWrite ? 1 : 0},
+                ${grant.readWrap}, ${grant.keyProof}, ${keyVersion}, ${now}
               WHERE ${made}`;
           }),
           yield* audit.entry(
@@ -441,10 +447,10 @@ export const serviceAccounts = ({
       }
       const { environment } =
         actor._tag === 'Owner'
-          ? yield* ownersEnvironment(actor, environmentId)
+          ? yield* ownersEnvironment(actor, environmentId, 'grants access')
           : yield* environmentFor(actor, environmentId);
       // A login hands on only what it holds, as when it made this one.
-      if (actor._tag === 'ServiceAccount') {
+      if (actor._tag === 'Credential') {
         for (const need of ['read', 'write'] as const) {
           const wants = need === 'read' ? canRead : canWrite;
           const holds = need === 'read' ? environment.canRead : environment.canWrite;
@@ -481,7 +487,6 @@ export const serviceAccounts = ({
       yield* sql
         .batch([
           grantStatement({
-            accountId: actor.accountId,
             environmentId,
             credentialId: id,
             canWrite,
@@ -491,7 +496,7 @@ export const serviceAccounts = ({
             now,
           }),
           yield* audit.entry({
-            accountId: actor.accountId,
+            orgId: environment.orgId,
             actor: actorOf(actor),
             action: 'grant.set',
             environmentId,
@@ -525,7 +530,7 @@ export const serviceAccounts = ({
           // Logged only when there was access to remove, so before the delete.
           yield* audit.entry(
             {
-              accountId: actor.accountId,
+              orgId: listed.environment.orgId,
               actor: actorOf(actor),
               action: 'grant.remove',
               environmentId,
@@ -586,7 +591,7 @@ export const serviceAccounts = ({
       if (!isOwn) {
         return yield* new OwnerRequiredError({
           message:
-            'A service account can revoke itself and the service accounts it made. The owner revokes any.',
+            'A credential can revoke itself and the service accounts it made. The owner revokes any.',
         });
       }
       const now = yield* Clock.currentTimeMillis;

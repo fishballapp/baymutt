@@ -1,5 +1,5 @@
 // The example account the page shows. The ids, keys, code and links were made by @baymutt/keys'
-// own functions (a service account token, its pairing code, an environment key's fingerprint), and every
+// own functions (a CLI login's token, its pairing code, an environment key's fingerprint), and every
 // printed object has the shape the CLI prints, so a transcript here is one the CLI could print. A
 // long one shows a few of its fields and an ellipsis for the rest.
 // The page labels it an example.
@@ -22,7 +22,12 @@ export const MAC_MINI = {
   code: 'AJFS-6NY1',
 };
 
+export const ORG = { id: 'Qm7cT2vXa9LpD4sKw8NhB3yRf6GjZ1Ue', slug: 'acme' };
+
 export const ENVIRONMENT = { id: 'ac1e0fa1-faed-4f81-bd8b-a1dcb12fe75f', name: 'app/production' };
+
+/** How an environment is named wherever a name is taken: its org's slug, then its name. */
+export const ADDRESS = `${ORG.slug}/${ENVIRONMENT.name}`;
 
 const PAIR_URL = `${ORIGIN}/pair#%7B%22id%22%3A%2222b9687b-1e40-4ed7-9971-c17ec5443f12%22%2C%22name%22%3A%22Mac%20mini%22%2C%22publicKey%22%3A%22skZN7eF_FUvajVkUHQylJLLJ_ePuujf8FU4_dW4DHys%22%2C%22bearerHash%22%3A%22u_yVkseke_CFXhP6Buey1-RFphmICjoDoJ1LGknfxkc%22%2C%22pairingSecret%22%3A%22_cxzoocyt6mEEyw_d40_lUeGXfdBOPhxicJezFaSsGE%22%7D`;
 
@@ -47,7 +52,7 @@ export const PAIR: readonly TerminalLine[] = [
 export const SCHEMA_FILE = [
   '# @plugin(@baymutt/varlock-plugin)',
   '# @initBaymutt(key=$BAYMUTT_KEY)',
-  `# @setValuesBulk(baymuttLoad("${ENVIRONMENT.name}"))`,
+  `# @setValuesBulk(baymuttLoad("${ADDRESS}"))`,
   '# ---',
   'DATABASE_URL=',
   'SESSION_SECRET=',
@@ -56,33 +61,35 @@ export const SCHEMA_FILE = [
 ];
 
 export const WRITE: readonly TerminalLine[] = [
-  { kind: 'command', text: `baymutt generate ${ENVIRONMENT.name} SESSION_SECRET` },
+  { kind: 'command', text: `baymutt generate ${ADDRESS} SESSION_SECRET` },
   {
     kind: 'stdout',
-    value: { environment: ENVIRONMENT.name, name: 'SESSION_SECRET', version: 4, length: 43 },
+    value: { environment: ADDRESS, name: 'SESSION_SECRET', version: 4, length: 43 },
   },
 ];
 
-export const REQUEST: readonly TerminalLine[] = [
+export const PASTE_LINK: readonly TerminalLine[] = [
   {
     kind: 'command',
-    text: `baymutt request ${ENVIRONMENT.name} RESEND_API_KEY --reason "to send sign-in emails" --where "Resend dashboard, API Keys"`,
+    text: `baymutt paste-link ${ADDRESS} RESEND_API_KEY --reason "to send sign-in emails" --where "Resend dashboard, API Keys"`,
   },
   {
     kind: 'stderr',
-    text: 'Ask the owner to open this link and paste RESEND_API_KEY. It works once, for 15 minutes; after that the request is in the dashboard.',
+    text: 'Ask the owner to open this link and paste RESEND_API_KEY. It works once, for 15 minutes; after that it is in the dashboard, under Paste links.',
   },
   {
     kind: 'stdout',
     value: {
       id: PASTE_ID,
+      orgId: ORG.id,
+      orgSlug: ORG.slug,
       environmentId: ENVIRONMENT.id,
       environmentName: ENVIRONMENT.name,
       name: 'RESEND_API_KEY',
       reason: 'to send sign-in emails',
       hint: 'Resend dashboard, API Keys',
       status: 'pending',
-      createdBy: { kind: 'machine', id: MACBOOK.id, name: MACBOOK.name },
+      createdBy: { kind: 'credential', id: MACBOOK.id, name: MACBOOK.name },
       createdAt: ASKED_AT,
       linkExpiresAt: ASKED_AT + 15 * 60_000,
       url: PASTE_URL,
@@ -93,4 +100,4 @@ export const REQUEST: readonly TerminalLine[] = [
   { kind: 'stdout', value: { id: PASTE_ID, status: 'answered' } },
 ];
 
-export const SERVICE_ACCOUNT_COMMAND = `baymutt service-accounts create --name "CI deploy" --read ${ENVIRONMENT.name} -- gh secret set BAYMUTT_KEY`;
+export const SERVICE_ACCOUNT_COMMAND = `baymutt service-accounts create --name "CI deploy" --read ${ADDRESS} -- gh secret set BAYMUTT_KEY`;

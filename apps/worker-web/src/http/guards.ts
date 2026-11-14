@@ -42,7 +42,7 @@ const withCredential = <A, E, R>(effect: Effect.Effect<A, E, R>, credential: Cre
 const CredentialsLive = Layer.succeed(
   Credentials,
   Credentials.of({
-    serviceAccount: (httpEffect, { credential }) =>
+    credential: (httpEffect, { credential }) =>
       isPresent(credential)
         ? withCredential(httpEffect, { _tag: 'Bearer', bearer: credential })
         : Effect.fail(
@@ -162,12 +162,16 @@ const MaybeAuthenticatedLive = Layer.effect(
     const verify = yield* verifier;
     return MaybeAuthenticated.of(
       Effect.fn(function* (httpEffect) {
-        // A paste link's holder may be signed in to nothing, to a session with no vault yet, or
-        // to one whose vault is locked: the link's token then answers for itself.
-        const actor = yield* actorOf(verify, yield* CurrentCredential).pipe(
+        // A paste link's holder may be signed in to nothing, to a session with no vault yet, to
+        // one whose vault is locked, or carry a cookie for a session that has ended: the link's
+        // token then answers for itself. A bearer that fails stays refused.
+        const credential = yield* CurrentCredential;
+        const actor = yield* actorOf(verify, credential).pipe(
           Effect.catchTags({
             AccountRequiredError: () => Effect.succeed(null),
             VaultLockedError: () => Effect.succeed(null),
+            UnauthorizedError: error =>
+              credential._tag === 'Session' ? Effect.succeed(null) : Effect.fail(error),
           }),
         );
         return yield* Effect.provideService(httpEffect, CurrentCaller, { actor });

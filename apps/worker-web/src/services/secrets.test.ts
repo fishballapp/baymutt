@@ -29,7 +29,7 @@ describe('writing', () => {
         currentVersion: 1,
         latestVersion: 1,
         size: 72,
-        updatedBy: { kind: 'machine', name: 'writer' },
+        updatedBy: { kind: 'credential', name: 'writer' },
       },
     });
     expect(
@@ -62,7 +62,7 @@ describe('writing', () => {
       body: {
         versions: [
           { version: 2, isCurrent: true, createdBy: { kind: 'owner' } },
-          { version: 1, isCurrent: false, createdBy: { kind: 'machine', name: 'writer' } },
+          { version: 1, isCurrent: false, createdBy: { kind: 'credential', name: 'writer' } },
         ],
       },
     });
@@ -114,7 +114,7 @@ describe('writing', () => {
         `UPDATE secret SET latest_version = 2, current_version = 2, write_id = 'other'`,
       );
       w.sqlite.exec(
-        `INSERT INTO secret_version SELECT environment_id, name, 2, account_id, key_version, 'b3RoZXI=', created_by, created_at FROM secret_version`,
+        `INSERT INTO secret_version SELECT environment_id, name, 2, key_version, 'b3RoZXI=', created_by, created_at FROM secret_version`,
       );
     });
 
@@ -127,7 +127,7 @@ describe('writing', () => {
     ).toEqual([{ ciphertext: 'b3RoZXI=' }]);
     expect(
       w.sqlite
-        .prepare("SELECT COUNT(*) AS logged FROM audit_event WHERE action = 'secret.write'")
+        .prepare("SELECT COUNT(*) AS logged FROM activity_event WHERE action = 'secret.write'")
         .get(),
     ).toEqual({ logged: 1 });
   });
@@ -154,13 +154,12 @@ describe('writing', () => {
 
 describe('loading', () => {
   it('answers every current value as ciphertext with the caller’s own wrap', async () => {
-    const { w, owner, accountId, environmentId, reader, write } = await setup();
+    const { w, owner, environmentId, reader, write } = await setup();
     await write(environmentId, 'B_KEY', 1);
     await write(environmentId, 'A_KEY', 1);
     await write(environmentId, 'A_KEY', 2);
     const environment = {
       id: environmentId,
-      accountId,
       name: 'app/production',
       publicKey: keyLike('p'),
       keyVersion: 1,
@@ -232,7 +231,7 @@ describe('revealing in the dashboard', () => {
     expect(
       w.sqlite
         .prepare(
-          "SELECT secret_name, version FROM audit_event WHERE action = 'secret.reveal' ORDER BY id",
+          "SELECT secret_name, version FROM activity_event WHERE action = 'secret.reveal' ORDER BY id",
         )
         .all(),
     ).toEqual([{ secret_name: 'API_KEY', version: 1 }]);
@@ -295,7 +294,7 @@ describe('deleting and rolling back', () => {
   });
 });
 
-describe('a paste request', () => {
+describe('a paste link', () => {
   const request = async (
     { w }: StoreWorld,
     environmentId: string,
@@ -303,7 +302,7 @@ describe('a paste request', () => {
   ) => {
     const id = crypto.randomUUID();
     const token = keyLike('t');
-    const answer = await call(w, 'POST', '/paste-requests', headers, {
+    const answer = await call(w, 'POST', '/paste-links', headers, {
       id,
       environmentId,
       name: 'STRIPE_SECRET_KEY',
@@ -321,7 +320,7 @@ describe('a paste request', () => {
 
   it('lets whoever holds the link seal one value into its one slot, once', async () => {
     const world = await setup();
-    const { w, owner, accountId, environmentId, reader, writer } = world;
+    const { w, owner, orgId, environmentId, reader, writer } = world;
 
     expect((await request(world, environmentId, reader.headers)).answer).toMatchObject({
       status: 403,
@@ -330,17 +329,16 @@ describe('a paste request', () => {
     const { id, answer, link } = await request(world, environmentId, writer.headers);
 
     expect(answer).toMatchObject({ status: 201, body: { status: 'pending' } });
-    expect(await call(w, 'GET', '/paste-requests', owner)).toMatchObject({
-      body: { requests: [{ id, name: 'STRIPE_SECRET_KEY', createdBy: { name: 'writer' } }] },
+    expect(await call(w, 'GET', '/paste-links', owner)).toMatchObject({
+      body: { links: [{ id, name: 'STRIPE_SECRET_KEY', createdBy: { name: 'writer' } }] },
     });
     expect(await call(w, 'GET', `/paste/${id}`, link)).toMatchObject({
       status: 200,
       body: {
-        accountId,
         environmentPublicKey: keyLike('p'),
         keyVersion: 1,
         nextVersion: 1,
-        request: { environmentName: 'app/production', name: 'STRIPE_SECRET_KEY' },
+        link: { orgId, environmentName: 'app/production', name: 'STRIPE_SECRET_KEY' },
       },
     });
 
@@ -359,6 +357,23 @@ describe('a paste request', () => {
       status: 200,
     });
     expect(await call(w, 'GET', `/paste/${id}`, strangerSession)).toMatchObject({ status: 401 });
+    // A cookie for a session that has ended (expired, or signed out elsewhere) is no session: the
+    // link's token still answers.
+    const ended = {
+      cookie: '__Secure-better-auth.session_token=session-that-ended',
+      origin: ORIGIN,
+    };
+    expect(await call(w, 'GET', `/paste/${id}`, { ...ended, ...link })).toMatchObject({
+      status: 200,
+    });
+    expect(await call(w, 'GET', `/paste/${id}`, ended)).toMatchObject({ status: 401 });
+    // A bearer that does not verify is refused, never taken as nobody.
+    expect(
+      await call(w, 'GET', `/paste/${id}`, {
+        ...link,
+        authorization: `Bearer baymutt_${crypto.randomUUID()}_${keyLike('x')}`,
+      }),
+    ).toMatchObject({ status: 401 });
 
     expect(await call(w, 'POST', `/paste/${id}`, link, pasted(1))).toMatchObject({
       status: 200,
@@ -377,9 +392,9 @@ describe('a paste request', () => {
         body: { code: 'LinkSpentError' },
       });
     }
-    expect(await call(w, 'GET', '/paste-requests', owner)).toEqual({
+    expect(await call(w, 'GET', '/paste-links', owner)).toEqual({
       status: 200,
-      body: { requests: [] },
+      body: { links: [] },
     });
   });
 
@@ -400,7 +415,7 @@ describe('a paste request', () => {
       });
     }
 
-    w.sqlite.exec('UPDATE paste_request SET link_expires_at = 1');
+    w.sqlite.exec('UPDATE paste_link SET link_expires_at = 1');
 
     expect(await call(w, 'POST', `/paste/${id}`, link, pasted(1))).toMatchObject({
       status: 410,
@@ -435,14 +450,14 @@ describe('a paste request', () => {
     const first = await request(world, environmentId, writer.headers);
     const second = await request(world, environmentId, writer.headers);
     const pending = async () =>
-      (await ok<{ requests: { id: string }[] }>(w, 'GET', '/paste-requests', owner)).requests.map(
+      (await ok<{ links: { id: string }[] }>(w, 'GET', '/paste-links', owner)).links.map(
         ({ id }) => id,
       );
 
     expect(await pending()).toEqual([second.id]);
     // The first request sent again (a retry whose answer was lost) is refused and closes nothing.
     expect(
-      await call(w, 'POST', '/paste-requests', writer.headers, {
+      await call(w, 'POST', '/paste-links', writer.headers, {
         id: first.id,
         environmentId,
         name: 'STRIPE_SECRET_KEY',
@@ -455,12 +470,12 @@ describe('a paste request', () => {
     expect(await call(w, 'GET', `/paste/${first.id}`, first.link)).toMatchObject({ status: 410 });
 
     // Two left open by an older build are both closed by one paste.
-    w.sqlite.exec("UPDATE paste_request SET status = 'pending', resolved_at = NULL");
+    w.sqlite.exec("UPDATE paste_link SET status = 'pending', resolved_at = NULL");
     expect(await call(w, 'POST', `/paste/${second.id}`, second.link, pasted(1))).toMatchObject({
       status: 200,
     });
     expect(await pending()).toEqual([]);
-    expect(w.sqlite.prepare('SELECT status FROM paste_request ORDER BY status').all()).toEqual([
+    expect(w.sqlite.prepare('SELECT status FROM paste_link ORDER BY status').all()).toEqual([
       { status: 'cancelled' },
       { status: 'fulfilled' },
     ]);
@@ -471,10 +486,10 @@ describe('a paste request', () => {
     const { w, environmentId, reader, writer } = world;
     const { id, link } = await request(world, environmentId, writer.headers);
 
-    expect(await call(w, 'DELETE', `/paste-requests/${id}`, reader.headers)).toMatchObject({
+    expect(await call(w, 'DELETE', `/paste-links/${id}`, reader.headers)).toMatchObject({
       status: 404,
     });
-    expect(await call(w, 'DELETE', `/paste-requests/${id}`, writer.headers)).toMatchObject({
+    expect(await call(w, 'DELETE', `/paste-links/${id}`, writer.headers)).toMatchObject({
       status: 200,
       body: { status: 'cancelled' },
     });

@@ -1,4 +1,4 @@
-import { hkdfSync } from 'node:crypto';
+import { createPrivateKey, createPublicKey, hkdfSync } from 'node:crypto';
 import {
   decodePublicKey,
   fromBase64,
@@ -48,7 +48,8 @@ import {
   wrapEnvironmentKey,
 } from './index.ts';
 
-const BINDING = { accountId: 'account-1', environmentId: 'environment-1', keyVersion: 1 };
+const ACCOUNT_ID = 'account-1';
+const BINDING = { environmentId: 'environment-1', keyVersion: 1 };
 const SLOT = { ...BINDING, name: 'STRIPE_SECRET_KEY', version: 3 };
 
 const ownerVault = async () => {
@@ -66,10 +67,21 @@ describe('a service account key', () => {
     const again = await serviceAccountKeyFromToken(token);
     const seedBytes = Buffer.from(seed ?? '', 'base64url');
     const bearerSecret = Buffer.from(
-      hkdfSync('sha256', seedBytes, Buffer.alloc(0), 'baymutt-machine-bearer', 32),
+      hkdfSync('sha256', seedBytes, Buffer.alloc(0), 'baymutt-seed-bearer', 32),
     ).toString('base64url');
 
+    // X25519's private key is the HKDF output itself: PKCS #8 is a fixed prefix and those 32 bytes.
+    const privateKey = createPrivateKey({
+      key: Buffer.concat([
+        Buffer.from('302e020100300506032b656e04220420', 'hex'),
+        Buffer.from(hkdfSync('sha256', seedBytes, Buffer.alloc(0), 'baymutt-seed-key', 32)),
+      ]),
+      format: 'der',
+      type: 'pkcs8',
+    });
+
     expect(serviceAccount.credentialId).toBe(credentialId);
+    expect(serviceAccount.publicKey).toBe(createPublicKey(privateKey).export({ format: 'jwk' }).x);
     expect(serviceAccount.bearer).toBe(`baymutt_${credentialId}_${bearerSecret}`);
     expect(serviceAccount.publicKey).toBe(again.publicKey);
     expect(serviceAccount.bearer).not.toContain(seed);
@@ -147,7 +159,6 @@ describe('an environment key wrap', () => {
     for (const overrides of [
       { readerKey: stranger },
       { readerId: 'credential-2' },
-      { binding: { ...BINDING, accountId: 'account-2' } },
       { binding: { ...BINDING, environmentId: 'environment-2' } },
       { binding: { ...BINDING, keyVersion: 2 } },
     ]) {
@@ -218,7 +229,6 @@ describe('a sealed value', () => {
       { ...SLOT, version: 4 },
       { ...SLOT, keyVersion: 2 },
       { ...SLOT, environmentId: 'environment-2' },
-      { ...SLOT, accountId: 'account-2' },
     ]) {
       await expect(openValue({ environmentKey, slot, ciphertext })).rejects.toMatchObject({
         code: 'unreadable',
@@ -384,16 +394,14 @@ describe('publicKeyFingerprint', () => {
   });
 });
 
-// The environment was a project when these were written, and every stored key and value was sealed
-// under them: the labels say `project`, and a binding is a JSON array of values. Changing a label
-// or the bytes of a binding makes what the owner stored unreadable.
-describe('an environment key, as it was sealed while environments were projects', () => {
-  const BINDING_BYTES = utf8(JSON.stringify(['account-1', 'environment-1', '1', 'credential-1']));
-  const SLOT_BYTES = utf8(
-    JSON.stringify(['account-1', 'environment-1', '1', 'STRIPE_SECRET_KEY', '3']),
-  );
+// Every stored key and value is sealed under these labels and bindings: a label names a job and no
+// product noun, and a binding is a JSON array of values naming the environment and nothing above
+// it. Changing a label or the bytes of a binding makes what an account stored unreadable.
+describe('an environment key, as it is sealed', () => {
+  const BINDING_BYTES = utf8(JSON.stringify(['environment-1', '1', 'credential-1']));
+  const SLOT_BYTES = utf8(JSON.stringify(['environment-1', '1', 'STRIPE_SECRET_KEY', '3']));
 
-  it('wraps and proves under the labels `baymutt-project-key` and `baymutt-project-key-proof`', async () => {
+  it('wraps and proves under the labels `baymutt-key-wrap` and `baymutt-key-proof`', async () => {
     const environment = await generateEnvironmentKey();
     const reader = await generateKeyPair();
     const readerKey = await importPrivateKey(reader.privateKey, 'the reader');
@@ -414,7 +422,7 @@ describe('an environment key, as it was sealed while environments were projects'
 
     const wrapped = await openBox({
       privateKey: readerKey,
-      info: 'baymutt-project-key',
+      info: 'baymutt-key-wrap',
       aad: BINDING_BYTES,
       box: fromBase64(wrap, 'the wrap'),
       what: 'the wrap',
@@ -422,7 +430,7 @@ describe('an environment key, as it was sealed while environments were projects'
     const proved = await openVouched({
       recipient: readerKey,
       sender: decodePublicKey(voucher.publicKey, 'the voucher'),
-      info: 'baymutt-project-key-proof',
+      info: 'baymutt-key-proof',
       aad: BINDING_BYTES,
       box: fromBase64(proof, 'the proof'),
       what: 'the proof',
@@ -432,14 +440,14 @@ describe('an environment key, as it was sealed while environments were projects'
     expect(toBase64Url(proved)).toBe(environment.publicKey);
   });
 
-  it('seals a value under `baymutt-secret-value` in the slot [account, environment, key version, name, version]', async () => {
+  it('seals a value under `baymutt-sealed-value` in the slot [environment, key version, name, version]', async () => {
     const environment = await generateEnvironmentKey();
     const environmentKey = await importPrivateKey(environment.privateKey, 'the environment key');
     const stored = await sealBox({
       recipient: decodePublicKey(environment.publicKey, 'the environment key'),
-      info: 'baymutt-secret-value',
+      info: 'baymutt-sealed-value',
       aad: SLOT_BYTES,
-      plaintext: utf8('a value sealed before the rename'),
+      plaintext: utf8('a sealed value'),
     });
 
     expect(
@@ -448,7 +456,7 @@ describe('an environment key, as it was sealed while environments were projects'
         slot: SLOT,
         ciphertext: stored.toBase64(),
       }),
-    ).toBe('a value sealed before the rename');
+    ).toBe('a sealed value');
   });
 });
 
@@ -513,7 +521,6 @@ describe('an environment key proof', () => {
       { readerKey: strangerKey },
       { binding: { ...BINDING, environmentId: 'environment-2' } },
       { binding: { ...BINDING, keyVersion: 2 } },
-      { binding: { ...BINDING, accountId: 'account-2' } },
     ]) {
       await expect(read(overrides)).rejects.toMatchObject({ code: 'unreadable' });
     }
@@ -528,7 +535,7 @@ describe('the owner and an environment', () => {
     const account = await createAccountKey(vault);
     const owner = {
       vault,
-      accountId: BINDING.accountId,
+      accountId: ACCOUNT_ID,
       accountKey: await openAccountKey(vault, account),
     };
     const serviceAccount = await serviceAccountKeyFromToken(generateServiceAccountToken());
@@ -541,11 +548,11 @@ describe('the owner and an environment', () => {
     const created = await createEnvironmentKey({
       voucherKey: serviceAccount.privateKey,
       binding: BINDING,
-      readers: [{ id: BINDING.accountId, publicKey: account.publicKey }],
+      readers: [{ id: ACCOUNT_ID, publicKey: account.publicKey }],
     });
     const [grant] = created.grants;
     if (grant === undefined) throw new Error('no grant');
-    const owned = { ...BINDING, ownerWrap: grant.wrap, ownerProof: grant.proof, creator };
+    const owned = { ...BINDING, memberWrap: grant.wrap, memberProof: grant.proof, creator };
     return { owner, account, serviceAccount, creator, created, owned };
   };
 
@@ -561,21 +568,21 @@ describe('the owner and an environment', () => {
     const forgedWrap = await wrapEnvironmentKey({
       environmentPrivateKey: forgedPair.privateKey,
       readerPublicKey: account.publicKey,
-      readerId: BINDING.accountId,
+      readerId: ACCOUNT_ID,
       binding: BINDING,
     });
     const hostKey = await importPrivateKey((await generateKeyPair()).privateKey, 'the host');
     const forgedProof = await vouchForEnvironmentKey({
       voucherKey: hostKey,
-      reader: { id: BINDING.accountId, publicKey: account.publicKey },
+      reader: { id: ACCOUNT_ID, publicKey: account.publicKey },
       binding: BINDING,
       environmentPublicKey: forgedPair.publicKey,
     });
 
     // Its own wrap with the real proof, its own proof, and a creator the vault never endorsed.
     for (const forged of [
-      { ...owned, ownerWrap: forgedWrap },
-      { ...owned, ownerWrap: forgedWrap, ownerProof: forgedProof },
+      { ...owned, memberWrap: forgedWrap },
+      { ...owned, memberWrap: forgedWrap, memberProof: forgedProof },
       { ...owned, creator: { ...owned.creator, publicKey: (await generateKeyPair()).publicKey } },
       { ...owned, creator: { ...owned.creator, endorsement: null } },
       { ...owned, creator: null },
@@ -656,7 +663,7 @@ describe('a scoped service account’s vouchers', () => {
     const account = await createAccountKey(vault);
     const owner = {
       vault,
-      accountId: BINDING.accountId,
+      accountId: ACCOUNT_ID,
       accountKey: await openAccountKey(vault, account),
     };
     const login = await serviceAccountKeyFromToken(generateServiceAccountToken());
@@ -668,7 +675,7 @@ describe('a scoped service account’s vouchers', () => {
     const made = await serviceAccountKeyFromToken(generateServiceAccountToken(login.publicKey));
     const vouchers = await vouchForServiceAccount({
       makerKey: login.privateKey,
-      accountId: BINDING.accountId,
+      accountId: ACCOUNT_ID,
       accountPublicKey: account.publicKey,
       serviceAccount: { id: made.credentialId, publicKey: made.publicKey },
     });
@@ -689,7 +696,7 @@ describe('a scoped service account’s vouchers', () => {
       await vouchedServiceAccountKey({
         readerKey: login.privateKey,
         makerPublicKey: login.publicKey,
-        accountId: BINDING.accountId,
+        accountId: ACCOUNT_ID,
         serviceAccount: { ...listed, keyVoucher: vouchers.keyToMaker },
       }),
     ).toEqual(listed);
@@ -698,7 +705,7 @@ describe('a scoped service account’s vouchers', () => {
         serviceAccountKey: made.privateKey,
         serviceAccountId: made.credentialId,
         makerPublicKey: login.publicKey,
-        accountId: BINDING.accountId,
+        accountId: ACCOUNT_ID,
         accountVoucher: vouchers.accountKey,
       }),
     ).toBe(account.publicKey);
@@ -706,8 +713,8 @@ describe('a scoped service account’s vouchers', () => {
     const pinned = await openVouched({
       recipient: owner.accountKey,
       sender: decodePublicKey(login.publicKey, 'the maker'),
-      info: 'baymutt-service-account-key',
-      aad: utf8(JSON.stringify([BINDING.accountId, made.credentialId])),
+      info: 'baymutt-issued-key-voucher',
+      aad: utf8(JSON.stringify([ACCOUNT_ID, made.credentialId])),
       box: fromBase64(vouchers.keyToOwner, 'the voucher'),
       what: 'the voucher',
     });
@@ -715,8 +722,8 @@ describe('a scoped service account’s vouchers', () => {
     const pinnedAccount = await openVouched({
       recipient: made.privateKey,
       sender: decodePublicKey(login.publicKey, 'the maker'),
-      info: 'baymutt-account-key',
-      aad: utf8(JSON.stringify([BINDING.accountId, made.credentialId])),
+      info: 'baymutt-root-key-voucher',
+      aad: utf8(JSON.stringify([ACCOUNT_ID, made.credentialId])),
       box: fromBase64(vouchers.accountKey, 'the voucher'),
       what: 'the voucher',
     });
@@ -728,11 +735,11 @@ describe('a scoped service account’s vouchers', () => {
     const created = await createEnvironmentKey({
       voucherKey: owner.accountKey,
       binding: BINDING,
-      readers: [{ id: BINDING.accountId, publicKey: account.publicKey }],
+      readers: [{ id: ACCOUNT_ID, publicKey: account.publicKey }],
     });
     const [own] = created.grants;
     if (own === undefined) throw new Error('no grant');
-    const owned = { ...BINDING, ownerWrap: own.wrap, ownerProof: own.proof, creator: null };
+    const owned = { ...BINDING, memberWrap: own.wrap, memberProof: own.proof, creator: null };
     const grant = await grantToTrustedReader(
       owner,
       owned,
@@ -743,7 +750,7 @@ describe('a scoped service account’s vouchers', () => {
       serviceAccountKey: made.privateKey,
       serviceAccountId: made.credentialId,
       makerPublicKey: made.issuerPublicKey ?? '',
-      accountId: BINDING.accountId,
+      accountId: ACCOUNT_ID,
       accountVoucher: vouchers.accountKey,
     });
 
@@ -763,7 +770,7 @@ describe('a scoped service account’s vouchers', () => {
     const host = await serviceAccountKeyFromToken(generateServiceAccountToken());
     const forged = await vouchForServiceAccount({
       makerKey: host.privateKey,
-      accountId: BINDING.accountId,
+      accountId: ACCOUNT_ID,
       accountPublicKey: account.publicKey,
       serviceAccount: { id: listed.id, publicKey: host.publicKey },
     });
@@ -798,7 +805,7 @@ describe('a scoped service account’s vouchers', () => {
         serviceAccountKey: other.privateKey,
         serviceAccountId: other.credentialId,
         makerPublicKey: login.publicKey,
-        accountId: BINDING.accountId,
+        accountId: ACCOUNT_ID,
         accountVoucher: vouchers.accountKey,
       }),
     ).rejects.toMatchObject({ code: 'unreadable' });

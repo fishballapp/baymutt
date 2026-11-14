@@ -1,4 +1,4 @@
-// `baymutt login`: makes a service account key and asks the owner to approve it. Run it again to
+// `baymutt login`: makes a CLI login's key and asks the owner to approve it. Run it again to
 // finish: it picks up where it left off. `baymutt logout` undoes it.
 import { hostname } from 'node:os';
 import { LabelSchema, PairingRequestSchema } from '@baymutt/api';
@@ -25,7 +25,7 @@ const POLL_EVERY = Duration.seconds(2);
 /** "CLI on <this computer's name>", within a name's 60 characters. */
 const defaultName = () => `CLI on ${hostname().slice(0, 53).trim() || 'this computer'}`;
 
-/** The service account's key: the one already kept when a pairing is under way, or a new one. */
+/** The login's key: the one already kept when a pairing is under way, or a new one. */
 const serviceAccountToken = Effect.gen(function* () {
   const store = yield* KeyStore;
   const kept = yield* store.read;
@@ -127,7 +127,7 @@ export const loginCommand = Command.make(
         'integrity',
       );
     }
-    // Sealed by the owner's browser under a secret the store never saw: this is where the service account
+    // Sealed by the owner's browser under a secret the store never saw: this is where the login
     // learns which account key to trust.
     const account = yield* crypto_(() =>
       openWelcome(
@@ -155,7 +155,7 @@ export const loginCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Log in to the owner’s account from this computer: make a key here and ask the owner to approve it. Once approved, this login reads and writes every environment of the account, including ones made later, and can make service accounts that hold part of its access',
+    'Log in to the owner’s account from this computer: make a key here and ask the owner to approve it. Once approved, this CLI login reads and writes every environment of every org of the account, including ones made later, creates environments, and can make service accounts that hold part of its access',
   ),
 );
 
@@ -192,6 +192,6 @@ export const logoutCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke this computer’s login, with every service account it made, and forget its key here. What it already read stays read. Refused when the key comes from BAYMUTT_KEY',
+    'Revoke this computer’s CLI login, with every service account it made, and forget its key here. What it already read stays read. Refused when the key comes from BAYMUTT_KEY',
   ),
 );

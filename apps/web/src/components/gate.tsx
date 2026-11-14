@@ -6,7 +6,7 @@ import { createContext, type ReactNode, use, useEffect, useState } from 'react';
 import {
   environmentsAtom,
   isLogin,
-  pasteRequestsAtom,
+  pasteLinksAtom,
   resumeAtom,
   serviceAccountsAtom,
   signOutAtom,
@@ -15,6 +15,7 @@ import {
 import { type Owner, useOwnerStore } from '../lib/owner.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 import { Entry, Standalone } from '../pages/entry.tsx';
+import { OrgPicker } from './orgs.tsx';
 import { Notice, Wordmark } from './parts.tsx';
 import { RecoveryKey } from './recovery-key.tsx';
 import { Button } from './ui/button.tsx';
@@ -60,7 +61,7 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
 const NAV = [
   { to: '/environments', label: 'Environments' },
   { to: '/service-accounts', label: 'Service accounts' },
-  { to: '/requests', label: 'Requests' },
+  { to: '/paste-links', label: 'Paste links' },
   { to: '/activity', label: 'Activity' },
   { to: '/bin', label: 'Bin' },
   { to: '/account', label: 'Account' },
@@ -73,7 +74,7 @@ const sectionOf = (path: string): NavPath | undefined =>
   path.startsWith('/pair') ? '/service-accounts' : NAV.find(({ to }) => path.startsWith(to))?.to;
 
 const PendingCount = () => {
-  const pending = latest(useAtomValue(pasteRequestsAtom))?.length ?? 0;
+  const pending = latest(useAtomValue(pasteLinksAtom))?.length ?? 0;
   if (pending === 0) return null;
   return (
     <span className="absolute top-0.5 right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-xs leading-none font-medium text-accent-foreground tabular-nums md:static md:ml-auto md:h-5 md:min-w-5 md:px-1.5">
@@ -84,9 +85,10 @@ const PendingCount = () => {
 };
 
 /**
- * Keeps every login holding every environment. An environment a service account made reaches the other
- * logins only through the owner's vault, so whenever it is open and a login lacks one, this grants
- * it. Keyed on what is missing: a grant that fails is not retried until the lists change.
+ * Keeps every CLI login holding every environment of every org. An environment another login made
+ * reaches the others only through the owner's vault, so whenever it is open and a login lacks one,
+ * this grants it. Keyed on what is missing: a grant that fails is not retried until the lists
+ * change.
  */
 const LoginTopUp = () => {
   const owner = useOwner();
@@ -113,7 +115,7 @@ const LoginTopUp = () => {
   const failure = failureMessage(toppingUp);
   return failure === null ? null : (
     <Notice className="mb-6">
-      Could not give every login the environments it lacks: {failure} It is tried again when you
+      Could not give every CLI login the environments it lacks: {failure} It is tried again when you
       next open the dashboard.
     </Notice>
   );
@@ -126,9 +128,10 @@ const navItem = (isCurrent: boolean) =>
   );
 
 /**
- * The side nav and one column of content. Under 48rem the nav is a bar across the top: the
- * wordmark, then the six items in three columns over two rows, which gives "Service accounts" and
- * "Environments" room to stay on one line at 390px.
+ * The side nav and one column of content. The org picker sits under the wordmark and scopes
+ * Environments, Activity and the Bin. Under 48rem the nav is a bar across the top: the wordmark
+ * and the picker on one line, then the six items in three columns over two rows, which gives
+ * "Service accounts" and "Environments" room to stay on one line at 390px.
  */
 export const Shell = () => {
   const owner = useOwner();
@@ -138,10 +141,16 @@ export const Shell = () => {
     <div className="min-h-dvh md:grid md:grid-cols-[15rem_minmax(0,1fr)]">
       <aside className="border-line border-b bg-surface md:border-r md:border-b-0">
         <div className="flex flex-col md:sticky md:top-0 md:h-dvh">
-          <div className="flex items-center justify-between gap-4 px-4 pt-3 md:px-5 md:pt-7 md:pb-2">
-            <Link to="/environments" className="-mx-1 rounded-control px-1 py-1">
+          <div className="flex items-center justify-between gap-4 px-4 pt-3 md:flex-col md:items-stretch md:gap-4 md:px-5 md:pt-7 md:pb-2">
+            <Link
+              to="/environments"
+              className="-mx-1 shrink-0 rounded-control px-1 py-1 md:self-start"
+            >
               <Wordmark />
             </Link>
+            <div className="w-44 min-w-0 md:-mx-2 md:w-auto">
+              <OrgPicker />
+            </div>
           </div>
           <nav
             aria-label="Main"
@@ -155,7 +164,7 @@ export const Shell = () => {
                 className={navItem(current === to)}
               >
                 {label}
-                {to === '/requests' && <PendingCount />}
+                {to === '/paste-links' && <PendingCount />}
               </Link>
             ))}
           </nav>

@@ -1,12 +1,12 @@
-// Better Auth, for signing in two ways: a magic link by email, and a passkey. Neither is what
-// protects a value: a link only signs in, and what the store lets a session change is decided by
-// the vault proof (http/guards.ts), which a passkey or the recovery key alone can produce.
+// Better Auth, for signing in (a magic link by email, a password, a passkey) and for orgs. None of it
+// is what protects a value: a link only signs in, and what the store lets a session change is
+// decided by the vault proof (http/guards.ts), which only the open vault can produce.
 import { VAULT_PROOF_HEADER } from '@baymutt/api';
 import { tokenHash } from '@baymutt/keys/wire';
 import { passkey } from '@better-auth/passkey';
 import { type Auth as BetterAuthInstance, type BetterAuthOptions, betterAuth } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
-import { magicLink } from 'better-auth/plugins';
+import { magicLink, organization } from 'better-auth/plugins';
 import * as Config from 'effect/Config';
 import * as Redacted from 'effect/Redacted';
 import { BaymuttConfig } from './config.ts';
@@ -16,7 +16,11 @@ export const AuthConfig = Config.all({
   baymutt: BaymuttConfig,
 });
 
-/** What the dashboard calls over HTTP. Everything else Better Auth mounts answers 403. */
+/**
+ * What the dashboard calls over HTTP. Everything else Better Auth mounts answers 403, the
+ * organization plugin's routes included: an org is created and deleted through baymutt's own API,
+ * which holds every change to the vault proof.
+ */
 const HTTP_PATHS: ReadonlySet<string> = new Set([
   '/get-session',
   '/sign-out',
@@ -46,7 +50,11 @@ export type SendMagicLink = (link: {
 }) => Promise<void>;
 
 type BaymuttAuthOptions = Omit<BetterAuthOptions, 'plugins'> & {
-  plugins: [ReturnType<typeof magicLink>, ReturnType<typeof passkey>];
+  plugins: [
+    ReturnType<typeof magicLink>,
+    ReturnType<typeof passkey>,
+    ReturnType<typeof organization>,
+  ];
 };
 
 export type BaymuttAuth = BetterAuthInstance<BaymuttAuthOptions>;
@@ -134,6 +142,10 @@ const authOptions = (
       origin: baymutt.origin,
       // PRF is requested by the client: the plugin's `extensions` type has no `prf` member.
     }),
+    // Orgs, and the one member each has for now: its owner. The Worker creates one as a server call
+    // naming the user (`Access.createOrg`), for a dashboard session it has already checked;
+    // nobody creates one through the plugin's own route.
+    organization({ allowUserToCreateOrganization: false }),
   ],
 });
 

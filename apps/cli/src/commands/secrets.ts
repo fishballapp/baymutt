@@ -1,5 +1,5 @@
-// Reading names and versions, writing values, and asking the owner for one. No command here takes
-// a value as an argument or prints one.
+// Reading names and versions, writing values, and paste links for a value only the owner can fetch.
+// No command here takes a value as an argument or prints one.
 import { SecretNameSchema, VersionSchema } from '@baymutt/api';
 import { publicKeyFingerprint, randomToken, tokenHash } from '@baymutt/keys';
 import * as Argument from 'effect/cli/Argument';
@@ -12,7 +12,7 @@ import * as Option from 'effect/Option';
 import * as Schedule from 'effect/Schedule';
 import * as Stdio from 'effect/Stdio';
 import * as Stream from 'effect/Stream';
-import { resolveEnvironment, trustedKey } from '../environments.ts';
+import { addressOf, resolveEnvironment, trustedKey } from '../environments.ts';
 import { crypto_, report, usage } from '../errors.ts';
 import { print, say } from '../output.ts';
 import { describeWrite, writeValue } from '../secrets.ts';
@@ -32,11 +32,11 @@ const listCommand = Command.make(
   { environment: environmentArgument },
   Effect.fn('secrets.list')(function* ({ environment }) {
     const { api } = yield* ServiceAccount;
-    const { id, name } = yield* resolveEnvironment(environment);
-    const { secrets } = yield* api.secrets.list({ params: { environmentId: id } });
+    const resolved = yield* resolveEnvironment(environment);
+    const { secrets } = yield* api.secrets.list({ params: { environmentId: resolved.id } });
     // A deleted one is in the bin, listed by `baymutt bin list`.
     yield* print({
-      environment: name,
+      environment: addressOf(resolved),
       secrets: secrets.filter(secret => secret.currentVersion !== null),
     });
   }, report),
@@ -51,7 +51,7 @@ const stdinValue = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   if (yield* stdio.stdinIsTerminal) {
     return yield* usage(
-      'The value comes from stdin, never an argument: `baymutt set <environment> <NAME> < file`, or pipe it. To have the owner paste it, use `baymutt request`.',
+      'The value comes from stdin, never an argument: `baymutt set <environment> <NAME> < file`, or pipe it. For a value only the owner can fetch, make a paste link with `baymutt paste-link`.',
     );
   }
   const value = yield* stdio.stdin.pipe(Stream.decodeText(), Stream.mkString, Effect.orDie);
@@ -82,7 +82,7 @@ const setCommand = Command.make(
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Set a secret from stdin, as a new version. Needs a write grant. Prints the name, version and length',
+    'Set a secret from stdin, as a new version. Needs write access. Prints the name, version and length',
   ),
 );
 
@@ -194,7 +194,8 @@ const checkCommand = Command.make(
   Effect.fn('secrets.check')(function* ({ environment, schema, ignore }) {
     const fs = yield* FileSystem.FileSystem;
     const { api } = yield* ServiceAccount;
-    const { id, name } = yield* resolveEnvironment(environment);
+    const resolved = yield* resolveEnvironment(environment);
+    const address = addressOf(resolved);
     const declared = new Set(
       schemaNames(
         yield* fs
@@ -208,13 +209,13 @@ const checkCommand = Command.make(
           ),
       ),
     ).difference(new Set(ignore));
-    const { secrets } = yield* api.secrets.list({ params: { environmentId: id } });
+    const { secrets } = yield* api.secrets.list({ params: { environmentId: resolved.id } });
     const stored = new Set(
       secrets.filter(secret => secret.currentVersion !== null).map(secret => secret.name),
     );
     const missing = [...declared.difference(stored)].toSorted();
     yield* print({
-      environment: name,
+      environment: address,
       schema,
       present: [...declared.intersection(stored)].toSorted(),
       missing,
@@ -222,7 +223,7 @@ const checkCommand = Command.make(
     });
     if (missing.length > 0) {
       return yield* usage(
-        `${missing.length} name(s) the schema declares are not in ${name}: ${missing.join(', ')}. Set each with \`baymutt set\` or \`baymutt generate\`, or ask the owner with \`baymutt request\`.`,
+        `${missing.length} name(s) the schema declares are not in ${address}: ${missing.join(', ')}. Set each with \`baymutt set\` or \`baymutt generate\`, or make a paste link for the owner with \`baymutt paste-link\`.`,
         'differs',
       );
     }
@@ -234,8 +235,8 @@ const checkCommand = Command.make(
   ),
 );
 
-const requestCommand = Command.make(
-  'request',
+const pasteLinkCommand = Command.make(
+  'paste-link',
   {
     environment: environmentArgument,
     name: nameArgument,
@@ -248,7 +249,7 @@ const requestCommand = Command.make(
       ),
     ),
   },
-  Effect.fn('secrets.request')(function* ({ environment, name, reason, where }) {
+  Effect.fn('secrets.pasteLink')(function* ({ environment, name, reason, where }) {
     const { api } = yield* ServiceAccount;
     const { origin } = yield* Settings;
     const resolved = yield* resolveEnvironment(environment);
@@ -258,21 +259,21 @@ const requestCommand = Command.make(
     const [hash, fingerprint] = yield* crypto_(() =>
       Promise.all([tokenHash(token), publicKeyFingerprint(publicKey)]),
     );
-    const request = yield* api.pasteRequests.create({
+    const link = yield* api.pasteLinks.create({
       payload: { id, environmentId: resolved.id, name, reason, hint: where, tokenHash: hash },
     });
     // The fragment never reaches the store: the token proves the link, and the fingerprint lets
     // the page refuse an environment key the store swapped.
     const url = `${origin}/paste/${id}#${token}.${fingerprint}`;
     yield* say(
-      `Ask the owner to open this link and paste ${name}. It works once, for 15 minutes; after that the request is in the dashboard.`,
+      `Ask the owner to open this link and paste ${name}. It works once, for 15 minutes; after that it is in the dashboard, under Paste links.`,
     );
-    yield* print({ ...request, url });
+    yield* print({ ...link, url });
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Ask the owner to paste a value only they can fetch. Prints a single-use link for one environment and name',
+    'Make a paste link: a single-use link to a page where the owner pastes one value into one environment and name',
   ),
 );
 
@@ -281,20 +282,20 @@ const WAIT_POLL = Duration.seconds(3);
 const waitCommand = Command.make(
   'wait',
   {
-    id: Argument.String('request-id').pipe(
-      Argument.withDescription('The paste request’s id, as `baymutt request` printed it'),
+    id: Argument.String('link-id').pipe(
+      Argument.withDescription('The paste link’s id, as `baymutt paste-link` printed it'),
     ),
     timeout: Flag.Int('timeout').pipe(
-      Flag.withDescription('Seconds to wait before giving up (the request stays open)'),
+      Flag.withDescription('Seconds to wait before giving up (the link stays open)'),
       Flag.withDefault(900),
     ),
   },
   Effect.fn('secrets.wait')(function* ({ id, timeout }) {
     const { api } = yield* ServiceAccount;
-    // A service account's list holds its own requests while they wait: one that has left it was answered
+    // A credential's list holds its own links while they wait: one that has left it was answered
     // or dismissed.
-    const isWaiting = Effect.map(api.pasteRequests.list(), ({ requests }) =>
-      requests.some(request => request.id === id),
+    const isWaiting = Effect.map(api.pasteLinks.list(), ({ links }) =>
+      links.some(link => link.id === id),
     );
     const settled = yield* isWaiting.pipe(
       Effect.repeat({ schedule: Schedule.spaced(WAIT_POLL), until: waiting => !waiting }),
@@ -303,7 +304,7 @@ const waitCommand = Command.make(
     if (Option.isNone(settled)) {
       yield* print({ id, status: 'pending' });
       return yield* usage(
-        `Nobody has answered this request in ${timeout} seconds. It is still open: run \`baymutt wait ${id}\` again, or ask the owner to answer it under Requests in the dashboard.`,
+        `Nobody has answered this paste link in ${timeout} seconds. It is still open: run \`baymutt wait ${id}\` again, or ask the owner to answer it under Paste links in the dashboard.`,
         'differs',
       );
     }
@@ -312,26 +313,26 @@ const waitCommand = Command.make(
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Wait until the owner has answered a paste request (pasted, or dismissed it). Exits 9 on timeout. Check the value arrived with `baymutt secrets <environment>`',
+    'Wait until the owner has answered a paste link (pasted, or dismissed it). Exits 9 on timeout. Check the value arrived with `baymutt secrets <environment>`',
   ),
 );
 
 const cancelCommand = Command.make(
   'cancel',
   {
-    id: Argument.String('request-id').pipe(
-      Argument.withDescription('The paste request’s id, as `baymutt request` printed it'),
+    id: Argument.String('link-id').pipe(
+      Argument.withDescription('The paste link’s id, as `baymutt paste-link` printed it'),
     ),
   },
   Effect.fn('secrets.cancel')(function* ({ id }) {
     const { api } = yield* ServiceAccount;
-    yield* api.pasteRequests.cancel({ params: { id } });
+    yield* api.pasteLinks.cancel({ params: { id } });
     yield* print({ id, status: 'cancelled' });
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Withdraw a paste request this service account made: its link stops working and the owner no longer sees it',
+    'Withdraw a paste link made from this key: it stops working and the owner no longer sees it',
   ),
 );
 
@@ -343,7 +344,7 @@ export const secretCommands = [
   rollbackCommand,
   historyCommand,
   checkCommand,
-  requestCommand,
+  pasteLinkCommand,
   waitCommand,
   cancelCommand,
 ] as const;

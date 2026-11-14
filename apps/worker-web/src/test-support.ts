@@ -1,10 +1,11 @@
 /// <reference types="node" />
 // Tests run the REAL code (real SQL through the real `D1Client` over an in-memory `node:sqlite`
 // with every migration applied, the real services, HTTP app and guards) and fake only Better Auth:
-// a session is a row in a map.
+// a session is a row in a map, and an org is written as the organization plugin writes one.
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { createTestD1 } from '@internal/effect-worker/testing';
+import { APIError } from 'better-auth/api';
 import * as HttpRouter from 'effect/http/HttpRouter';
 import * as Layer from 'effect/Layer';
 import { onTestFinished } from 'vitest';
@@ -19,7 +20,7 @@ export const ORIGIN = 'http://localhost:5183';
 
 type TestSession = { readonly userId: string; readonly createdAt: Date };
 
-const fakeAuth = (sessions: Record<string, TestSession>): BaymuttAuth =>
+const fakeAuth = (sqlite: DatabaseSync, sessions: Record<string, TestSession>): BaymuttAuth =>
   ({
     handler: async () => new Response('better-auth'),
     api: {
@@ -32,6 +33,30 @@ const fakeAuth = (sessions: Record<string, TestSession>): BaymuttAuth =>
               user: { id: session.userId, email: `${session.userId}@example.test` },
               session: { createdAt: session.createdAt, token },
             };
+      },
+      createOrganization: async ({
+        body: { userId, name, slug },
+      }: {
+        body: { userId: string; name: string; slug: string };
+      }) => {
+        if (sqlite.prepare('SELECT 1 FROM organization WHERE slug = ?').get(slug) !== undefined) {
+          throw new APIError('BAD_REQUEST', {
+            message: 'Organization already exists',
+            code: 'ORGANIZATION_ALREADY_EXISTS',
+          });
+        }
+        const id = crypto.randomUUID();
+        // biome-ignore lint/plugin/no-date: the plugin stores a date as ISO text, as this mirrors.
+        const createdAt = new Date().toISOString();
+        insert(sqlite, 'organization', { id, name, slug, createdAt });
+        insert(sqlite, 'member', {
+          id: crypto.randomUUID(),
+          organizationId: id,
+          userId,
+          role: 'owner',
+          createdAt,
+        });
+        return { id, name, slug, createdAt };
       },
     },
     $context: Promise.resolve({
@@ -75,7 +100,7 @@ export const testWorld = () => {
   } as unknown as Env;
   const sessions: Record<string, TestSession> = {};
   const services = makeWorkerLayer(env, {
-    auth: Auth.layerFromInstance(() => fakeAuth(sessions)),
+    auth: Auth.layerFromInstance(() => fakeAuth(sqlite, sessions)),
   });
 
   const { handler, dispose } = HttpRouter.toWebHandler(HttpApp.pipe(Layer.provideMerge(services)), {

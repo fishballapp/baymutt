@@ -1,10 +1,7 @@
 // The bin: what was deleted, until it is removed for good. A deleted secret is a `secret` row with
-// no current version, a deleted environment an `environment` row with `deleted_at`; each is removed for
-// good at its `purge_at`, by the daily sweep, or earlier by the owner. Removing one for good is the only
-// thing in the store that cannot be undone, so nothing a service account can call reaches it.
-//
-// A row deleted by a Worker from before the bin has no `purge_at`: it reads as its deleted time
-// plus the bin's 30 days.
+// no current version, a deleted environment an `environment` row with `deleted_at`; each is removed
+// for good at its `purge_at`, by the daily sweep, or earlier by an owner of its org. Removing one for
+// good cannot be undone, so nothing a credential can call reaches it.
 import {
   type Actor,
   type ActorIdentity,
@@ -42,24 +39,29 @@ const ownerOnly = (actor: ActorIdentity) =>
     : Effect.fail(
         new OwnerRequiredError({
           message:
-            'Only the owner removes something for good, from the Bin in the dashboard. What is in the bin is removed for good 30 days after it was deleted.',
+            'Only an owner removes something for good, from the Bin in the dashboard. What is in the bin is removed for good 30 days after it was deleted.',
         }),
       );
+
+/** The orgs a person belongs to, or only those they own: what they see in the bin, and what they may empty. */
+const OrgScope = Schema.NullOr(
+  Schema.Struct({ accountId: Schema.String, ownersOnly: Schema.Boolean }),
+);
 
 export class Bin extends Context.Service<
   Bin,
   {
-    /** Newest first. The owner and a login see the account's; a scoped service account, its environments'. */
+    /** Newest first. The owner and a CLI login see their orgs'; a service account, its environments'. */
     readonly list: (actor: ActorIdentity) => Effect.Effect<{
       readonly environments: ReadonlyArray<BinEnvironment>;
       readonly secrets: ReadonlyArray<BinSecret>;
     }>;
-    /** The owner's: a deleted environment, its secrets, versions, grants and requests, for good. */
+    /** An owner's: a deleted environment, its secrets, versions, grants and paste links, for good. */
     readonly purgeEnvironment: (request: {
       readonly actor: ActorIdentity;
       readonly id: string;
     }) => Effect.Effect<void, NotFoundError | OwnerRequiredError>;
-    /** The owner's: a deleted secret and every version of it, for good. */
+    /** An owner's: a deleted secret and every version of it, for good. */
     readonly purgeSecret: (request: {
       readonly actor: ActorIdentity;
       readonly environmentId: string;
@@ -76,31 +78,36 @@ export class Bin extends Context.Service<
       const access = yield* Access;
       const audit = yield* Audit;
 
-      const environmentPurgeAt = sql`COALESCE(e.purge_at, e.deleted_at + ${BIN_MS})`;
-      const secretPurgeAt = sql`COALESCE(s.purge_at, s.updated_at + ${BIN_MS})`;
+      const inScope = (orgId: Statement.Fragment, scope: typeof OrgScope.Type) =>
+        scope === null
+          ? sql`1 = 1`
+          : sql`${orgId} IN (SELECT m.organizationId FROM member m
+                             JOIN store_account a ON a.user_id = m.userId
+                             WHERE a.id = ${scope.accountId}
+                               AND (${scope.ownersOnly ? 1 : 0} = 0 OR m.role = 'owner'))`;
 
       const binnedEnvironments = SqlSchema.findAll({
         Request: Schema.Struct({
-          accountId: Schema.NullOr(Schema.String),
+          scope: OrgScope,
           grantee: Schema.NullOr(Schema.String),
           id: Schema.NullOr(Schema.String),
           dueBy: Schema.NullOr(Schema.Finite),
         }),
         Result: Schema.Struct({
           id: Schema.String,
-          accountId: Schema.String,
+          orgId: Schema.String,
+          orgSlug: Schema.String,
           name: Schema.String,
           deletedAt: Schema.Finite,
           purgeAt: Schema.Finite,
         }),
-        execute: ({ accountId, grantee, id, dueBy }) =>
-          sql`SELECT e.id, e.account_id, e.name, e.deleted_at,
-                ${environmentPurgeAt} AS purge_at
-              FROM environment e
+        execute: ({ scope, grantee, id, dueBy }) =>
+          sql`SELECT e.id, e.org_id, o.slug AS org_slug, e.name, e.deleted_at, e.purge_at
+              FROM environment e JOIN organization o ON o.id = e.org_id
               WHERE e.deleted_at IS NOT NULL
-                AND (${accountId} IS NULL OR e.account_id = ${accountId})
+                AND ${inScope(sql`e.org_id`, scope)}
                 AND (${id} IS NULL OR e.id = ${id})
-                AND (${dueBy} IS NULL OR ${environmentPurgeAt} <= ${dueBy})
+                AND (${dueBy} IS NULL OR e.purge_at <= ${dueBy})
                 AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM environment_grant g
                       WHERE g.environment_id = e.id AND g.credential_id = ${grantee}))
               ORDER BY e.deleted_at DESC`,
@@ -108,14 +115,15 @@ export class Bin extends Context.Service<
 
       const binnedSecrets = SqlSchema.findAll({
         Request: Schema.Struct({
-          accountId: Schema.NullOr(Schema.String),
+          scope: OrgScope,
           grantee: Schema.NullOr(Schema.String),
           slot: Schema.NullOr(Schema.Struct({ environmentId: Schema.String, name: Schema.String })),
           dueBy: Schema.NullOr(Schema.Finite),
         }),
         Result: Schema.Struct({
+          orgId: Schema.String,
+          orgSlug: Schema.String,
           environmentId: Schema.String,
-          accountId: Schema.String,
           environmentName: Schema.String,
           name: Schema.String,
           latestVersion: Schema.Finite,
@@ -125,17 +133,19 @@ export class Bin extends Context.Service<
         }),
         // The list shows deleted secrets of live environments; a deleted environment's go with it. The
         // sweep (`dueBy`) takes every one that is due, its environment deleted or not.
-        execute: ({ accountId, grantee, slot, dueBy }) =>
-          sql`SELECT s.environment_id, s.account_id, e.name AS environment_name, s.name, s.latest_version,
-                s.updated_at AS deleted_at, s.updated_by AS deleted_by,
-                ${secretPurgeAt} AS purge_at
-              FROM secret s JOIN environment e ON e.id = s.environment_id
+        execute: ({ scope, grantee, slot, dueBy }) =>
+          sql`SELECT e.org_id, o.slug AS org_slug, s.environment_id, e.name AS environment_name,
+                s.name, s.latest_version, s.updated_at AS deleted_at, s.updated_by AS deleted_by,
+                s.purge_at
+              FROM secret s
+              JOIN environment e ON e.id = s.environment_id
+              JOIN organization o ON o.id = e.org_id
               WHERE s.current_version IS NULL
                 AND (${dueBy} IS NOT NULL OR e.deleted_at IS NULL)
-                AND (${accountId} IS NULL OR s.account_id = ${accountId})
+                AND ${inScope(sql`e.org_id`, scope)}
                 AND (${slot?.environmentId ?? null} IS NULL
                      OR (s.environment_id = ${slot?.environmentId ?? null} AND s.name = ${slot?.name ?? null}))
-                AND (${dueBy} IS NULL OR ${secretPurgeAt} <= ${dueBy})
+                AND (${dueBy} IS NULL OR s.purge_at <= ${dueBy})
                 AND (${grantee} IS NULL OR EXISTS (SELECT 1 FROM environment_grant g
                       WHERE g.environment_id = s.environment_id AND g.credential_id = ${grantee}))
               ORDER BY s.updated_at DESC`,
@@ -149,7 +159,8 @@ export class Bin extends Context.Service<
         sql`DELETE FROM secret_version WHERE environment_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM secret WHERE environment_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM environment_grant WHERE environment_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM paste_request WHERE environment_id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM member_wrap WHERE environment_id = ${id} AND ${stillBinned}`,
+        sql`DELETE FROM paste_link WHERE environment_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM environment WHERE id = ${id} AND ${stillBinned}`,
       ];
 
@@ -160,17 +171,17 @@ export class Bin extends Context.Service<
       ];
 
       const purgeEnvironmentNow = Effect.fnUntraced(function* (
-        environment: { readonly id: string; readonly accountId: string; readonly name: string },
+        environment: { readonly id: string; readonly orgId: string; readonly name: string },
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
       ) {
         const stillBinned = sql`EXISTS (SELECT 1 FROM environment e
           WHERE e.id = ${environment.id} AND e.deleted_at IS NOT NULL
-            AND (${dueBy} IS NULL OR ${environmentPurgeAt} <= ${dueBy}))`;
+            AND (${dueBy} IS NULL OR e.purge_at <= ${dueBy}))`;
         yield* sql
           .batch([
             yield* audit.entry(
               {
-                accountId: environment.accountId,
+                orgId: environment.orgId,
                 actor,
                 action: 'environment.purge',
                 environmentId: environment.id,
@@ -186,8 +197,8 @@ export class Bin extends Context.Service<
 
       const purgeSecretNow = Effect.fnUntraced(function* (
         secret: {
+          readonly orgId: string;
           readonly environmentId: string;
-          readonly accountId: string;
           readonly environmentName: string;
           readonly name: string;
         },
@@ -196,12 +207,12 @@ export class Bin extends Context.Service<
         const stillBinned = sql`EXISTS (SELECT 1 FROM secret s
           WHERE s.environment_id = ${secret.environmentId} AND s.name = ${secret.name}
             AND s.current_version IS NULL
-            AND (${dueBy} IS NULL OR ${secretPurgeAt} <= ${dueBy}))`;
+            AND (${dueBy} IS NULL OR s.purge_at <= ${dueBy}))`;
         yield* sql
           .batch([
             yield* audit.entry(
               {
-                accountId: secret.accountId,
+                orgId: secret.orgId,
                 actor,
                 action: 'secret.purge',
                 environmentId: secret.environmentId,
@@ -219,7 +230,7 @@ export class Bin extends Context.Service<
       return Bin.of({
         list: Effect.fn('Bin.list')(function* (actor) {
           const query = {
-            accountId: actor.accountId,
+            scope: { accountId: actor.accountId, ownersOnly: false },
             grantee: actor._tag === 'Owner' || isLogin(actor) ? null : actor.credentialId,
             dueBy: null,
           };
@@ -227,16 +238,13 @@ export class Bin extends Context.Service<
             [binnedEnvironments({ ...query, id: null }), binnedSecrets({ ...query, slot: null })],
             { concurrency: 2 },
           ).pipe(Effect.orDie);
-          return {
-            environments: environments.map(({ accountId: _, ...environment }) => environment),
-            secrets: secrets.map(({ accountId: _, ...secret }) => secret),
-          };
+          return { environments, secrets };
         }),
 
         purgeEnvironment: Effect.fn('Bin.purgeEnvironment')(function* ({ actor, id }) {
           yield* ownerOnly(actor);
           const [environment] = yield* binnedEnvironments({
-            accountId: actor.accountId,
+            scope: { accountId: actor.accountId, ownersOnly: true },
             grantee: null,
             id,
             dueBy: null,
@@ -244,7 +252,7 @@ export class Bin extends Context.Service<
           if (environment === undefined) {
             return yield* new NotFoundError({
               message:
-                'No environment in the bin has this id. Delete an environment before removing it for good.',
+                'No environment in the bin of an org you own has this id. Delete an environment before removing it for good.',
             });
           }
           yield* purgeEnvironmentNow(environment, { actor: actorOf(actor), dueBy: null });
@@ -253,9 +261,9 @@ export class Bin extends Context.Service<
         purgeSecret: Effect.fn('Bin.purgeSecret')(function* ({ actor, environmentId, name }) {
           yield* ownerOnly(actor);
           // A live environment's: one in the bin is removed for good whole.
-          yield* access.ownersEnvironment(actor, environmentId);
+          yield* access.ownersEnvironment(actor, environmentId, 'removes a secret for good');
           const [secret] = yield* binnedSecrets({
-            accountId: actor.accountId,
+            scope: { accountId: actor.accountId, ownersOnly: true },
             grantee: null,
             slot: { environmentId, name },
             dueBy: null,
@@ -270,7 +278,7 @@ export class Bin extends Context.Service<
 
         sweep: Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          const due = { accountId: null, grantee: null, dueBy: now };
+          const due = { scope: null, grantee: null, dueBy: now };
           // Environments first: their secrets go with them, so the secrets left are other environments'.
           const environments = yield* binnedEnvironments({ ...due, id: null }).pipe(Effect.orDie);
           yield* eachIsolated({

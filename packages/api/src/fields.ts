@@ -24,7 +24,7 @@ export const HashSchema = Schema.String.check(
   Schema.isPattern(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u),
 ).annotate({ description: 'A SHA-256 digest, base64url without padding.' });
 
-/** What a person calls a service account, a passkey or an account. */
+/** What a person calls a service account, a passkey, an account or an org. */
 export const LabelSchema = Schema.String.check(Schema.isPattern(/^\S(.{0,58}\S)?$/u)).annotate({
   description: 'A name of 1 to 60 characters, with no space at either end.',
 });
@@ -37,11 +37,21 @@ export const DescriptionSchema = Schema.String.check(
     'What it is for, 1 to 140 characters with no space at either end. Stored readable, like the name: never a secret.',
 });
 
+/** An org's handle, the first segment of every environment's address: `<slug>/<name>`. */
+export const OrgSlugSchema = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/u),
+).annotate({
+  description:
+    'Lower-case letters, digits and hyphens, 1 to 40 characters, starting and ending with a letter or digit, such as `fishball`.',
+});
+
+/** An environment's name within its org. */
 export const EnvironmentNameSchema = Schema.String.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*$/u),
   Schema.isMaxLength(120),
 ).annotate({
-  description: 'Lower-case segments joined by `/`, such as `app/production`.',
+  description:
+    'Lower-case segments joined by `/`, such as `app/production`. Unique within its org.',
 });
 
 export const SecretNameSchema = Schema.String.check(
@@ -72,13 +82,13 @@ export const WrapSchema = base64(256).annotate({
 /** Something the owner’s vault sealed: a wrapped data key, the account key, an endorsement, a pairing welcome. */
 export const SealedSchema = base64(512).annotate({
   description:
-    'Sealed by the owner’s vault or for one service account, base64. The store cannot open it.',
+    'Sealed by the owner’s vault or for one credential, base64. The store cannot open it.',
 });
 
 /** An environment's public key, vouched for to one reader by a party that reader trusts. */
 export const KeyProofSchema = base64(128).annotate({
   description:
-    'The environment’s public key as the owner, or the service account that made the reader, vouches for it to that reader, base64. The store cannot make one.',
+    'The environment’s public key as the owner, or the CLI login that made the reader, vouches for it to that reader, base64. The store cannot make one.',
 });
 
 /** A public key one party vouches for to another: a service account's, or the account's. */
@@ -94,12 +104,11 @@ export const ReasonSchema = Schema.String.check(Schema.isMaxLength(500)).annotat
 });
 
 /**
- * Who did something: the owner, a service account by its credential, a paste link, or the store
- * itself (`'system'`: the bin removing what was deleted 30 days ago). The kind `'machine'` is the
- * wire and stored name of a service account (audit rows hold it), kept so they stay readable.
+ * Who did something: the owner, a credential (a CLI login or a service account), a paste link, or
+ * the store itself (`'system'`: the bin removing what was deleted 30 days ago).
  */
 export const ActorSchema = Schema.Struct({
-  kind: Schema.Literals(['owner', 'machine', 'link', 'system']),
+  kind: Schema.Literals(['owner', 'credential', 'link', 'system']),
   id: Schema.String,
   name: Schema.String,
 }).annotate({ identifier: 'Actor' });

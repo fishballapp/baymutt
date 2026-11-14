@@ -1,7 +1,4 @@
-/** The owner's account: made once, opened by a passkey or a password, changed only with the vault open. */
-import { MeSchema } from '@baymutt/api';
 import { tokenHash } from '@baymutt/keys/wire';
-import * as Schema from 'effect/Schema';
 import { describe, expect, it } from 'vitest';
 import { call, newAccount, ok, storeWorld, VAULT_PROOF } from '../test-store.ts';
 import { keyLike, sealedLike, testWorld } from '../test-support.ts';
@@ -167,7 +164,7 @@ describe('a session whose vault is locked', () => {
     const second = user.passkey('second');
 
     // What a magic link gives: enough to look around.
-    for (const path of ['/account', '/environments', '/credentials', '/audit']) {
+    for (const path of ['/account', '/environments', '/credentials', '/activity']) {
       expect(await call(w, 'GET', path, locked)).toMatchObject({ status: 200 });
     }
 
@@ -323,17 +320,5 @@ describe('what opens the vault', () => {
       status: 200,
       body: { recoveryWrappedDek: sealedLike('new-recovery') },
     });
-  });
-});
-
-describe('a store that predates vouchers', () => {
-  it('still reads to a newer client: a missing voucher is null', () => {
-    const me = Schema.decodeUnknownSync(MeSchema)({
-      accountId: 'a',
-      accountName: 'Made up',
-      accountPublicKey: keyLike('a'),
-      credential: { id: 'c', name: 'ci', parentId: 'l', welcome: null },
-    });
-    expect(me.credential?.accountVoucher).toBeNull();
   });
 });

@@ -2,7 +2,7 @@
 import { type Environment, MAX_VALUE_BYTES } from '@baymutt/api';
 import { sealValue } from '@baymutt/keys';
 import * as Effect from 'effect/Effect';
-import { trustedKey } from './environments.ts';
+import { addressOf, trustedKey } from './environments.ts';
 import { crypto_, usage } from './errors.ts';
 import { ServiceAccount } from './service-account.ts';
 
@@ -55,7 +55,7 @@ export const describeWrite = (
   secret: { readonly name: string; readonly currentVersion: number | null },
   value: string,
 ) => ({
-  environment: environment.name,
+  environment: addressOf(environment),
   name: secret.name,
   version: secret.currentVersion,
   length: value.length,

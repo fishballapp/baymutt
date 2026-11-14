@@ -1,5 +1,5 @@
-/** Service accounts, environments and grants (`Access`), the bin (`Bin`) and the audit log (`Audit`). */
-import { Api, CurrentActor, OwnerRequiredError } from '@baymutt/api';
+/** Credentials, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
+import { Api, CurrentActor } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
 import * as Layer from 'effect/Layer';
@@ -19,9 +19,7 @@ const CredentialsHandlers = HttpApiBuilder.group(
       list: Effect.fn(function* () {
         return { credentials: yield* access.listServiceAccounts(yield* CurrentActor) };
       }),
-      pair: Effect.fn(function* ({
-        payload: { endorsement, welcome, grants = [], ...serviceAccount },
-      }) {
+      pair: Effect.fn(function* ({ payload: { endorsement, welcome, grants, ...serviceAccount } }) {
         return yield* access.pair({
           actor: yield* CurrentActor,
           serviceAccount,
@@ -58,6 +56,25 @@ const CredentialsHandlers = HttpApiBuilder.group(
   }),
 );
 
+const OrgsHandlers = HttpApiBuilder.group(
+  Api,
+  'orgs',
+  Effect.fn(function* (handlers) {
+    const access = yield* Access;
+    return handlers.handleAll({
+      list: Effect.fn(function* () {
+        return { orgs: yield* access.listOrgs(yield* CurrentActor) };
+      }),
+      create: Effect.fn(function* ({ payload }) {
+        return yield* access.createOrg({ actor: yield* CurrentActor, ...payload });
+      }),
+      remove: Effect.fn(function* ({ params }) {
+        return yield* access.removeOrg({ actor: yield* CurrentActor, id: params.id });
+      }),
+    });
+  }),
+);
+
 const EnvironmentsHandlers = HttpApiBuilder.group(
   Api,
   'environments',
@@ -86,8 +103,8 @@ const EnvironmentsHandlers = HttpApiBuilder.group(
       purge: Effect.fn(function* ({ params }) {
         yield* bin.purgeEnvironment({ actor: yield* CurrentActor, id: params.id });
       }),
-      ownerWrap: Effect.fn(function* ({ params }) {
-        return yield* access.ownerWrap({ actor: yield* CurrentActor, id: params.id });
+      memberWrap: Effect.fn(function* ({ params }) {
+        return yield* access.memberWrap({ actor: yield* CurrentActor, id: params.id });
       }),
       grants: Effect.fn(function* ({ params }) {
         return { grants: yield* access.grants({ actor: yield* CurrentActor, id: params.id }) };
@@ -102,21 +119,9 @@ const EnvironmentsHandlers = HttpApiBuilder.group(
   }),
 );
 
-/** What CLIs before 0.4.0 call for `baymutt access request` and `access list`. */
-const accessRequestsRemoved = new OwnerRequiredError({
-  message:
-    'Access requests were removed. The login that made this service account changes its access with `baymutt service-accounts access`, and the owner from the dashboard; it keeps its key.',
-});
-
-const RetiredHandlers = HttpApiBuilder.group(Api, 'retired', handlers =>
-  handlers
-    .handle('accessRequest', () => Effect.fail(accessRequestsRemoved))
-    .handle('accessRequests', () => Effect.fail(accessRequestsRemoved)),
-);
-
-const AuditHandlers = HttpApiBuilder.group(
+const ActivityHandlers = HttpApiBuilder.group(
   Api,
-  'audit',
+  'activity',
   Effect.fn(function* (handlers) {
     const audit = yield* Audit;
     return handlers.handleAll({
@@ -142,8 +147,8 @@ const BinHandlers = HttpApiBuilder.group(
 
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
+  OrgsHandlers,
   EnvironmentsHandlers,
-  RetiredHandlers,
-  AuditHandlers,
+  ActivityHandlers,
   BinHandlers,
 );

@@ -1,4 +1,4 @@
-// Owns `secret`, `secret_version` and `paste_request`: an environment's values as ciphertext. A write
+// Owns `secret`, `secret_version` and `paste_link`: an environment's values as ciphertext. A write
 // adds a version and never changes one, a delete only clears the pointer to the current version
 // (the secret is then in the bin, until `Bin` removes it for good), and none of it can be read here.
 import {
@@ -12,7 +12,7 @@ import {
   NoAccessError,
   NotFoundError,
   OwnerRequiredError,
-  type PasteRequest,
+  type PasteLink,
   type PasteTarget,
   type SealedVersion,
   type Secret,
@@ -29,6 +29,7 @@ import * as Layer from 'effect/Layer';
 import * as Schema from 'effect/Schema';
 import * as SqlSchema from 'effect/sql/SqlSchema';
 import type * as Statement from 'effect/sql/Statement';
+import { orgsOf } from './access/rows.ts';
 import { Access } from './access.ts';
 import { ActorJsonSchema, actorOf, encodeActor, LINK_ACTOR } from './actors.ts';
 import { Audit } from './audit.ts';
@@ -55,7 +56,8 @@ const VersionRowSchema = Schema.Struct({
 
 const PasteRowSchema = Schema.Struct({
   id: Schema.String,
-  accountId: Schema.String,
+  orgId: Schema.String,
+  orgSlug: Schema.String,
   environmentId: Schema.String,
   environmentName: Schema.String,
   environmentPublicKey: Schema.String,
@@ -72,7 +74,7 @@ const PasteRowSchema = Schema.Struct({
 });
 type PasteRow = typeof PasteRowSchema.Type;
 
-/** How long a paste link works. The request stays answerable from the dashboard after it. */
+/** How long a paste link works. It stays answerable from the dashboard after it. */
 const PASTE_LINK_LIFETIME_MS = 15 * 60_000;
 
 type Slot = { readonly environmentId: string; readonly name: string };
@@ -84,8 +86,10 @@ type Write = Slot & {
 
 type Caller = { readonly actor: ActorIdentity | null; readonly token: string | undefined };
 
-const toPasteRequest = (row: PasteRow): PasteRequest => ({
+const toPasteLink = (row: PasteRow): PasteLink => ({
   id: row.id,
+  orgId: row.orgId,
+  orgSlug: row.orgSlug,
   environmentId: row.environmentId,
   environmentName: row.environmentName,
   name: row.name,
@@ -137,10 +141,8 @@ export class Secrets extends Context.Service<
       request: { readonly actor: ActorIdentity; readonly version: number } & Slot,
     ) => Effect.Effect<SealedVersion, NotFoundError | OwnerRequiredError>;
 
-    readonly listPasteRequests: (
-      actor: ActorIdentity,
-    ) => Effect.Effect<ReadonlyArray<PasteRequest>>;
-    readonly requestPaste: (request: {
+    readonly listPasteLinks: (actor: ActorIdentity) => Effect.Effect<ReadonlyArray<PasteLink>>;
+    readonly createPasteLink: (request: {
       readonly actor: ActorIdentity;
       readonly paste: Slot & {
         readonly id: string;
@@ -148,17 +150,17 @@ export class Secrets extends Context.Service<
         readonly hint: string;
         readonly tokenHash: string;
       };
-    }) => Effect.Effect<PasteRequest, NotFoundError | NoAccessError | AlreadyExistsError>;
-    readonly cancelPaste: (request: {
+    }) => Effect.Effect<PasteLink, NotFoundError | NoAccessError | AlreadyExistsError>;
+    readonly cancelPasteLink: (request: {
       readonly actor: ActorIdentity;
       readonly id: string;
-    }) => Effect.Effect<PasteRequest, NotFoundError | LinkSpentError>;
+    }) => Effect.Effect<PasteLink, NotFoundError | LinkSpentError>;
     /** For the link's token while it lasts, or for the owner. */
     readonly pasteTarget: (request: {
       readonly caller: Caller;
       readonly id: string;
     }) => Effect.Effect<PasteTarget, NotFoundError | LinkSpentError | UnauthorizedError>;
-    /** Writes the pasted value and spends the request, together. */
+    /** Writes the pasted value and spends the link, together. */
     readonly fulfilPaste: (request: {
       readonly caller: Caller;
       readonly id: string;
@@ -184,8 +186,7 @@ export class Secrets extends Context.Service<
         Result: SecretRowSchema,
         execute: ({ environmentId, name }) =>
           sql`SELECT s.name, s.current_version, s.latest_version, s.updated_at, s.updated_by,
-                CASE WHEN s.current_version IS NULL
-                  THEN COALESCE(s.purge_at, s.updated_at + ${BIN_MS}) END AS purge_at,
+                s.purge_at,
                 (SELECT length(v.ciphertext) * 3 / 4 FROM secret_version v
                   WHERE v.environment_id = s.environment_id AND v.name = s.name
                     AND v.version = s.current_version) AS size
@@ -238,6 +239,7 @@ export class Secrets extends Context.Service<
               WHERE environment_id = ${environmentId} AND name = ${name} AND version = ${version}`,
       });
 
+      /** Paste links of live environments: of the caller's orgs, or any when `accountId` is null. */
       const pasteRows = SqlSchema.findAll({
         Request: Schema.Struct({
           accountId: Schema.NullOr(Schema.String),
@@ -246,14 +248,17 @@ export class Secrets extends Context.Service<
         }),
         Result: PasteRowSchema,
         execute: ({ accountId, createdBy, id }) =>
-          sql`SELECT r.id, r.account_id, r.environment_id, e.name AS environment_name,
-                e.public_key AS environment_public_key, e.key_version, r.name, r.reason, r.hint,
-                r.token_hash, r.status, r.created_by, r.created_at, r.link_expires_at,
+          sql`SELECT r.id, e.org_id, o.slug AS org_slug, r.environment_id,
+                e.name AS environment_name, e.public_key AS environment_public_key, e.key_version,
+                r.name, r.reason, r.hint, r.token_hash, r.status, r.created_by, r.created_at,
+                r.link_expires_at,
                 (SELECT s.latest_version FROM secret s
                   WHERE s.environment_id = r.environment_id AND s.name = r.name) AS latest_version
-              FROM paste_request r JOIN environment e ON e.id = r.environment_id
+              FROM paste_link r
+              JOIN environment e ON e.id = r.environment_id
+              JOIN organization o ON o.id = e.org_id
               WHERE e.deleted_at IS NULL
-                AND (${accountId} IS NULL OR r.account_id = ${accountId})
+                AND (${accountId} IS NULL OR e.org_id IN (${orgsOf(sql, accountId ?? '')}))
                 AND (${id} IS NOT NULL OR r.status = 'pending')
                 AND (${id} IS NULL OR r.id = ${id})
                 AND (${createdBy} IS NULL OR json_extract(r.created_by, '$.id') = ${createdBy})
@@ -278,16 +283,16 @@ export class Secrets extends Context.Service<
       const writeStatements = Effect.fnUntraced(function* (
         { environmentId, name, version, keyVersion, ciphertext }: Write,
         {
-          accountId,
+          orgId,
           actor,
           environmentName,
           action,
           alsoIf,
         }: {
-          readonly accountId: string;
+          readonly orgId: string;
           readonly actor: Actor;
           readonly environmentName: string;
-          readonly action: 'secret.write' | 'paste.fulfil';
+          readonly action: 'secret.write' | 'paste-link.fulfil';
           readonly alsoIf?: Statement.Fragment;
         },
       ) {
@@ -298,10 +303,9 @@ export class Secrets extends Context.Service<
           WHERE environment_id = ${environmentId} AND name = ${name} AND write_id = ${writeId})`;
         const statements = [
           sql`INSERT INTO secret
-                (environment_id, name, account_id, current_version, latest_version, updated_at,
-                 updated_by, write_id)
-              SELECT ${environmentId}, ${name}, ${accountId}, ${version}, ${version}, ${now}, ${by},
-                ${writeId}
+                (environment_id, name, current_version, latest_version, updated_at, updated_by,
+                 write_id)
+              SELECT ${environmentId}, ${name}, ${version}, ${version}, ${now}, ${by}, ${writeId}
               WHERE EXISTS (SELECT 1 FROM environment
                             WHERE id = ${environmentId} AND key_version = ${keyVersion}
                               AND deleted_at IS NULL)
@@ -316,13 +320,12 @@ export class Secrets extends Context.Service<
                 WHERE secret.latest_version = excluded.latest_version - 1
               RETURNING latest_version`,
           sql`INSERT INTO secret_version
-                (environment_id, name, version, account_id, key_version, ciphertext, created_by,
-                 created_at)
-              SELECT ${environmentId}, ${name}, ${version}, ${accountId}, ${keyVersion}, ${ciphertext},
-                ${by}, ${now}
+                (environment_id, name, version, key_version, ciphertext, created_by, created_at)
+              SELECT ${environmentId}, ${name}, ${version}, ${keyVersion}, ${ciphertext}, ${by},
+                ${now}
               WHERE ${took}`,
           yield* audit.entry(
-            { accountId, actor, action, environmentId, environmentName, secretName: name, version },
+            { orgId, actor, action, environmentId, environmentName, secretName: name, version },
             took,
           ),
         ] as const;
@@ -403,7 +406,7 @@ export class Secrets extends Context.Service<
                 RETURNING name`,
             yield* audit.entry(
               {
-                accountId: actor.accountId,
+                orgId: environment.orgId,
                 actor: actorOf(actor),
                 action,
                 environmentId,
@@ -435,22 +438,31 @@ export class Secrets extends Context.Service<
       const pasteRow = Effect.fnUntraced(function* (id: string, accountId: string | null) {
         const [row] = yield* pasteRows({ accountId, createdBy: null, id }).pipe(Effect.orDie);
         if (row === undefined) {
-          return yield* new NotFoundError({ message: 'No paste request has this id.' });
+          return yield* new NotFoundError({ message: 'No paste link has this id.' });
         }
         return row;
       });
 
-      /** The pending request a paste page may answer: the owner's any time, a token's until it expires. */
+      const ownsOrg = Effect.fnUntraced(function* (accountId: string, orgId: string) {
+        const [found] = yield* sql`SELECT 1 AS owns FROM member m
+          JOIN store_account a ON a.user_id = m.userId
+          WHERE m.organizationId = ${orgId} AND a.id = ${accountId} AND m.role = 'owner'`.pipe(
+          Effect.orDie,
+        );
+        return found !== undefined;
+      });
+
+      /** The pending link a paste page may answer: an owner of its org any time, its token until it expires. */
       const answerable = Effect.fnUntraced(function* ({ actor, token }: Caller, id: string) {
-        // Whoever holds the link may be signed in to an account of their own: only this
-        // request's owner skips the token.
+        // Whoever holds the link may be signed in to an account of their own: only an owner of
+        // the link's org skips the token.
         const row = yield* pasteRow(id, null);
         if (row.status !== 'pending') {
           return yield* new LinkSpentError({
-            message: `This paste request was already ${row.status}.`,
+            message: `This paste link was already ${row.status}.`,
           });
         }
-        if (actor?._tag === 'Owner' && actor.accountId === row.accountId) {
+        if (actor?._tag === 'Owner' && (yield* ownsOrg(actor.accountId, row.orgId))) {
           return { row, by: actorOf(actor) };
         }
         if (
@@ -458,13 +470,13 @@ export class Secrets extends Context.Service<
           (yield* Effect.promise(() => tokenHash(token))) !== row.tokenHash
         ) {
           return yield* new UnauthorizedError({
-            message: 'Open the paste link itself, or sign in to the dashboard as the owner.',
+            message:
+              'Open the paste link itself, or sign in to the dashboard as an owner of its org.',
           });
         }
         if ((yield* Clock.currentTimeMillis) >= row.linkExpiresAt) {
           return yield* new LinkSpentError({
-            message:
-              'This link has expired. The request is still in the dashboard, under Requests.',
+            message: 'This link has expired. It is still in the dashboard, under Paste links.',
           });
         }
         return { row, by: LINK_ACTOR };
@@ -481,11 +493,11 @@ export class Secrets extends Context.Service<
             yield* access.environment(actor, environmentId),
             'read',
           );
-          // An environment's values load through an approved service account; the dashboard reveals
-          // one value at a time, through `reveal`.
-          if (actor._tag !== 'ServiceAccount') {
+          // An environment's values load through a credential; the dashboard reveals one value at
+          // a time, through `reveal`.
+          if (actor._tag !== 'Credential') {
             return yield* new NoAccessError({
-              message: 'Only an approved service account loads an environment’s values.',
+              message: 'Only a CLI login or a service account loads an environment’s values.',
               need: 'read',
             });
           }
@@ -494,7 +506,7 @@ export class Secrets extends Context.Service<
           }
           const secrets = yield* currentCiphertexts(environmentId).pipe(Effect.orDie);
           yield* (yield* audit.entry({
-            accountId: actor.accountId,
+            orgId: environment.orgId,
             actor: actorOf(actor),
             action: 'environment.load',
             environmentId,
@@ -503,7 +515,6 @@ export class Secrets extends Context.Service<
           return {
             environment: {
               id: environment.id,
-              accountId: environment.accountId,
               name: environment.name,
               publicKey: environment.publicKey,
               keyVersion: environment.keyVersion,
@@ -521,7 +532,7 @@ export class Secrets extends Context.Service<
           );
           yield* underLimit(write);
           const { statements } = yield* writeStatements(write, {
-            accountId: actor.accountId,
+            orgId: environment.orgId,
             actor: actorOf(actor),
             environmentName: environment.name,
             action: 'secret.write',
@@ -551,15 +562,19 @@ export class Secrets extends Context.Service<
         }),
 
         reveal: Effect.fn('Secrets.reveal')(function* ({ actor, environmentId, name, version }) {
-          // A service account loads values through the bundle; this is the dashboard's, which
-          // only the owner opens.
+          // A credential loads values through the bundle; this is the dashboard's, which only an
+          // owner opens.
           if (actor._tag !== 'Owner') {
             return yield* new OwnerRequiredError({
               message:
-                'Only the owner reveals a value, in the dashboard. A service account loads values with `baymutt` through varlock.',
+                'Only an owner reveals a value, in the dashboard. A CLI login or service account loads values through varlock.',
             });
           }
-          const { environment } = yield* access.ownersEnvironment(actor, environmentId);
+          const { environment } = yield* access.ownersEnvironment(
+            actor,
+            environmentId,
+            'reveals a value',
+          );
           const [row] = yield* sealedVersion({ environmentId, name, version }).pipe(Effect.orDie);
           if (row === undefined) {
             return yield* new NotFoundError({
@@ -567,7 +582,7 @@ export class Secrets extends Context.Service<
             });
           }
           yield* (yield* audit.entry({
-            accountId: actor.accountId,
+            orgId: environment.orgId,
             actor: actorOf(actor),
             action: 'secret.reveal',
             environmentId,
@@ -578,42 +593,42 @@ export class Secrets extends Context.Service<
           return row;
         }),
 
-        listPasteRequests: Effect.fn('Secrets.listPasteRequests')(function* (actor) {
+        listPasteLinks: Effect.fn('Secrets.listPasteLinks')(function* (actor) {
           const rows = yield* pasteRows({
             accountId: actor.accountId,
-            createdBy: actor._tag === 'ServiceAccount' ? actor.credentialId : null,
+            createdBy: actor._tag === 'Credential' ? actor.credentialId : null,
             id: null,
           }).pipe(Effect.orDie);
-          return rows.map(toPasteRequest);
+          return rows.map(toPasteLink);
         }),
 
-        requestPaste: Effect.fn('Secrets.requestPaste')(function* ({ actor, paste }) {
+        createPasteLink: Effect.fn('Secrets.createPasteLink')(function* ({ actor, paste }) {
           const { environment } = yield* access.needing(
             yield* access.environment(actor, paste.environmentId),
             'write',
           );
           const now = yield* Clock.currentTimeMillis;
-          const took = sql`EXISTS (SELECT 1 FROM paste_request
+          const took = sql`EXISTS (SELECT 1 FROM paste_link
                             WHERE id = ${paste.id} AND created_at = ${now}
                               AND token_hash = ${paste.tokenHash})`;
           const [inserted] = yield* sql
             .batch([
-              sql`INSERT OR IGNORE INTO paste_request
-                    (id, account_id, environment_id, name, reason, hint, token_hash, status,
-                     created_by, created_at, link_expires_at)
-                  VALUES (${paste.id}, ${actor.accountId}, ${paste.environmentId}, ${paste.name},
+              sql`INSERT OR IGNORE INTO paste_link
+                    (id, environment_id, name, reason, hint, token_hash, status, created_by,
+                     created_at, link_expires_at)
+                  VALUES (${paste.id}, ${paste.environmentId}, ${paste.name},
                     ${paste.reason}, ${paste.hint}, ${paste.tokenHash}, 'pending',
                     ${encodeActor(actorOf(actor))}, ${now}, ${now + PASTE_LINK_LIFETIME_MS})
                   RETURNING id`,
-              // Asking again replaces the earlier request for the same name: the owner sees one.
-              sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
+              // A new link replaces the earlier one for the same name: the owner sees one.
+              sql`UPDATE paste_link SET status = 'cancelled', resolved_at = ${now}
                   WHERE environment_id = ${paste.environmentId} AND name = ${paste.name}
                     AND status = 'pending' AND id != ${paste.id} AND ${took}`,
               yield* audit.entry(
                 {
-                  accountId: actor.accountId,
+                  orgId: environment.orgId,
                   actor: actorOf(actor),
-                  action: 'paste.request',
+                  action: 'paste-link.create',
                   environmentId: paste.environmentId,
                   environmentName: environment.name,
                   secretName: paste.name,
@@ -625,46 +640,45 @@ export class Secrets extends Context.Service<
             .pipe(Effect.orDie);
           if ((inserted ?? []).length === 0) {
             return yield* new AlreadyExistsError({
-              message: 'A paste request with this id exists.',
+              message: 'A paste link with this id exists.',
             });
           }
-          return toPasteRequest(yield* pasteRow(paste.id, actor.accountId).pipe(Effect.orDie));
+          return toPasteLink(yield* pasteRow(paste.id, actor.accountId).pipe(Effect.orDie));
         }),
 
-        cancelPaste: Effect.fn('Secrets.cancelPaste')(function* ({ actor, id }) {
+        cancelPasteLink: Effect.fn('Secrets.cancelPasteLink')(function* ({ actor, id }) {
           const row = yield* pasteRow(id, actor.accountId);
-          // A service account cancels what it asked for; a request it did not make is not its to see.
-          if (actor._tag === 'ServiceAccount' && row.createdBy.id !== actor.credentialId) {
-            return yield* new NotFoundError({ message: 'No paste request has this id.' });
+          // A credential cancels the links it made; one it did not make is not its to see.
+          if (actor._tag === 'Credential' && row.createdBy.id !== actor.credentialId) {
+            return yield* new NotFoundError({ message: 'No paste link has this id.' });
           }
           if (row.status !== 'pending') {
             return yield* new LinkSpentError({
-              message: `This paste request was already ${row.status}.`,
+              message: `This paste link was already ${row.status}.`,
             });
           }
           const now = yield* Clock.currentTimeMillis;
           yield* sql
             .batch([
-              sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
+              sql`UPDATE paste_link SET status = 'cancelled', resolved_at = ${now}
                   WHERE id = ${id} AND status = 'pending'`,
               yield* audit.entry({
-                accountId: actor.accountId,
+                orgId: row.orgId,
                 actor: actorOf(actor),
-                action: 'paste.cancel',
+                action: 'paste-link.cancel',
                 environmentId: row.environmentId,
                 environmentName: row.environmentName,
                 secretName: row.name,
               }),
             ])
             .pipe(Effect.orDie);
-          return toPasteRequest({ ...row, status: 'cancelled' });
+          return toPasteLink({ ...row, status: 'cancelled' });
         }),
 
         pasteTarget: Effect.fn('Secrets.pasteTarget')(function* ({ caller, id }) {
           const { row } = yield* answerable(caller, id);
           return {
-            request: toPasteRequest(row),
-            accountId: row.accountId,
+            link: toPasteLink(row),
             environmentPublicKey: row.environmentPublicKey,
             keyVersion: row.keyVersion,
             nextVersion: (row.latestVersion ?? 0) + 1,
@@ -676,26 +690,26 @@ export class Secrets extends Context.Service<
           const slot = { environmentId: row.environmentId, name: row.name };
           yield* underLimit({ ...slot, version: write.version });
           const now = yield* Clock.currentTimeMillis;
-          // One batch: the value is written only while the request is still pending, and the
-          // request is spent only if the value was written, so a link answers once.
+          // One batch: the value is written only while the link is still pending, and the link is
+          // spent only if the value was written, so a link answers once.
           const { statements, took } = yield* writeStatements(
             { ...slot, ...write },
             {
-              accountId: row.accountId,
+              orgId: row.orgId,
               actor: by,
               environmentName: row.environmentName,
-              action: 'paste.fulfil',
-              alsoIf: sql`EXISTS (SELECT 1 FROM paste_request
+              action: 'paste-link.fulfil',
+              alsoIf: sql`EXISTS (SELECT 1 FROM paste_link
                                   WHERE id = ${id} AND status = 'pending')`,
             },
           );
           const [moved] = yield* sql
             .batch([
               ...statements,
-              sql`UPDATE paste_request SET status = 'fulfilled', resolved_at = ${now}
+              sql`UPDATE paste_link SET status = 'fulfilled', resolved_at = ${now}
                   WHERE id = ${id} AND status = 'pending' AND ${took}`,
-              // The value is in: any other request for the same name has nothing left to ask.
-              sql`UPDATE paste_request SET status = 'cancelled', resolved_at = ${now}
+              // The value is in: any other link for the same name has nothing left to ask.
+              sql`UPDATE paste_link SET status = 'cancelled', resolved_at = ${now}
                   WHERE environment_id = ${slot.environmentId} AND name = ${slot.name}
                     AND status = 'pending' AND ${took}`,
             ])
@@ -704,7 +718,7 @@ export class Secrets extends Context.Service<
             const after = yield* pasteRow(id, null).pipe(Effect.orDie);
             if (after.status !== 'pending') {
               return yield* new LinkSpentError({
-                message: `This paste request was already ${after.status}.`,
+                message: `This paste link was already ${after.status}.`,
               });
             }
             return yield* yield* conflict(slot);

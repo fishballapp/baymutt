@@ -4,8 +4,8 @@
  *
  * ```
  * seed       = random 256 bits                                  → the service account's one secret
- * privateKey = HKDF(seed, info "baymutt-machine-key")           → X25519; environment keys are wrapped to its public half
- * bearer     = HKDF(seed, info "baymutt-machine-bearer")        → sent with each request; the store keeps SHA-256(bearer)
+ * privateKey = HKDF(seed, info "baymutt-seed-key")              → X25519; environment keys are wrapped to its public half
+ * bearer     = HKDF(seed, info "baymutt-seed-bearer")           → sent with each request; the store keeps SHA-256(bearer)
  * token      = "baymutt_key_<credentialId>_<seed>[_<issuer>]"   → what the keychain or a CI secret holds
  * ```
  *
@@ -57,11 +57,8 @@ export const serviceAccountKeyFromToken = async (token: string): Promise<Service
   }
   const seedBytes = fromBase64(seed, 'the service account key', 'base64url');
   const [privateKey, secret] = await Promise.all([
-    privateKeyFromBytes(
-      await hkdfBytes(seedBytes, 'baymutt-machine-key'),
-      'the service account key',
-    ),
-    hkdfBytes(seedBytes, 'baymutt-machine-bearer'),
+    privateKeyFromBytes(await hkdfBytes(seedBytes, 'baymutt-seed-key'), 'the service account key'),
+    hkdfBytes(seedBytes, 'baymutt-seed-bearer'),
   ]);
   const bearerSecret = toBase64Url(secret);
   return {

@@ -13,8 +13,9 @@ import {
   MAC_MINI,
   MACBOOK,
   PAIR,
+  ADDRESS,
   ENVIRONMENT,
-  REQUEST,
+  PASTE_LINK,
   SCHEMA_FILE,
   SERVICE_ACCOUNT_COMMAND,
   WRITE,
@@ -167,18 +168,18 @@ const softwareApplication = {
             <div class="step-text">
               <h3>Ask you for what only you can fetch.</h3>
               <p>
-                When a value lives in a vendor’s dashboard, the agent asks for it by name. The link
-                works once, for 15 minutes. You paste the value, on your phone if that’s where you
+                When a value lives in a vendor’s dashboard, the agent makes a paste link for it by
+                name. The link works once, for 15 minutes. You paste the value, on your phone if that’s where you
                 are, and your browser seals it before it is sent.
               </p>
             </div>
             <div class="step-visuals">
-              <Terminal serviceAccount={MACBOOK.name} lines={REQUEST} />
+              <Terminal serviceAccount={MACBOOK.name} lines={PASTE_LINK} />
               <Screen path="/paste" label="The paste page, as the dashboard shows it">
                 <PastePage
                   name="RESEND_API_KEY"
                   serviceAccount={MACBOOK.name}
-                  environment={ENVIRONMENT.name}
+                  environment={ADDRESS}
                   reason="to send sign-in emails"
                   where="Resend dashboard, API Keys"
                 />
@@ -276,16 +277,21 @@ const softwareApplication = {
                 'pasted ',
                 { code: 'STRIPE_SECRET_KEY' },
                 ' (v1) into ',
-                { code: ENVIRONMENT.name },
+                { code: ADDRESS },
               ],
               when: '2 days ago',
             },
             {
               who: MACBOOK.name,
-              what: ['asked for ', { code: 'STRIPE_SECRET_KEY' }, ' in ', { code: ENVIRONMENT.name }],
+              what: [
+                'made a paste link for ',
+                { code: 'STRIPE_SECRET_KEY' },
+                ' in ',
+                { code: ADDRESS },
+              ],
               when: '2 days ago',
             },
-            { who: 'CI deploy', what: ['loaded ', { code: ENVIRONMENT.name }], when: '2 days ago' },
+            { who: 'CI deploy', what: ['loaded ', { code: ADDRESS }], when: '2 days ago' },
             { who: MACBOOK.name, what: ['made the service account CI deploy'], when: '3 days ago' },
           ]}
         />

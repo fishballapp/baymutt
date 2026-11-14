@@ -159,30 +159,38 @@ const makeOwner = async (world: TestWorld) => {
     ),
     vaultProofHash: await tokenHash(proof),
   });
+  await api('POST', '/orgs', { name: 'Acme', slug: 'acme' });
   const keys: OwnerKeys = {
     vault,
     accountId,
     accountKey: await openAccountKey(vault, accountKeys),
   };
 
-  type EnvironmentRow = { id: string; name: string; publicKey: string; keyVersion: number };
-  /** The environment as the vault proves it, with what the store listed beside it. */
-  const environmentByName = async (name: string) => {
+  type EnvironmentRow = {
+    id: string;
+    orgSlug: string;
+    name: string;
+    publicKey: string;
+    keyVersion: number;
+  };
+  /** The environment at `address` as the vault proves it, with what the store listed beside it. */
+  const environmentByName = async (address: string) => {
     const { environments } = await api<{ environments: EnvironmentRow[] }>('GET', '/environments');
-    const environment = environments.find(candidate => candidate.name === name);
-    if (environment === undefined) throw new Error(`no environment ${name}`);
-    const { ownerWrap, ownerProof, keyVersion, creator } = await api<{
-      ownerWrap: string;
-      ownerProof: string;
+    const environment = environments.find(
+      candidate => `${candidate.orgSlug}/${candidate.name}` === address,
+    );
+    if (environment === undefined) throw new Error(`no environment ${address}`);
+    const { memberWrap, memberProof, keyVersion, creator } = await api<{
+      memberWrap: string;
+      memberProof: string;
       keyVersion: number;
       creator: { id: string; publicKey: string; endorsement: string | null } | null;
-    }>('GET', `/environments/${environment.id}/owner-wrap`);
+    }>('GET', `/environments/${environment.id}/member-wrap`);
     const owned = {
-      accountId,
       environmentId: environment.id,
       keyVersion,
-      ownerWrap,
-      ownerProof,
+      memberWrap,
+      memberProof,
       creator,
     };
     return { ...environment, owned, opened: await openOwnedEnvironment(keys, owned) };
@@ -211,8 +219,8 @@ const makeOwner = async (world: TestWorld) => {
       const { pairingSecret, ...serviceAccount } = request;
       const reader = { id: serviceAccount.id, publicKey: serviceAccount.publicKey };
       const grants = await Promise.all(
-        (await allEnvironments()).map(async ({ name }) => {
-          const { id, owned, keyVersion } = await environmentByName(name);
+        (await allEnvironments()).map(async ({ orgSlug, name }) => {
+          const { id, owned, keyVersion } = await environmentByName(`${orgSlug}/${name}`);
           const grant = await grantToTrustedReader(keys, owned, reader, { canRead: true });
           return {
             environmentId: id,
@@ -234,10 +242,10 @@ const makeOwner = async (world: TestWorld) => {
       const { credentials } = await api<{ credentials: Listed[] }>('GET', '/credentials');
       const environments = await allEnvironments();
       for (const login of credentials.filter(({ parentId }) => parentId === null)) {
-        for (const { id, name } of environments) {
+        for (const { id, orgSlug, name } of environments) {
           const held = login.grants.find(grant => grant.environmentId === id);
           if (held?.canRead && held.canWrite) continue;
-          const environment = await environmentByName(name);
+          const environment = await environmentByName(`${orgSlug}/${name}`);
           await api('PUT', `/environments/${id}/grants/${login.id}`, {
             canWrite: true,
             keyVersion: environment.keyVersion,
@@ -331,7 +339,9 @@ layer(NodeServices.layer)(it => {
 
         expect(done.exitCode).toBe(8);
         expect(JSON.parse(done.stderr)).toMatchObject({ error: { code: 'IntegrityError' } });
-        expect((yield* run(world, laptop, ['environments', 'create', 'app/dev'])).exitCode).toBe(3);
+        expect(
+          (yield* run(world, laptop, ['environments', 'create', 'acme/app/dev'])).exitCode,
+        ).toBe(3);
       }),
     );
 
@@ -349,16 +359,14 @@ layer(NodeServices.layer)(it => {
   });
 
   describe('environments', () => {
-    it.effect('are `envs` for short, and `projects` is no longer a command', () =>
+    it.effect('are `envs` for short', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['envs', 'create', 'app/dev']);
+        yield* run(world, laptop, ['envs', 'create', 'acme/app/dev']);
 
         const listed = yield* run(world, laptop, ['envs', 'ls']);
-        const old = yield* run(world, laptop, ['projects', 'list']);
 
         expect(listed.json.environments).toHaveLength(1);
-        expect(old.exitCode).not.toBe(0);
       }),
     );
   });
@@ -367,24 +375,24 @@ layer(NodeServices.layer)(it => {
     it.effect('are sealed here, stored as ciphertext, and opened by this service account', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
 
         const set = yield* run(
           world,
           laptop,
-          ['set', 'app/production', 'SIGNING_KEY'],
+          ['set', 'acme/app/production', 'SIGNING_KEY'],
           `${PRIVATE_KEY}\n`,
         );
         const generated = yield* run(world, laptop, [
           'generate',
-          'app/production',
+          'acme/app/production',
           'SESSION_SECRET',
         ]);
 
         expect(set).toMatchObject({
           exitCode: 0,
           json: {
-            environment: 'app/production',
+            environment: 'acme/app/production',
             name: 'SIGNING_KEY',
             version: 1,
             length: PRIVATE_KEY.length,
@@ -392,7 +400,7 @@ layer(NodeServices.layer)(it => {
         });
         expect(generated.json).toMatchObject({ name: 'SESSION_SECRET', version: 1, length: 43 });
 
-        const loaded = yield* load(world, laptop, 'app/production');
+        const loaded = yield* load(world, laptop, 'acme/app/production');
         expect(loaded.SIGNING_KEY).toBe(PRIVATE_KEY);
         expect(loaded.SESSION_SECRET).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
@@ -407,7 +415,7 @@ layer(NodeServices.layer)(it => {
             .all()
             .concat(
               world.sqlite.prepare('SELECT * FROM environment').all(),
-              world.sqlite.prepare('SELECT * FROM audit_event').all(),
+              world.sqlite.prepare('SELECT * FROM activity_event').all(),
             ),
         );
         expect(stored).not.toContain('MIIEvQIBADANBg');
@@ -418,23 +426,25 @@ layer(NodeServices.layer)(it => {
     it.effect('take a new version on each set, and come back with rollback after a delete', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/dev']);
-        yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'first');
-        const second = yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'second');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/dev']);
+        yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY'], 'first');
+        const second = yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY'], 'second');
 
         expect(second.json).toMatchObject({ version: 2, length: 6 });
-        expect((yield* load(world, laptop, 'app/dev')).API_KEY).toBe('second');
+        expect((yield* load(world, laptop, 'acme/app/dev')).API_KEY).toBe('second');
 
-        expect((yield* run(world, laptop, ['delete', 'app/dev', 'API_KEY'])).json).toMatchObject({
+        expect(
+          (yield* run(world, laptop, ['delete', 'acme/app/dev', 'API_KEY'])).json,
+        ).toMatchObject({
           currentVersion: null,
           latestVersion: 2,
         });
-        expect(yield* load(world, laptop, 'app/dev')).toEqual({});
+        expect(yield* load(world, laptop, 'acme/app/dev')).toEqual({});
 
-        yield* run(world, laptop, ['rollback', 'app/dev', 'API_KEY', '--to', '1']);
-        expect((yield* load(world, laptop, 'app/dev')).API_KEY).toBe('first');
+        yield* run(world, laptop, ['rollback', 'acme/app/dev', 'API_KEY', '--to', '1']);
+        expect((yield* load(world, laptop, 'acme/app/dev')).API_KEY).toBe('first');
         expect(
-          (yield* run(world, laptop, ['history', 'app/dev', 'API_KEY'])).json.versions,
+          (yield* run(world, laptop, ['history', 'acme/app/dev', 'API_KEY'])).json.versions,
         ).toMatchObject([
           { version: 2, isCurrent: false },
           { version: 1, isCurrent: true },
@@ -445,25 +455,25 @@ layer(NodeServices.layer)(it => {
     it.effect('go to the bin when deleted, and come back from it with every version', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/dev']);
-        yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'first');
-        yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'second');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/dev']);
+        yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY'], 'first');
+        yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY'], 'second');
 
-        const deleted = (yield* run(world, laptop, ['delete', 'app/dev', 'API_KEY'])).json;
+        const deleted = (yield* run(world, laptop, ['delete', 'acme/app/dev', 'API_KEY'])).json;
         expect(deleted.purgeAt).toEqual(expect.any(Number));
         // It leaves the environment's list for the bin's.
-        expect((yield* run(world, laptop, ['secrets', 'app/dev'])).json.secrets).toEqual([]);
+        expect((yield* run(world, laptop, ['secrets', 'acme/app/dev'])).json.secrets).toEqual([]);
         expect((yield* run(world, laptop, ['bin', 'list'])).json).toMatchObject({
           environments: [],
           secrets: [{ environmentName: 'app/dev', name: 'API_KEY', latestVersion: 2 }],
         });
 
-        const missing = yield* run(world, laptop, ['bin', 'restore', 'app/dev', 'OTHER']);
+        const missing = yield* run(world, laptop, ['bin', 'restore', 'acme/app/dev', 'OTHER']);
         expect(missing.exitCode).toBe(5);
         expect(
-          (yield* run(world, laptop, ['bin', 'restore', 'app/dev', 'API_KEY'])).json,
+          (yield* run(world, laptop, ['bin', 'restore', 'acme/app/dev', 'API_KEY'])).json,
         ).toMatchObject({ currentVersion: 2, purgeAt: null });
-        expect((yield* load(world, laptop, 'app/dev')).API_KEY).toBe('second');
+        expect((yield* load(world, laptop, 'acme/app/dev')).API_KEY).toBe('second');
         expect((yield* run(world, laptop, ['bin', 'list'])).json.secrets).toEqual([]);
         // Nothing here removes anything for good.
         expect((yield* run(world, laptop, ['bin', 'purge'])).exitCode).not.toBe(0);
@@ -473,18 +483,18 @@ layer(NodeServices.layer)(it => {
     it.effect('come from stdin only, and a name must be a valid secret name', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/dev']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/dev']);
 
-        const noStdin = yield* run(world, laptop, ['set', 'app/dev', 'API_KEY']);
-        const empty = yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], '');
-        const missing = yield* run(world, laptop, ['set', 'app/nope', 'API_KEY'], 'x');
+        const noStdin = yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY']);
+        const empty = yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY'], '');
+        const missing = yield* run(world, laptop, ['set', 'acme/app/nope', 'API_KEY'], 'x');
 
         expect(noStdin.exitCode).toBe(2);
         expect(JSON.parse(noStdin.stderr).error.message).toContain('stdin');
         expect(empty.exitCode).toBe(2);
         expect(missing.exitCode).toBe(5);
         expect(
-          (yield* run(world, laptop, ['set', 'app/dev', 'not-a-name'], 'x')).exitCode,
+          (yield* run(world, laptop, ['set', 'acme/app/dev', 'not-a-name'], 'x')).exitCode,
         ).not.toBe(0);
       }),
     );
@@ -492,11 +502,11 @@ layer(NodeServices.layer)(it => {
     it.effect('keep a trailing newline only when asked to', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/dev']);
-        yield* run(world, laptop, ['set', 'app/dev', 'TRIMMED'], 'value\n');
-        yield* run(world, laptop, ['set', 'app/dev', 'KEPT', '--keep-newline'], 'value\n');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/dev']);
+        yield* run(world, laptop, ['set', 'acme/app/dev', 'TRIMMED'], 'value\n');
+        yield* run(world, laptop, ['set', 'acme/app/dev', 'KEPT', '--keep-newline'], 'value\n');
 
-        expect(yield* load(world, laptop, 'app/dev')).toEqual({
+        expect(yield* load(world, laptop, 'acme/app/dev')).toEqual({
           TRIMMED: 'value',
           KEPT: 'value\n',
         });
@@ -508,7 +518,7 @@ layer(NodeServices.layer)(it => {
     it.effect('is every environment for a login approved after they were made', () =>
       Effect.gen(function* () {
         const { world, owner, laptop } = yield* paired;
-        for (const name of ['app/production', 'app/staging', 'app/development']) {
+        for (const name of ['acme/app/production', 'acme/app/staging', 'acme/app/development']) {
           yield* run(world, laptop, ['environments', 'create', name]);
           yield* run(world, laptop, ['set', name, 'API_KEY'], `for ${name}`);
         }
@@ -517,11 +527,11 @@ layer(NodeServices.layer)(it => {
         yield* Effect.promise(() => owner.approve(pending.json.url));
         yield* run(world, agent, ['login', '--wait', '0']);
 
-        for (const name of ['app/production', 'app/staging', 'app/development']) {
+        for (const name of ['acme/app/production', 'acme/app/staging', 'acme/app/development']) {
           expect(yield* load(world, agent, name)).toEqual({ API_KEY: `for ${name}` });
         }
         expect(
-          (yield* run(world, agent, ['set', 'app/production', 'API_KEY'], 'changed')).exitCode,
+          (yield* run(world, agent, ['set', 'acme/app/production', 'API_KEY'], 'changed')).exitCode,
         ).toBe(0);
       }),
     );
@@ -536,17 +546,19 @@ layer(NodeServices.layer)(it => {
           yield* Effect.promise(() => owner.approve(pending.json.url));
           yield* run(world, agent, ['login', '--wait', '0']);
           // Made after the agent's approval, by another login: no browser has wrapped it to the agent.
-          yield* run(world, laptop, ['environments', 'create', 'app/production']);
-          yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'the value');
+          yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+          yield* run(world, laptop, ['set', 'acme/app/production', 'API_KEY'], 'the value');
 
-          const waiting = yield* run(world, agent, ['secrets', 'app/production']);
+          const waiting = yield* run(world, agent, ['secrets', 'acme/app/production']);
           expect(waiting.exitCode).toBe(4);
           expect(JSON.parse(waiting.stderr).error.message).toContain(
             'Ask the owner to open the baymutt dashboard once',
           );
           yield* Effect.promise(() => owner.topUp());
 
-          expect(yield* load(world, agent, 'app/production')).toEqual({ API_KEY: 'the value' });
+          expect(yield* load(world, agent, 'acme/app/production')).toEqual({
+            API_KEY: 'the value',
+          });
         }),
     );
 
@@ -554,7 +566,7 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
         yield* run(world, laptop, [
           'service-accounts',
@@ -562,7 +574,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'writer',
           '--write',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -574,26 +586,32 @@ layer(NodeServices.layer)(it => {
         };
 
         expect(
-          (yield* run(world, writer, ['set', 'app/production', 'API_KEY'], 'written blind')).json,
+          (yield* run(world, writer, ['set', 'acme/app/production', 'API_KEY'], 'written blind'))
+            .json,
         ).toMatchObject({ version: 1 });
-        expect(Exit.isFailure(yield* Effect.exit(load(world, writer, 'app/production')))).toBe(
+        expect(Exit.isFailure(yield* Effect.exit(load(world, writer, 'acme/app/production')))).toBe(
           true,
         );
-        expect((yield* load(world, laptop, 'app/production')).API_KEY).toBe('written blind');
+        expect((yield* load(world, laptop, 'acme/app/production')).API_KEY).toBe('written blind');
       }),
     );
 
     it.effect('refuses to seal to an environment key the store swapped for its own', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'first');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(world, laptop, ['set', 'acme/app/production', 'API_KEY'], 'first');
         // A store that wants to read the next value shows a public key of its own.
         world.sqlite.exec(
           "UPDATE environment SET public_key = 'hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo'",
         );
 
-        const swapped = yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'second');
+        const swapped = yield* run(
+          world,
+          laptop,
+          ['set', 'acme/app/production', 'API_KEY'],
+          'second',
+        );
 
         expect(swapped.exitCode).toBe(8);
         expect(
@@ -607,8 +625,10 @@ layer(NodeServices.layer)(it => {
     it.effect('is not fooled by a store that forges the whole environment: key, wrap and all', () =>
       Effect.gen(function* () {
         const { world, owner, laptop, serviceAccountId } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        const environment = yield* Effect.promise(() => owner.environmentByName('app/production'));
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        const environment = yield* Effect.promise(() =>
+          owner.environmentByName('acme/app/production'),
+        );
         const serviceAccountPublicKey = String(
           world.sqlite.prepare('SELECT public_key FROM credential').get()?.public_key,
         );
@@ -620,7 +640,7 @@ layer(NodeServices.layer)(it => {
             environmentPrivateKey: pair.privateKey,
             readerPublicKey: serviceAccountPublicKey,
             readerId: serviceAccountId,
-            binding: { accountId: owner.accountId, environmentId: environment.id, keyVersion: 1 },
+            binding: { environmentId: environment.id, keyVersion: 1 },
           });
           return { publicKey: pair.publicKey, wrap };
         });
@@ -630,12 +650,12 @@ layer(NodeServices.layer)(it => {
         const write = yield* run(
           world,
           laptop,
-          ['set', 'app/production', 'API_KEY'],
+          ['set', 'acme/app/production', 'API_KEY'],
           'for the store',
         );
         const asked = yield* run(world, laptop, [
-          'request',
-          'app/production',
+          'paste-link',
+          'acme/app/production',
           'API_KEY',
           '--reason',
           'r',
@@ -645,7 +665,7 @@ layer(NodeServices.layer)(it => {
 
         expect(write.exitCode).toBe(8);
         expect(asked.exitCode).toBe(8);
-        expect(Exit.isFailure(yield* Effect.exit(load(world, laptop, 'app/production')))).toBe(
+        expect(Exit.isFailure(yield* Effect.exit(load(world, laptop, 'acme/app/production')))).toBe(
           true,
         );
         expect(
@@ -660,7 +680,7 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
         yield* run(world, laptop, [
           'service-accounts',
@@ -668,7 +688,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--write',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -680,7 +700,7 @@ layer(NodeServices.layer)(it => {
         };
 
         expect(
-          (yield* run(world, ci, ['set', 'app/production', 'API_KEY'], 'first')).exitCode,
+          (yield* run(world, ci, ['set', 'acme/app/production', 'API_KEY'], 'first')).exitCode,
         ).toBe(0);
         // On every run it meets the store afresh: a swapped key must fail the first time too.
         world.sqlite.exec(
@@ -688,7 +708,7 @@ layer(NodeServices.layer)(it => {
         );
 
         expect(
-          (yield* run(world, ci, ['set', 'app/production', 'API_KEY'], 'second')).exitCode,
+          (yield* run(world, ci, ['set', 'acme/app/production', 'API_KEY'], 'second')).exitCode,
         ).toBe(8);
         expect(
           world.sqlite.prepare('SELECT COUNT(*) AS versions FROM secret_version').get(),
@@ -701,15 +721,20 @@ layer(NodeServices.layer)(it => {
     it.effect('refuses values the store put in a slot under another name', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        yield* run(world, laptop, ['set', 'app/production', 'PUBLIC_URL'], 'https://example.com');
-        yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'the secret');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(
+          world,
+          laptop,
+          ['set', 'acme/app/production', 'PUBLIC_URL'],
+          'https://example.com',
+        );
+        yield* run(world, laptop, ['set', 'acme/app/production', 'API_KEY'], 'the secret');
         // The store answers API_KEY with PUBLIC_URL's ciphertext.
         world.sqlite.exec(
           "UPDATE secret_version SET ciphertext = (SELECT ciphertext FROM secret_version WHERE name = 'PUBLIC_URL') WHERE name = 'API_KEY'",
         );
 
-        expect(Exit.isFailure(yield* Effect.exit(load(world, laptop, 'app/production')))).toBe(
+        expect(Exit.isFailure(yield* Effect.exit(load(world, laptop, 'acme/app/production')))).toBe(
           true,
         );
       }),
@@ -721,9 +746,9 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        yield* run(world, laptop, ['environments', 'create', 'app/other']);
-        yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'for ci');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/other']);
+        yield* run(world, laptop, ['set', 'acme/app/production', 'API_KEY'], 'for ci');
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
 
         const created = yield* run(world, laptop, [
@@ -732,7 +757,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--read',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -755,21 +780,25 @@ layer(NodeServices.layer)(it => {
           configHome: yield* fs.makeTempDirectoryScoped(),
           env: { BAYMUTT_KEY: key },
         };
-        expect(yield* load(world, ci, 'app/production')).toEqual({ API_KEY: 'for ci' });
+        expect(yield* load(world, ci, 'acme/app/production')).toEqual({ API_KEY: 'for ci' });
         expect((yield* run(world, ci, ['environments', 'list'])).json.environments).toHaveLength(1);
-        expect((yield* run(world, ci, ['set', 'app/production', 'API_KEY'], 'x')).exitCode).toBe(4);
-        expect((yield* run(world, ci, ['environments', 'create', 'app/ci-made'])).exitCode).toBe(2);
+        expect(
+          (yield* run(world, ci, ['set', 'acme/app/production', 'API_KEY'], 'x')).exitCode,
+        ).toBe(4);
+        expect(
+          (yield* run(world, ci, ['environments', 'create', 'acme/app/ci-made'])).exitCode,
+        ).toBe(2);
       }),
     );
 
     // The deploy loads baymutt's own secrets with the plugin it has just built, from the Worker that
     // is still live: the load may ask only for routes that Worker already has.
-    it.effect('load through the three routes the last release answers, and no others', () =>
+    it.effect('load through the two routes the last release answers, and no others', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        yield* run(world, laptop, ['set', 'app/production', 'API_KEY'], 'for the deploy');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(world, laptop, ['set', 'acme/app/production', 'API_KEY'], 'for the deploy');
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
         yield* run(world, laptop, [
           'service-accounts',
@@ -777,7 +806,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--read',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -797,7 +826,7 @@ layer(NodeServices.layer)(it => {
               .replace('/api/v1', '')
               .replace(/[0-9a-f]{8}-[0-9a-f-]{27}/, ':id')}`;
             asked.push(route);
-            return ['GET /me', 'GET /environments', 'GET /environments/:id/bundle'].includes(route)
+            return ['GET /environments', 'GET /environments/:id/bundle'].includes(route)
               ? world.fetch(request)
               : new Response(JSON.stringify({ code: 'NotFoundError', message: 'No such route.' }), {
                   status: 404,
@@ -806,14 +835,14 @@ layer(NodeServices.layer)(it => {
           },
         };
 
-        expect(yield* load(lastRelease, laptop, 'app/production')).toEqual({
+        expect(yield* load(lastRelease, laptop, 'acme/app/production')).toEqual({
           API_KEY: 'for the deploy',
         });
-        expect(yield* load(lastRelease, ci, 'app/production')).toEqual({
+        expect(yield* load(lastRelease, ci, 'acme/app/production')).toEqual({
           API_KEY: 'for the deploy',
         });
         expect(new Set(asked)).toEqual(
-          new Set(['GET /me', 'GET /environments', 'GET /environments/:id/bundle']),
+          new Set(['GET /environments', 'GET /environments/:id/bundle']),
         );
       }),
     );
@@ -822,7 +851,7 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, laptop } = yield* paired;
-        for (const name of ['app/production', 'app/staging']) {
+        for (const name of ['acme/app/production', 'acme/app/staging']) {
           yield* run(world, laptop, ['environments', 'create', name]);
           yield* run(world, laptop, ['set', name, 'API_KEY'], `for ${name}`);
         }
@@ -833,7 +862,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--read',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -850,11 +879,11 @@ layer(NodeServices.layer)(it => {
           'access',
           id,
           '--read',
-          'app/staging',
+          'acme/app/staging',
           '--write',
-          'app/staging',
+          'acme/app/staging',
           '--remove',
-          'app/production',
+          'acme/app/production',
         ]);
 
         expect(changed).toMatchObject({
@@ -864,14 +893,18 @@ layer(NodeServices.layer)(it => {
             grants: [{ environmentName: 'app/staging', canRead: true, canWrite: true }],
           },
         });
-        expect(yield* load(world, ci, 'app/staging')).toEqual({ API_KEY: 'for app/staging' });
-        expect((yield* run(world, ci, ['set', 'app/staging', 'API_KEY'], 'from ci')).exitCode).toBe(
-          0,
+        expect(yield* load(world, ci, 'acme/app/staging')).toEqual({
+          API_KEY: 'for acme/app/staging',
+        });
+        expect(
+          (yield* run(world, ci, ['set', 'acme/app/staging', 'API_KEY'], 'from ci')).exitCode,
+        ).toBe(0);
+        expect(Exit.isFailure(yield* Effect.exit(load(world, ci, 'acme/app/production')))).toBe(
+          true,
         );
-        expect(Exit.isFailure(yield* Effect.exit(load(world, ci, 'app/production')))).toBe(true);
         // It cannot change its own.
         expect(
-          (yield* run(world, ci, ['service-accounts', 'access', id, '--read', 'app/staging']))
+          (yield* run(world, ci, ['service-accounts', 'access', id, '--read', 'acme/app/staging']))
             .exitCode,
         ).toBe(5);
       }),
@@ -880,15 +913,15 @@ layer(NodeServices.layer)(it => {
     it.effect('wraps nothing to a key its login did not vouch for', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        yield* run(world, laptop, ['environments', 'create', 'app/staging']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/staging']);
         const created = yield* run(world, laptop, [
           'service-accounts',
           'create',
           '--name',
           'ci',
           '--write',
-          'app/production',
+          'acme/app/production',
           '--',
           'true',
         ]);
@@ -910,24 +943,24 @@ layer(NodeServices.layer)(it => {
           'access',
           id,
           '--read',
-          'app/production',
+          'acme/app/production',
         ]);
         expect(swapped.exitCode).toBe(8);
         expect(grants()).toEqual(before);
 
-        // One made before its login wrote vouchers: it loses access, and gains no read or environment.
+        // A store that drops its vouchers: nothing can be handed to it, and nothing changes.
         world.sqlite
           .prepare(
             'UPDATE credential SET key_voucher_owner = NULL, key_voucher_maker = NULL, account_voucher = NULL WHERE id = ?',
           )
           .run(id);
         for (const args of [
-          ['--read', 'app/production', '--write', 'app/production'],
-          ['--write', 'app/staging'],
+          ['--read', 'acme/app/production', '--write', 'acme/app/production'],
+          ['--write', 'acme/app/staging'],
         ]) {
           const refused = yield* run(world, laptop, ['service-accounts', 'access', id, ...args]);
           expect(refused.exitCode).toBe(8);
-          expect(JSON.parse(refused.stderr).error.message).toContain('Nothing vouches for');
+          expect(JSON.parse(refused.stderr).error.message).toContain('nothing vouches for');
         }
         expect(grants()).toEqual(before);
         expect(
@@ -936,7 +969,7 @@ layer(NodeServices.layer)(it => {
             'access',
             id,
             '--remove',
-            'app/production',
+            'acme/app/production',
           ])).json.grants,
         ).toEqual([]);
       }),
@@ -946,9 +979,9 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, owner, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
-        yield* run(world, laptop, ['environments', 'create', 'app/staging']);
-        yield* run(world, laptop, ['set', 'app/staging', 'API_KEY'], 'staged');
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/staging']);
+        yield* run(world, laptop, ['set', 'acme/app/staging', 'API_KEY'], 'staged');
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
         const created = yield* run(world, laptop, [
           'service-accounts',
@@ -956,7 +989,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--write',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -968,16 +1001,16 @@ layer(NodeServices.layer)(it => {
         };
         const id: string = created.json.id;
 
-        yield* Effect.promise(() => owner.handOn(id, 'app/staging', { canRead: true }));
+        yield* Effect.promise(() => owner.handOn(id, 'acme/app/staging', { canRead: true }));
 
-        expect(yield* load(world, ci, 'app/staging')).toEqual({ API_KEY: 'staged' });
+        expect(yield* load(world, ci, 'acme/app/staging')).toEqual({ API_KEY: 'staged' });
 
         // The owner's browser refuses a key the store swapped in, and one nothing vouches for.
         world.sqlite
           .prepare('UPDATE credential SET public_key = ? WHERE id = ?')
           .run('hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo', id);
         yield* Effect.promise(() =>
-          expect(owner.handOn(id, 'app/production', { canRead: true })).rejects.toMatchObject({
+          expect(owner.handOn(id, 'acme/app/production', { canRead: true })).rejects.toMatchObject({
             code: 'unreadable',
           }),
         );
@@ -987,7 +1020,7 @@ layer(NodeServices.layer)(it => {
     it.effect('is revoked again when the command that takes its key fails', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
 
         const created = yield* run(world, laptop, [
           'service-accounts',
@@ -995,7 +1028,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--write',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -1074,7 +1107,7 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, owner, laptop, serviceAccountId } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
         const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
         yield* run(world, laptop, [
           'service-accounts',
@@ -1082,7 +1115,7 @@ layer(NodeServices.layer)(it => {
           '--name',
           'ci',
           '--write',
-          'app/production',
+          'acme/app/production',
           '--',
           'sh',
           '-c',
@@ -1122,7 +1155,7 @@ layer(NodeServices.layer)(it => {
           yield* TestClock.setTime(Date.now());
           const fs = yield* FileSystem.FileSystem;
           const { world, laptop } = yield* paired;
-          yield* run(world, laptop, ['environments', 'create', 'app/production']);
+          yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
           const keyFile = `${yield* fs.makeTempDirectoryScoped()}/key`;
           const created = yield* run(world, laptop, [
             'service-accounts',
@@ -1134,7 +1167,7 @@ layer(NodeServices.layer)(it => {
             '--expires',
             '12h',
             '--read',
-            'app/production',
+            'acme/app/production',
             '--',
             'sh',
             '-c',
@@ -1168,9 +1201,9 @@ layer(NodeServices.layer)(it => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const { world, laptop } = yield* paired;
-          yield* run(world, laptop, ['environments', 'create', 'app/dev']);
-          yield* run(world, laptop, ['set', 'app/dev', 'API_KEY'], 'x');
-          yield* run(world, laptop, ['set', 'app/dev', 'OLD_KEY'], 'x');
+          yield* run(world, laptop, ['environments', 'create', 'acme/app/dev']);
+          yield* run(world, laptop, ['set', 'acme/app/dev', 'API_KEY'], 'x');
+          yield* run(world, laptop, ['set', 'acme/app/dev', 'OLD_KEY'], 'x');
           const schema = `${yield* fs.makeTempDirectoryScoped()}/.env.schema`;
           yield* fs.writeFileString(
             schema,
@@ -1179,7 +1212,7 @@ layer(NodeServices.layer)(it => {
 
           const differs = yield* run(world, laptop, [
             'check',
-            'app/dev',
+            'acme/app/dev',
             '--schema',
             schema,
             '--ignore',
@@ -1195,11 +1228,11 @@ layer(NodeServices.layer)(it => {
             unused: ['OLD_KEY'],
           });
 
-          yield* run(world, laptop, ['set', 'app/dev', 'STRIPE_KEY'], 'x');
+          yield* run(world, laptop, ['set', 'acme/app/dev', 'STRIPE_KEY'], 'x');
           expect(
             (yield* run(world, laptop, [
               'check',
-              'app/dev',
+              'acme/app/dev',
               '--schema',
               schema,
               '--ignore',
@@ -1211,14 +1244,14 @@ layer(NodeServices.layer)(it => {
         }),
     );
 
-    it.effect('request prints a single-use link whose holder seals one value for one name', () =>
+    it.effect('paste-link prints a single-use link whose holder seals one value for one name', () =>
       Effect.gen(function* () {
         const { world, owner, laptop } = yield* paired;
-        yield* run(world, laptop, ['environments', 'create', 'app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
 
         const asked = yield* run(world, laptop, [
-          'request',
-          'app/production',
+          'paste-link',
+          'acme/app/production',
           'STRIPE_SECRET_KEY',
           '--reason',
           'to take payments',
@@ -1243,9 +1276,11 @@ layer(NodeServices.layer)(it => {
           nextVersion: number;
           accountId: string;
         };
-        const environment = yield* Effect.promise(() => owner.environmentByName('app/production'));
+        const environment = yield* Effect.promise(() =>
+          owner.environmentByName('acme/app/production'),
+        );
         expect(fingerprint).toBeDefined();
-        // Nobody has pasted yet: `wait` gives up at its timeout and says the request is open.
+        // Nobody has pasted yet: `wait` gives up at its timeout and says the link is open.
         expect(yield* run(world, laptop, ['wait', asked.json.id, '--timeout', '0'])).toMatchObject({
           exitCode: 9,
           json: { status: 'pending' },
@@ -1254,7 +1289,6 @@ layer(NodeServices.layer)(it => {
           sealValue({
             environmentPublicKey: target.environmentPublicKey,
             slot: {
-              accountId: target.accountId,
               environmentId: environment.id,
               keyVersion: target.keyVersion,
               name: 'STRIPE_SECRET_KEY',
@@ -1279,14 +1313,14 @@ layer(NodeServices.layer)(it => {
           exitCode: 0,
           json: { id: asked.json.id, status: 'answered' },
         });
-        expect((yield* load(world, laptop, 'app/production')).STRIPE_SECRET_KEY).toBe(
+        expect((yield* load(world, laptop, 'acme/app/production')).STRIPE_SECRET_KEY).toBe(
           'sk_live_pasted\nsecond line',
         );
 
         // A request made by mistake is withdrawn: nothing waits, and its link is spent.
         const mistaken = yield* run(world, laptop, [
-          'request',
-          'app/production',
+          'paste-link',
+          'acme/app/production',
           'NOT_NEEDED',
           '--reason',
           'asked by mistake',
@@ -1308,6 +1342,35 @@ layer(NodeServices.layer)(it => {
           ),
         );
         expect(afterwards.status).toBe(410);
+      }),
+    );
+  });
+  describe('orgs', () => {
+    it.effect('are made in the dashboard; an environment is named with its org first', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop } = yield* paired;
+        // The CLI has no `orgs` command, and the store refuses a CLI login that makes one.
+        expect((yield* run(world, laptop, ['orgs', 'list'])).exitCode).not.toBe(0);
+        yield* Effect.promise(() =>
+          owner.api('POST', '/orgs', { name: 'Globex Corp', slug: 'globex' }),
+        );
+
+        yield* run(world, laptop, ['environments', 'create', 'acme/app/production']);
+        yield* run(world, laptop, ['environments', 'create', 'globex/app/production']);
+        yield* run(world, laptop, ['set', 'globex/app/production', 'API_KEY'], 'globex value');
+        expect(yield* load(world, laptop, 'globex/app/production')).toEqual({
+          API_KEY: 'globex value',
+        });
+        expect(yield* load(world, laptop, 'acme/app/production')).toEqual({});
+
+        // An org that is not theirs, and a name with no org, say what was wrong.
+        expect(
+          (yield* run(world, laptop, ['environments', 'create', 'initech/app'])).exitCode,
+        ).toBe(5);
+        expect((yield* run(world, laptop, ['environments', 'create', 'app'])).exitCode).toBe(2);
+        const unqualified = yield* run(world, laptop, ['secrets', 'app/production']);
+        expect(unqualified.exitCode).toBe(5);
+        expect(JSON.parse(unqualified.stderr).error.message).toContain('<org>/<name>');
       }),
     );
   });

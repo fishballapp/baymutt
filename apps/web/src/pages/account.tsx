@@ -2,6 +2,7 @@ import { MIN_PASSWORD_LENGTH } from '@baymutt/keys';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
+import { OrgList } from '../components/orgs.tsx';
 import {
   Notice,
   PageHeader,
@@ -208,6 +209,9 @@ export const AccountPage = () => {
         lede={`${owner.email}. Free while baymutt is in beta. Your vault stays open in this browser until you sign out.`}
         action={<Button onClick={() => signOut()}>Sign out</Button>}
       />
+      <Section title="Orgs" lede="Environments belong to an org. You own each org you create.">
+        <OrgList />
+      </Section>
       <Passkeys />
       <Password />
       <Recovery onNewKey={setNewKey} />

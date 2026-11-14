@@ -1,6 +1,7 @@
 // A Better Auth call that throws is a fault (a defect, so 500); no session comes back as an error
-// the guards answer 401 with.
-import { UnauthorizedError } from '@baymutt/api';
+// the guards answer 401 with, and a slug that is taken as one the caller can act on.
+import { AlreadyExistsError, UnauthorizedError } from '@baymutt/api';
+import { APIError } from 'better-auth/api';
 import * as Context from 'effect/Context';
 import * as Effect from 'effect/Effect';
 import type * as HttpHeaders from 'effect/http/Headers';
@@ -25,6 +26,12 @@ export class Auth extends Context.Service<
       readonly hash: string;
       readonly authValue: string;
     }) => Effect.Effect<boolean>;
+    /** A new org with `userId` as its owner member, made by the organization plugin. */
+    readonly createOrg: (org: {
+      readonly userId: string;
+      readonly name: string;
+      readonly slug: string;
+    }) => Effect.Effect<{ readonly id: string }, AlreadyExistsError>;
   }
 >()('@baymutt/worker-web/platform/Auth') {
   static readonly layer = (db: D1Database) =>
@@ -68,6 +75,32 @@ export class Auth extends Context.Service<
           return yield* Effect.tryPromise(async () =>
             (await makeAuth().$context).password.verify({ hash, password: authValue }),
           ).pipe(Effect.orDie);
+        }),
+
+        // A server call with no headers and a `userId`: the Worker has already checked the
+        // dashboard session and its vault proof, so the plugin is told whose org it is.
+        createOrg: Effect.fn('Auth.createOrg')(function* ({ userId, name, slug }) {
+          // A taken slug answers null; anything else the plugin throws is a fault.
+          const created = yield* Effect.promise(() =>
+            makeAuth()
+              .api.createOrganization({ body: { userId, name, slug } })
+              .then(
+                ({ id }) => ({ id }),
+                (error: unknown) => {
+                  if (
+                    error instanceof APIError &&
+                    error.body?.code === 'ORGANIZATION_ALREADY_EXISTS'
+                  ) {
+                    return null;
+                  }
+                  throw error;
+                },
+              ),
+          );
+          if (created === null) {
+            return yield* new AlreadyExistsError({ message: `The org slug ${slug} is taken.` });
+          }
+          return created;
         }),
       }),
     );

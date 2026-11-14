@@ -4,24 +4,25 @@
 import * as HttpApi from 'effect/http-api/HttpApi';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import { AccountGroup } from './account.ts';
-import { AuditGroup } from './audit.ts';
+import { ActivityGroup } from './activity.ts';
 import { BinGroup } from './bin.ts';
 import { CredentialsGroup } from './credentials.ts';
 import { EnvironmentsGroup } from './environments.ts';
 import { RequestValidation } from './guards.ts';
-import { PasteGroup, PasteRequestsGroup, RetiredGroup } from './requests.ts';
+import { OrgsGroup } from './orgs.ts';
+import { PasteGroup, PasteLinksGroup } from './paste-links.ts';
 import { SecretsGroup } from './secrets.ts';
 
 export class Api extends HttpApi.make('baymutt')
   .add(AccountGroup)
   .add(CredentialsGroup)
+  .add(OrgsGroup)
   .add(EnvironmentsGroup)
   .add(SecretsGroup)
-  .add(PasteRequestsGroup)
+  .add(PasteLinksGroup)
   .add(PasteGroup)
   .add(BinGroup)
-  .add(AuditGroup)
-  .add(RetiredGroup)
+  .add(ActivityGroup)
   .middleware(RequestValidation)
   .prefix('/api/v1')
   .annotateMerge(

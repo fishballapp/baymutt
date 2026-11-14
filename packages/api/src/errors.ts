@@ -37,8 +37,16 @@ export class LimitReachedError extends Schema.TaggedError<LimitReachedError>()(
   { httpApiStatus: 403 },
 ) {}
 
-/** What one account may hold while baymutt is in beta. */
+/** An org still holds environments, in the bin or not, so it cannot be deleted. */
+export class NotEmptyError extends Schema.TaggedError<NotEmptyError>()(
+  'NotEmptyError',
+  { message: ErrorMessageSchema },
+  { httpApiStatus: 409 },
+) {}
+
+/** What one account may hold while baymutt is in beta. Environments count across its orgs. */
 export const LIMITS = {
+  orgs: 20,
   environments: 100,
   serviceAccounts: 200,
   secretsPerEnvironment: 500,

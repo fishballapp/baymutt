@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// An account, its service accounts and an environment, set up through the API as a client would.
+// An account, its org, its credentials and an environment, set up through the API as a client would.
 import { tokenHash } from '@baymutt/keys/wire';
 import { json } from '@internal/effect-worker/testing';
 import { expect } from 'vitest';
@@ -34,6 +34,13 @@ export const ok = async <Body = Record<string, unknown>>(
   return answer.body as Body;
 };
 
+/** What a CLI login writes for a service account it makes. The store keeps them as written. */
+export const VOUCHERS = {
+  keyToOwner: sealedLike('key-to-owner', 64),
+  keyToMaker: sealedLike('key-to-maker', 64),
+  accountKey: sealedLike('account-key', 64),
+};
+
 /** The value the open vault would show. Any string does: the store only compares its hash. */
 export const VAULT_PROOF = 'the-open-vault';
 
@@ -66,11 +73,14 @@ export const storeWorld = async (userId = 'user-1') => {
     await newAccount(accountId, user.first.credentialId),
     201,
   );
+  /** An org of this person's, with them as its owner. */
+  const org = async (slug: string, headers = owner) =>
+    (await ok<{ id: string }>(w, 'POST', '/orgs', headers, { name: `Org ${slug}`, slug }, 201)).id;
+  const orgId = await org(`org-${userId}`);
 
   /**
-   * A login the owner approved. `environments` are the ones the owner's browser wrapped to it in the
-   * approval; with none given it holds nothing yet, as one approved before logins held every
-   * environment.
+   * A CLI login the owner approved. `environments` are the ones the owner's browser wrapped to it in
+   * the approval; with none given it holds nothing yet.
    */
   const pair = async (
     name = `service-account-${++serviceAccountCount}`,
@@ -98,16 +108,12 @@ export const storeWorld = async (userId = 'user-1') => {
         bearerHash: await tokenHash(secret),
         endorsement: sealedLike('endorsement'),
         welcome: sealedLike('welcome'),
-        ...(environments.length === 0
-          ? {}
-          : {
-              grants: environments.map(environmentId => ({
-                environmentId,
-                readWrap: sealedLike('login-wrap'),
-                keyProof: sealedLike('key-proof'),
-                keyVersion: 1,
-              })),
-            }),
+        grants: environments.map(environmentId => ({
+          environmentId,
+          readWrap: sealedLike('login-wrap'),
+          keyProof: sealedLike('key-proof'),
+          keyVersion: 1,
+        })),
       },
       201,
     );
@@ -115,7 +121,12 @@ export const storeWorld = async (userId = 'user-1') => {
   };
 
   /** An environment; the owner wraps it to each of `logins` in the same request, as the dashboard does. */
-  const environment = async (name: string, headers = owner, logins: ReadonlyArray<string> = []) => {
+  const environment = async (
+    name: string,
+    headers = owner,
+    logins: ReadonlyArray<string> = [],
+    inOrg = orgId,
+  ) => {
     const id = crypto.randomUUID();
     await ok(
       w,
@@ -124,10 +135,11 @@ export const storeWorld = async (userId = 'user-1') => {
       headers,
       {
         id,
+        orgId: inOrg,
         name,
         publicKey: keyLike('p'),
-        ownerWrap: sealedLike('owner-wrap'),
-        ownerProof: sealedLike('owner-proof'),
+        memberWrap: sealedLike('member-wrap'),
+        memberProof: sealedLike('member-proof'),
         creatorWrap: headers === owner ? null : sealedLike('creator-wrap'),
         creatorProof: headers === owner ? null : sealedLike('creator-proof'),
         ...(logins.length === 0
@@ -164,7 +176,7 @@ export const storeWorld = async (userId = 'user-1') => {
       ciphertext: sealedLike(`${name}-v${version}`, 96),
     });
 
-  return { w, user, owner, locked, accountId, pair, environment, grant, write };
+  return { w, user, owner, locked, accountId, org, orgId, pair, environment, grant, write };
 };
 
 export type StoreWorld = Awaited<ReturnType<typeof storeWorld>>;

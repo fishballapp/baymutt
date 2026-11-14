@@ -1,5 +1,6 @@
-// Environments from this service account's side: finding one by name, knowing which public key is really its
-// own, and opening it. The store's answers are checked against a proof the store cannot make.
+// Environments from a credential's side: finding one by its address, knowing which public key is
+// really its own, and opening it. The store's answers are checked against a proof the store cannot
+// make.
 import type { Environment } from '@baymutt/api';
 import {
   createEnvironmentKey,
@@ -11,25 +12,32 @@ import * as Effect from 'effect/Effect';
 import { crypto_, usage } from './errors.ts';
 import { ServiceAccount } from './service-account.ts';
 
-/** An environment by its name (or id), among those this service account holds a grant on. */
-export const resolveEnvironment = Effect.fn('environments.resolve')(function* (name: string) {
+/** How an environment is named wherever a name is taken: `<org slug>/<name>`. */
+export const addressOf = ({ orgSlug, name }: Pick<Environment, 'orgSlug' | 'name'>): string =>
+  `${orgSlug}/${name}`;
+
+/** An environment by its address (or id), among those this credential reaches. */
+export const resolveEnvironment = Effect.fn('environments.resolve')(function* (address: string) {
   const { api, key } = yield* ServiceAccount;
   const { environments } = yield* api.environments.list();
   const found = environments.find(
-    environment => environment.name === name || environment.id === name,
+    environment => addressOf(environment) === address || environment.id === address,
   );
   if (found === undefined) {
+    const hint = address.includes('/')
+      ? ''
+      : ' An environment is named with its org first: `<org>/<name>`.';
     return yield* usage(
       isLogin(key)
-        ? `This account has no environment named ${name}. See what it has with \`baymutt environments\`, or create it with \`baymutt environments create ${name}\`.`
-        : `No environment named ${name} is granted to this service account. See what is with \`baymutt environments\`. The login that made it, or the owner, can hand it one.`,
+        ? `None of your orgs has an environment ${address}.${hint} See them with \`baymutt environments\`, or create it with \`baymutt environments create <org>/<name>\`.`
+        : `No environment ${address} is granted to this service account.${hint} See what is with \`baymutt environments\`. The CLI login that made it, or the owner, can hand it one.`,
       'notFound',
     );
   }
   return found;
 });
 
-/** A login: made by `baymutt login`, so its key names no maker. It is meant to hold every environment. */
+/** A CLI login: made by `baymutt login`, so its key names no maker. It is meant to hold every environment. */
 const isLogin = (key: { readonly issuerPublicKey: string | null }) => key.issuerPublicKey === null;
 
 /**
@@ -43,23 +51,18 @@ export const trustedKey = Effect.fn('environments.trustedKey')(function* (
   environment: Environment,
 ) {
   const serviceAccount = yield* ServiceAccount;
-  const account = yield* serviceAccount.account;
-  const binding = {
-    accountId: account.id,
-    environmentId: environment.id,
-    keyVersion: environment.keyVersion,
-  };
-  // A login is listed every environment; one with no grant yet was made by another service account,
-  // and only the owner's browser can wrap it to this login.
+  const binding = { environmentId: environment.id, keyVersion: environment.keyVersion };
+  // A login is listed every environment; one with no grant yet was made by another login, and only
+  // the owner's browser can wrap it to this one.
   if (environment.keyProof === null && isLogin(serviceAccount.key)) {
     return yield* usage(
-      `This login has full access, but ${environment.name} was made by another service account and is not wrapped to it yet: only the owner's browser can do that. Ask the owner to open the baymutt dashboard once; it grants every environment a login lacks.`,
+      `This CLI login has full access, but ${addressOf(environment)} was made by another CLI login and is not wrapped to this one yet: only the owner's browser can do that. Ask the owner to open the baymutt dashboard once; it grants every environment a CLI login lacks.`,
       'noAccess',
     );
   }
   if (environment.keyProof === null) {
     return yield* usage(
-      `The store answered ${environment.name} with no proof of its public key. Nothing was used.`,
+      `The store answered ${addressOf(environment)} with no proof of its public key. Nothing was used.`,
       'integrity',
     );
   }
@@ -85,7 +88,7 @@ export const trustedKey = Effect.fn('environments.trustedKey')(function* (
   );
   if (publicKey !== environment.publicKey) {
     return yield* usage(
-      `The store shows a public key for ${environment.name} that is not the one vouched for to this service account. Nothing was used.`,
+      `The store shows a public key for ${addressOf(environment)} that is not the one vouched for to this key. Nothing was used.`,
       'integrity',
     );
   }
@@ -136,39 +139,57 @@ export const loadValues = Effect.fn('environments.load')(function* (name: string
   return { environment, values: Object.fromEntries(values) };
 });
 
-/** A new environment, its key made here, wrapped to the owner's account and to this service account, and vouched for to both. */
-export const createEnvironment = Effect.fn('environments.create')(function* (name: string) {
+/**
+ * A new environment in one of the person's orgs, its key made here, wrapped to the person's account
+ * (their member copy) and to this login, and vouched for to both.
+ */
+export const createEnvironment = Effect.fn('environments.create')(function* ({
+  orgSlug,
+  name,
+}: {
+  readonly orgSlug: string;
+  readonly name: string;
+}) {
   const serviceAccount = yield* ServiceAccount;
   const account = yield* serviceAccount.account;
   if (!account.isPinned) {
     return yield* usage(
-      'This service account’s key comes from BAYMUTT_KEY, so it has no account key it can trust to wrap a new environment’s key to. Create the environment from a service account made by `baymutt login`.',
+      'This key comes from BAYMUTT_KEY, so it has no account key it can trust to wrap a new environment’s key to. Create the environment from a computer where `baymutt login` ran.',
+    );
+  }
+  const { orgs } = yield* serviceAccount.api.orgs.list();
+  const org = orgs.find(listed => listed.slug === orgSlug);
+  if (org === undefined) {
+    return yield* usage(
+      `You have no org ${orgSlug}. The owner creates orgs in the dashboard, under Account.`,
+      'notFound',
     );
   }
   const id = crypto.randomUUID();
   const {
     publicKey,
-    grants: [owner, creator],
+    grants: [member, creator],
   } = yield* crypto_(() =>
     createEnvironmentKey({
       voucherKey: serviceAccount.key.privateKey,
-      binding: { accountId: account.id, environmentId: id, keyVersion: 1 },
+      binding: { environmentId: id, keyVersion: 1 },
       readers: [
         { id: account.id, publicKey: account.publicKey },
         { id: serviceAccount.key.credentialId, publicKey: serviceAccount.key.publicKey },
       ],
     }),
   );
-  if (owner === undefined || creator === undefined) {
+  if (member === undefined || creator === undefined) {
     return yield* Effect.die('an environment key came back without its two grants');
   }
   const environment = yield* serviceAccount.api.environments.create({
     payload: {
       id,
+      orgId: org.id,
       name,
       publicKey,
-      ownerWrap: owner.wrap,
-      ownerProof: owner.proof,
+      memberWrap: member.wrap,
+      memberProof: member.proof,
       creatorWrap: creator.wrap,
       creatorProof: creator.proof,
     },
@@ -176,7 +197,7 @@ export const createEnvironment = Effect.fn('environments.create')(function* (nam
   // What was made here is the environment; the store's answer only has to agree with it.
   if (environment.id !== id || environment.publicKey !== publicKey) {
     return yield* usage(
-      `The store answered the new environment with a different key than the one made here. Do not use ${name}.`,
+      `The store answered the new environment with a different key than the one made here. Do not use ${orgSlug}/${name}.`,
       'integrity',
     );
   }

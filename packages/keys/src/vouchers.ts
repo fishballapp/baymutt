@@ -4,10 +4,10 @@
  * and its recipient can make:
  *
  * ```
- * keyToOwner  = vouched(makerPriv → accountPub, serviceAccountPub, info "baymutt-service-account-key",
+ * keyToOwner  = vouched(makerPriv → accountPub, serviceAccountPub, info "baymutt-issued-key-voucher",
  *                       aad = [accountId, serviceAccountId])     → the owner's browser learns the key
  * keyToMaker  = vouched(makerPriv → makerPub,   serviceAccountPub, the same)   → the login learns it again
- * accountKey  = vouched(makerPriv → serviceAccountPub, accountPub, info "baymutt-account-key",
+ * accountKey  = vouched(makerPriv → serviceAccountPub, accountPub, info "baymutt-root-key-voucher",
  *                       aad = [accountId, serviceAccountId])     → the service account learns the account's key
  * ```
  *
@@ -30,8 +30,8 @@ import {
 } from '@internal/zk-vault';
 import { tuple } from './encoding.ts';
 
-const KEY_INFO = 'baymutt-service-account-key';
-const ACCOUNT_INFO = 'baymutt-account-key';
+const KEY_INFO = 'baymutt-issued-key-voucher';
+const ACCOUNT_INFO = 'baymutt-root-key-voucher';
 
 const aad = (accountId: string, serviceAccountId: string) => tuple(accountId, serviceAccountId);
 
@@ -127,7 +127,7 @@ export const vouchedServiceAccountKey = async ({
   if (serviceAccount.keyVoucher === null) {
     throw new VaultError(
       'unreadable',
-      'nothing vouches for this service account’s key: it was made before its maker wrote a voucher',
+      'nothing vouches for this service account’s key: the store shows no voucher from its maker',
     );
   }
   const vouched = await open(

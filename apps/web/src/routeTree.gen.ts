@@ -17,7 +17,7 @@ import { Route as AppAccountRouteImport } from './routes/_app.account'
 import { Route as AppActivityRouteImport } from './routes/_app.activity'
 import { Route as AppBinRouteImport } from './routes/_app.bin'
 import { Route as AppPairRouteImport } from './routes/_app.pair'
-import { Route as AppRequestsRouteImport } from './routes/_app.requests'
+import { Route as AppPasteLinksRouteImport } from './routes/_app.paste-links'
 import { Route as AppServiceAccountsRouteImport } from './routes/_app.service-accounts'
 import { Route as AppSigninRouteImport } from './routes/_app.signin'
 import { Route as PasteIdRouteImport } from './routes/paste.$id'
@@ -63,9 +63,9 @@ const AppPairRoute = AppPairRouteImport.update({
   path: '/pair',
   getParentRoute: () => AppRoute,
 } as any)
-const AppRequestsRoute = AppRequestsRouteImport.update({
-  id: '/requests',
-  path: '/requests',
+const AppPasteLinksRoute = AppPasteLinksRouteImport.update({
+  id: '/paste-links',
+  path: '/paste-links',
   getParentRoute: () => AppRoute,
 } as any)
 const AppServiceAccountsRoute = AppServiceAccountsRouteImport.update({
@@ -102,7 +102,7 @@ export interface FileRoutesByFullPath {
   '/activity': typeof AppActivityRoute
   '/bin': typeof AppBinRoute
   '/pair': typeof AppPairRoute
-  '/requests': typeof AppRequestsRoute
+  '/paste-links': typeof AppPasteLinksRoute
   '/service-accounts': typeof AppServiceAccountsRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
@@ -117,7 +117,7 @@ export interface FileRoutesByTo {
   '/activity': typeof AppActivityRoute
   '/bin': typeof AppBinRoute
   '/pair': typeof AppPairRoute
-  '/requests': typeof AppRequestsRoute
+  '/paste-links': typeof AppPasteLinksRoute
   '/service-accounts': typeof AppServiceAccountsRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
@@ -134,7 +134,7 @@ export interface FileRoutesById {
   '/_app/activity': typeof AppActivityRoute
   '/_app/bin': typeof AppBinRoute
   '/_app/pair': typeof AppPairRoute
-  '/_app/requests': typeof AppRequestsRoute
+  '/_app/paste-links': typeof AppPasteLinksRoute
   '/_app/service-accounts': typeof AppServiceAccountsRoute
   '/_app/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
@@ -151,7 +151,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/bin'
     | '/pair'
-    | '/requests'
+    | '/paste-links'
     | '/service-accounts'
     | '/signin'
     | '/paste/$id'
@@ -166,7 +166,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/bin'
     | '/pair'
-    | '/requests'
+    | '/paste-links'
     | '/service-accounts'
     | '/signin'
     | '/paste/$id'
@@ -182,7 +182,7 @@ export interface FileRouteTypes {
     | '/_app/activity'
     | '/_app/bin'
     | '/_app/pair'
-    | '/_app/requests'
+    | '/_app/paste-links'
     | '/_app/service-accounts'
     | '/_app/signin'
     | '/paste/$id'
@@ -256,11 +256,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPairRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/requests': {
-      id: '/_app/requests'
-      path: '/requests'
-      fullPath: '/requests'
-      preLoaderRoute: typeof AppRequestsRouteImport
+    '/_app/paste-links': {
+      id: '/_app/paste-links'
+      path: '/paste-links'
+      fullPath: '/paste-links'
+      preLoaderRoute: typeof AppPasteLinksRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/service-accounts': {
@@ -306,7 +306,7 @@ interface AppRouteChildren {
   AppActivityRoute: typeof AppActivityRoute
   AppBinRoute: typeof AppBinRoute
   AppPairRoute: typeof AppPairRoute
-  AppRequestsRoute: typeof AppRequestsRoute
+  AppPasteLinksRoute: typeof AppPasteLinksRoute
   AppServiceAccountsRoute: typeof AppServiceAccountsRoute
   AppSigninRoute: typeof AppSigninRoute
   AppEnvironmentsIdRoute: typeof AppEnvironmentsIdRoute
@@ -318,7 +318,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppActivityRoute: AppActivityRoute,
   AppBinRoute: AppBinRoute,
   AppPairRoute: AppPairRoute,
-  AppRequestsRoute: AppRequestsRoute,
+  AppPasteLinksRoute: AppPasteLinksRoute,
   AppServiceAccountsRoute: AppServiceAccountsRoute,
   AppSigninRoute: AppSigninRoute,
   AppEnvironmentsIdRoute: AppEnvironmentsIdRoute,

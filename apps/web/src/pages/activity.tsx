@@ -1,13 +1,14 @@
-import type { AuditAction, AuditEvent } from '@baymutt/api';
+import type { ActivityAction, ActivityEvent, Org } from '@baymutt/api';
 import { useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
+import { usePickedOrg } from '../components/orgs.tsx';
 import { Code, Empty, Notice, PageHeader, Skeleton } from '../components/parts.tsx';
-import { auditAtom } from '../lib/data.ts';
+import { activityAtom } from '../lib/data.ts';
 import { clockTime, dayLabel, dayOf, exactTime } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-const environment = ({ environmentName }: AuditEvent) => <Code>{environmentName}</Code>;
-const secret = ({ secretName, version }: AuditEvent) => (
+const environment = ({ environmentName }: ActivityEvent) => <Code>{environmentName}</Code>;
+const secret = ({ secretName, version }: ActivityEvent) => (
   <>
     <Code>{secretName}</Code>
     {version !== null && ` (v${version})`}
@@ -18,14 +19,14 @@ const secret = ({ secretName, version }: AuditEvent) => (
  * A grant's detail is "<service account>: <read + write>": as a sentence, "<read + write> for <service account>".
  * Anything else is shown as it came.
  */
-const grantDetail = ({ detail }: AuditEvent) => {
+const grantDetail = ({ detail }: ActivityEvent) => {
   const split = detail?.lastIndexOf(': ') ?? -1;
   if (detail === null || split === -1) return detail;
   return `${detail.slice(split + 2)} for ${detail.slice(0, split)}`;
 };
 
 /** What happened, as the rest of a sentence that starts with who did it. */
-const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
+const DEEDS: Record<ActivityAction, (event: ActivityEvent) => ReactNode> = {
   'account.create': () => 'created the account',
   'passkey.add': () => 'added a passkey that opens the vault',
   'passkey.remove': () => 'removed a passkey',
@@ -34,7 +35,7 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
   'recovery.rotate': () => 'made a new recovery key',
   'credential.pair': ({ detail }) => <>approved the CLI login {detail}</>,
   'credential.create': ({ detail }) => <>made the service account {detail}</>,
-  'credential.revoke': ({ detail }) => <>revoked the service account {detail}</>,
+  'credential.revoke': ({ detail }) => <>revoked {detail}</>,
   'credential.expiry': ({ detail }) => {
     const split = detail?.lastIndexOf(': ') ?? -1;
     if (detail === null || split === -1) return <>changed when {detail} expires</>;
@@ -45,8 +46,13 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
       </>
     );
   },
+  'org.create': ({ detail }) => (
+    <>
+      created the org <Code>{detail}</Code>
+    </>
+  ),
+  'org.delete': ({ detail }) => <>deleted the org {detail}</>,
   'environment.create': event => <>created {environment(event)}</>,
-  'environment.archive': event => <>deleted {environment(event)}</>,
   'environment.delete': event => <>deleted {environment(event)}</>,
   'environment.restore': event => <>restored {environment(event)} from the bin</>,
   'environment.purge': event => (
@@ -96,46 +102,32 @@ const DEEDS: Record<AuditAction, (event: AuditEvent) => ReactNode> = {
       removed {event.detail}’s access to {environment(event)}
     </>
   ),
-  'access.request': event => <>asked for access to {environment(event)}</>,
-  'access.approve': event => (
+  'paste-link.create': event => (
     <>
-      approved {grantDetail(event)} on {environment(event)}
+      made a paste link for {secret(event)} in {environment(event)}
     </>
   ),
-  'access.deny': event => (
-    <>
-      denied {event.detail} access to {environment(event)}
-    </>
-  ),
-  'paste.request': event => (
-    <>
-      asked for {secret(event)} in {environment(event)}
-    </>
-  ),
-  'paste.fulfil': event => (
+  'paste-link.fulfil': event => (
     <>
       pasted {secret(event)} into {environment(event)}
     </>
   ),
-  'paste.cancel': event => (
+  'paste-link.cancel': event => (
     <>
-      dismissed the request for {secret(event)} in {environment(event)}
+      dismissed the paste link for {secret(event)} in {environment(event)}
     </>
   ),
 };
 
-export const ActivityPage = () => {
-  const result = useAtomValue(auditAtom(null));
+/** An org's entries, each environment named by its address; the account's own name none. */
+const OrgActivity = ({ org }: { readonly org: Org }) => {
+  const result = useAtomValue(activityAtom(org.id));
   const events = latest(result);
   const now = Date.now();
   // Newest first, so each day's entries stay in the order they came.
   const days = Map.groupBy(events ?? [], event => dayOf(event.at));
   return (
     <>
-      <PageHeader
-        title="Activity"
-        lede="Who loaded, wrote or granted what, newest first. The last 100 entries."
-      />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
       {events === null && !failureMessage(result) && <Skeleton rows={6} />}
       {events?.length === 0 && (
@@ -157,7 +149,13 @@ export const ActivityPage = () => {
                 >
                   <p className="min-w-0 flex-1">
                     <span className="font-medium">{event.actor.name}</span>{' '}
-                    {DEEDS[event.action](event)}
+                    {DEEDS[event.action]({
+                      ...event,
+                      environmentName:
+                        event.environmentName === null
+                          ? null
+                          : `${org.slug}/${event.environmentName}`,
+                    })}
                   </p>
                   <time
                     dateTime={Temporal.Instant.fromEpochMilliseconds(event.at).toString({
@@ -174,6 +172,25 @@ export const ActivityPage = () => {
           </section>
         ))}
       </div>
+    </>
+  );
+};
+
+export const ActivityPage = () => {
+  const { orgs, org } = usePickedOrg();
+  return (
+    <>
+      <PageHeader
+        title="Activity"
+        lede={`Who loaded, wrote or granted what${org === null ? '' : ` in ${org.name}`}, and what was done to your account, newest first. The last 100 entries.`}
+      />
+      {org !== null && <OrgActivity org={org} />}
+      {orgs === null && <Skeleton rows={6} />}
+      {orgs?.length === 0 && (
+        <Empty title="No org yet">
+          <p>Activity is kept per org. Create one under Environments.</p>
+        </Empty>
+      )}
     </>
   );
 };
