@@ -39,33 +39,3 @@
     font-family: var(--font-mono);
   }
 }
-
-/* A picture of one of the dashboard's buttons, inside a drawing of the dashboard. It is a span:
-   nothing on this page acts on an account. */
-@layer components {
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.3125rem 0.75rem;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-control);
-    background: var(--surface);
-    color: var(--foreground);
-    font-size: 0.8125rem;
-    font-weight: 500;
-    line-height: 1.5;
-    white-space: nowrap;
-  }
-  /* The depicted primary action, quieter than the page's own. */
-  .btn.primary {
-    border-color: transparent;
-    background: var(--accent-soft);
-  }
-  /* The pairing code, the same in the terminal and on the drawn page. */
-  mark.match {
-    background: none;
-    color: inherit;
-    text-decoration: underline 2px var(--mutt);
-    text-underline-offset: 4px;
-  }
-}

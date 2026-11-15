@@ -1,28 +1,11 @@
 ---
-import mark from '@baymutt/web/mark.svg?url';
 import shore from '../assets/shore.webp';
 import shoreDusk from '../assets/shore-dusk.webp';
-import PairingCode from '../components/dashboard/PairingCode.astro';
-import PastePage from '../components/dashboard/PastePage.astro';
-import Screen from '../components/dashboard/Screen.astro';
 import Mark from '../components/Mark.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import Terminal from '../components/Terminal.astro';
-import {
-  ACCOUNT,
-  ADDRESS,
-  LOAD,
-  MAC_MINI,
-  MACBOOK,
-  PAIR,
-  PASTE_LINK,
-  ROLLBACK,
-  SCHEMA_FILE,
-  SERVICE_ACCOUNT,
-  START,
-  WRITE,
-} from '../example.ts';
+import { PASTE_LINK, SCHEMA_FILE, SERVICE_ACCOUNT, START, WRITE } from '../example.ts';
 import Layout from '../layouts/Layout.astro';
 
 const DESCRIPTION =
@@ -74,41 +57,6 @@ const softwareApplication = {
             alt="baymutt’s mutt sitting on the shore of a bay, a key hanging from its mouth"
           />
         </picture>
-        <Terminal
-          class="start"
-          label="A terminal: you install baymutt and log in, then an agent runs a command with its secrets"
-          lines={START}
-        />
-      </div>
-    </section>
-
-    <section class="sec" aria-labelledby="once-title">
-      <div class="wrap">
-        <div class="head">
-          <div>
-            <h2 id="once-title">The one decision is yours.</h2>
-            <p class="say">
-              <code>baymutt login</code> prints a link. Open it, check the code matches the
-              terminal’s, and approve. That CLI login then reads and writes every environment of
-              your orgs, until you revoke it.
-            </p>
-          </div>
-          <ul class="nots" aria-label="After approval">
-            <li>No prompt when an agent reads or writes a secret.</li>
-            <li>No key pasted into a chat.</li>
-          </ul>
-        </div>
-        <div class="two">
-          <Terminal
-            label="The terminal that logs in"
-            title={MAC_MINI.name}
-            aside="example account"
-            lines={PAIR}
-          />
-          <Screen path="/pair" label="A drawing of the approval page in your browser">
-            <PairingCode account={ACCOUNT.name} code={MAC_MINI.code} />
-          </Screen>
-        </div>
       </div>
     </section>
 
@@ -133,19 +81,22 @@ const softwareApplication = {
                   <span class:list={['line', { comment: line.startsWith('#') }]}>{line}</span>
                 ))}</pre>
               </figure>
-              <Terminal label="A terminal" lines={LOAD} />
+              <Terminal label="A terminal" lines={START} />
             </div>
           </li>
 
           <li class="row">
             <div>
-              <h3>Undo a bad write</h3>
-              <p>Every write is a new version. A deleted secret waits in the bin for 30 days.</p>
+              <h3>Write without seeing the value</h3>
+              <p>
+                A confirmation is a name, a version and a length. Every write is a new version, so
+                a bad one rolls back.
+              </p>
             </div>
-            <Terminal label="A terminal" lines={ROLLBACK} />
+            <Terminal label="A terminal" lines={WRITE} />
           </li>
 
-          <li class="row wide">
+          <li class="row">
             <div>
               <h3>Ask you for what only you can fetch</h3>
               <p>
@@ -153,18 +104,7 @@ const softwareApplication = {
                 that is where you are, and your browser seals it before it is sent.
               </p>
             </div>
-            <div class="two">
-              <Terminal label="A terminal" lines={PASTE_LINK} />
-              <Screen path="/paste" label="A drawing of the paste page in your browser">
-                <PastePage
-                  name="RESEND_API_KEY"
-                  serviceAccount={MACBOOK.name}
-                  environment={ADDRESS}
-                  reason="to send sign-in emails"
-                  where="Resend dashboard, API Keys"
-                />
-              </Screen>
-            </div>
+            <Terminal label="A terminal" lines={PASTE_LINK} />
           </li>
 
           <li class="row">
@@ -182,21 +122,6 @@ const softwareApplication = {
       </div>
     </section>
 
-    <section class="sec keysec" aria-labelledby="key-title">
-      <div class="wrap two">
-        <img class="portrait" src={mark} width="384" height="384" alt="The mutt, a key hanging from its mouth" />
-        <div>
-          <h2 id="key-title">Agents carry the key. No command prints a value.</h2>
-          <p class="say">
-            Each CLI login’s key is made on its own computer and never sent. A confirmation is a
-            name, a version and a length, so a value never lands in an agent’s context. A failure is
-            one JSON line that says what to do next.
-          </p>
-          <Terminal class="confirm" label="A terminal" lines={WRITE} />
-        </div>
-      </div>
-    </section>
-
     <section class="sec limits" aria-labelledby="read-title">
       <div class="wrap">
         <h2 id="read-title">Sealed on your side. Unreadable on ours.</h2>
@@ -204,46 +129,11 @@ const softwareApplication = {
           Values are sealed on your computer or in your browser, to keys baymutt never holds, so
           baymutt cannot read them. <strong>It still sees names, sizes, times and who did what.</strong>
         </p>
-        <details>
-          <summary>What baymutt can and cannot do</summary>
-          <div class="ledger">
-            <div>
-              <h3>baymutt cannot</h3>
-              <ul>
-                <li>Read a value, in any version.</li>
-                <li>
-                  Read an environment’s, your account’s or a service account’s private key, or your
-                  recovery key.
-                </li>
-                <li>Let a service account read an environment it was not handed.</li>
-                <li>Move a value to another name, version or environment.</li>
-              </ul>
-            </div>
-            <div>
-              <h3>baymutt can still</h3>
-              <ul>
-                <li>See org, environment and secret names, sizes, versions, times, and who did what.</li>
-                <li>Withhold anything, or answer with an older version.</li>
-                <li>Put a value of its own in a slot: a sealed box does not say who sealed it.</li>
-                <li>
-                  Serve a dashboard or paste page that leaks what is typed into it. The CLI and the
-                  varlock plugin run code baymutt does not serve.
-                </li>
-              </ul>
-            </div>
-          </div>
-          <ul class="fine">
-            <li>
-              Revoking a CLI login or service account stops its next load. What it already read stays
-              read.
-            </li>
-            <li>If baymutt is unreachable, loads stop, on your computer and in CI.</li>
-            <li>
-              Values are sealed with X25519 and AES-256-GCM, through WebCrypto. A passkey or a
-              password opens your vault in the browser; an email link signs you in and never opens it.
-            </li>
-          </ul>
-        </details>
+        <p class="more">
+          <a href="https://github.com/fishballapp/baymutt#how-it-keeps-values-from-the-host">
+            How it works, and what it does not hide
+          </a>
+        </p>
       </div>
     </section>
 
@@ -373,25 +263,11 @@ const softwareApplication = {
     font-weight: 500;
   }
 
-  .stage {
-    position: relative;
-    padding-bottom: 3.5rem;
-  }
-
   .stage img {
     display: block;
     width: min(100%, 33rem);
     height: auto;
     margin-left: auto;
-  }
-
-  /* The one shadow on the page: the terminal lies over the sand. */
-  .stage :global(.start) {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: min(23rem, 70%);
-    box-shadow: 0 18px 40px -18px oklch(0.2 0.03 230 / 0.45);
   }
 
   /* Sections */
@@ -410,30 +286,6 @@ const softwareApplication = {
     margin-top: 1.25rem;
     color: var(--muted);
     font-size: 1.1875rem;
-  }
-
-  .two {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-items: start;
-    gap: clamp(1.5rem, 4vw, 3rem);
-  }
-
-  .head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-items: end;
-    gap: clamp(1.5rem, 4vw, 3rem);
-    margin-bottom: clamp(2.5rem, 5vw, 3.5rem);
-  }
-
-  .nots {
-    border-top: 2px solid var(--foreground);
-  }
-
-  .nots li {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid var(--line);
   }
 
   /* The bay: where the agents work. */
@@ -483,14 +335,6 @@ const softwareApplication = {
     color: var(--fog);
   }
 
-  .row.wide {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .row.wide > div > p {
-    max-width: 40rem;
-  }
-
   .stack {
     display: grid;
     align-content: start;
@@ -529,89 +373,18 @@ const softwareApplication = {
     color: var(--fog-dim);
   }
 
-  /* The key */
-  .keysec .two {
-    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-    align-items: center;
-    gap: clamp(2.5rem, 6vw, 6rem);
-  }
-
-  .portrait {
-    display: block;
-    justify-self: center;
-    width: min(24rem, 100%);
-    height: auto;
-  }
-
-  .keysec :global(.confirm) {
-    margin-top: 2rem;
-  }
-
   /* The limits */
   .limits {
     border-top: 1px solid var(--line);
   }
 
-  details {
-    max-width: 52rem;
-    margin-top: 2rem;
-    border-top: 2px solid var(--foreground);
+  .more {
+    margin-top: 1.25rem;
   }
 
-  summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    min-height: 3.25rem;
-    padding-block: 0.75rem;
-    border-bottom: 1px solid var(--line);
-    font-weight: 600;
-    cursor: pointer;
-    list-style: none;
-  }
-
-  summary::-webkit-details-marker {
-    display: none;
-  }
-
-  summary::after {
-    content: "Show";
-    color: var(--muted);
-    font-size: 0.9375rem;
-    font-weight: 500;
-  }
-
-  details[open] summary::after {
-    content: "Hide";
-  }
-
-  .ledger {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 3rem;
-    padding-top: 1.5rem;
-  }
-
-  .ledger h3 {
-    padding-bottom: 0.5rem;
-    font-size: 0.9375rem;
-    font-weight: 600;
-    letter-spacing: 0;
-  }
-
-  .ledger li {
-    padding-block: 0.625rem;
-    border-top: 1px solid var(--line);
-    font-size: 0.9375rem;
-  }
-
-  .fine {
-    display: grid;
-    gap: 0.625rem;
-    margin-top: 1.75rem;
-    color: var(--muted);
-    font-size: 0.9375rem;
+  .more a {
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 
   /* The close: the same action, nothing else to read. */
@@ -634,9 +407,6 @@ const softwareApplication = {
 
   @media (width < 60rem) {
     .hero,
-    .two,
-    .head,
-    .keysec .two,
     .row {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -649,27 +419,9 @@ const softwareApplication = {
     .stage img {
       margin-inline: auto;
     }
-
-    .stage :global(.start) {
-      left: 50%;
-      width: min(23rem, 92%);
-      transform: translateX(-50%);
-    }
-
-    .portrait {
-      width: min(16rem, 70%);
-    }
   }
 
   @media (width < 40rem) {
-    .ledger {
-      grid-template-columns: 1fr;
-    }
-
-    .ledger div + div {
-      margin-top: 1.5rem;
-    }
-
     .hero .go {
       width: 100%;
     }
