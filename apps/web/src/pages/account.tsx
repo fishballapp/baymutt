@@ -37,7 +37,6 @@ const Passkeys = () => {
   return (
     <Section
       title="Passkeys"
-      lede="Each one signs in and opens the vault with one prompt."
       action={
         <Button disabled={adding.waiting} onClick={() => add(owner)}>
           {adding.waiting ? 'Waiting for your passkey…' : 'Add a passkey'}
@@ -206,7 +205,7 @@ export const AccountPage = () => {
     <>
       <PageHeader
         title={owner.accountName}
-        lede={`${owner.email}. Free while baymutt is in beta. Your vault stays open in this browser until you sign out.`}
+        lede={owner.email}
         action={<Button onClick={() => signOut()}>Sign out</Button>}
       />
       <Section title="Orgs" lede="Environments belong to an org. You own each org you create.">

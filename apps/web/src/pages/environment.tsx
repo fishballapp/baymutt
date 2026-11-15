@@ -47,7 +47,7 @@ const isSecretName = Schema.is(SecretNameSchema);
 
 const SEALED_NOTE = 'Sealed in this browser to the environment’s key: baymutt cannot read it.';
 
-const OPEN_FAILED = 'Something went wrong on our side; try again.';
+const OPEN_FAILED = 'Couldn’t open this value. Try again.';
 
 /** Name and value in; a sealed version out. `name` fixed means replacing that secret. */
 const ValueForm = ({
@@ -336,7 +336,7 @@ const Secrets = ({ environment }: { readonly environment: Environment }) => {
   return (
     <Section
       title="Secrets"
-      lede="Each value is sealed to the environment’s key and masked here. Reveal and Copy open it in this browser, and Activity records each time."
+      lede="Reveal and Copy open a value in this browser, and Activity records each time."
       action={
         !isAdding && (
           <Button intent="primary" onClick={() => setIsAdding(true)}>
