@@ -1,18 +1,22 @@
 ---
-type Props = { serviceAccount: string; account: string; code: string };
-const { serviceAccount, account, code } = Astro.props;
+// The approval page (apps/web/src/pages/pair.tsx), abridged to what a visitor needs to see.
+type Props = { account: string; code: string };
+const { account, code } = Astro.props;
 ---
 
 <div class="pair">
-  <p class="title">Approve this login?</p>
-  <p class="lede">
-    A terminal ran <code>baymutt login</code> as <strong>{serviceAccount}</strong> and asks to join{' '}
-    <strong>{account}</strong>. Approving lets it read and write every environment, now and later.
-  </p>
-  <div class="code-panel">
-    <p>This must match the code in the terminal</p>
-    <code class="code">{code}</code>
+  <div>
+    <p class="title">Approve this login?</p>
+    <p class="lede">A terminal ran <code>baymutt login</code> and asks to join {account}.</p>
   </div>
+  <div class="code-panel">
+    <code class="code"><mark class="match">{code}</mark></code>
+    <p>This must match the code in the terminal.</p>
+  </div>
+  <p>
+    Approving lets it <strong>read and write every environment of your orgs</strong>, now and later.
+    What it reads stays read, even after you revoke it.
+  </p>
   <div class="actions" aria-hidden="true">
     <span class="btn primary">The codes match: approve it</span>
     <span class="btn">Do not approve</span>
@@ -20,6 +24,11 @@ const { serviceAccount, account, code } = Astro.props;
 </div>
 
 <style>
+  .pair {
+    display: grid;
+    gap: 0.875rem;
+  }
+
   p {
     margin: 0;
   }
@@ -31,19 +40,15 @@ const { serviceAccount, account, code } = Astro.props;
   }
 
   .lede {
-    margin-top: 0.25rem;
     color: var(--muted);
-    font-size: 0.8125rem;
   }
 
-  .lede strong {
-    color: var(--foreground);
-    font-weight: 500;
+  strong {
+    font-weight: 650;
   }
 
   .code-panel {
-    margin-top: 1rem;
-    padding: 0.875rem 1rem;
+    padding: 0.75rem 1rem;
     border: 1px solid var(--line);
     border-radius: var(--radius-panel);
     background: var(--surface);
@@ -56,16 +61,14 @@ const { serviceAccount, account, code } = Astro.props;
 
   .code {
     display: block;
-    margin-top: 0.25rem;
-    font-size: 1.75rem;
+    font-size: 1.5rem;
     font-weight: 500;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
   }
 
   .actions {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
-    margin-top: 1rem;
   }
 </style>

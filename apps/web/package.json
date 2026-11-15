@@ -6,7 +6,8 @@
   "type": "module",
   "description": "baymutt's dashboard: the owner's side. A Vite/React SPA that holds the vault in memory, seals and wraps in the browser, and never shows a value.",
   "exports": {
-    "./styles.css": "./src/styles/index.css"
+    "./styles.css": "./src/styles/index.css",
+    "./mark.svg": "./src/assets/mark.svg"
   },
   "scripts": {
     "dev": "vite",

@@ -2,20 +2,13 @@
 import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
 import { cn } from 'cn';
 import { type ComponentProps, Fragment, type ReactNode } from 'react';
+import mark from '../assets/mark.svg';
 import { useCopy } from '../lib/clipboard.ts';
 import { ago, exactTime } from '../lib/format.ts';
 import { Button } from './ui/button.tsx';
 
-/** A dog tag: baymutt's mark. */
-export const Mark = ({ className }: { readonly className?: string }) => (
-  <svg viewBox="0 0 32 32" aria-hidden="true" className={cn('size-5 text-mutt', className)}>
-    <path
-      fill="currentColor"
-      fillRule="evenodd"
-      d="M10 3h12a5 5 0 0 1 5 5v13a8 8 0 0 1-8 8h-6a8 8 0 0 1-8-8V8a5 5 0 0 1 5-5Zm6 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"
-    />
-  </svg>
-);
+/** baymutt's mark: the mutt in a round window of the bay, a key hanging from its mouth. */
+const Mark = () => <img src={mark} alt="" className="size-5 shrink-0" />;
 
 export const Wordmark = () => (
   <span className="flex items-center gap-2 text-md font-[650] tracking-tight">

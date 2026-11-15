@@ -1,26 +1,32 @@
 ---
-import AccessBoard from '../components/AccessBoard.astro';
-import ActivityRows from '../components/dashboard/ActivityRows.astro';
+import mark from '@baymutt/web/mark.svg?url';
+import shore from '../assets/shore.webp';
+import shoreDusk from '../assets/shore-dusk.webp';
 import PairingCode from '../components/dashboard/PairingCode.astro';
 import PastePage from '../components/dashboard/PastePage.astro';
 import Screen from '../components/dashboard/Screen.astro';
-import SecretRows from '../components/dashboard/SecretRows.astro';
+import Mark from '../components/Mark.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import Terminal from '../components/Terminal.astro';
 import {
   ACCOUNT,
+  ADDRESS,
+  LOAD,
   MAC_MINI,
   MACBOOK,
   PAIR,
-  ADDRESS,
-  ENVIRONMENT,
   PASTE_LINK,
+  ROLLBACK,
   SCHEMA_FILE,
-  SERVICE_ACCOUNT_COMMAND,
+  SERVICE_ACCOUNT,
+  START,
   WRITE,
 } from '../example.ts';
 import Layout from '../layouts/Layout.astro';
+
+const DESCRIPTION =
+  'baymutt is a secret manager for coding agents. Approve a CLI login once; your agents then load, set and roll back secrets with no prompt, and no command prints a value. Free while in beta.';
 
 const softwareApplication = {
   '@context': 'https://schema.org',
@@ -28,154 +34,128 @@ const softwareApplication = {
   name: 'baymutt',
   applicationCategory: 'DeveloperApplication',
   url: 'https://baymutt.fsh.ba/',
-  description:
-    'A zero-knowledge secret store for people who run coding agents. Agents load and write secrets with no approval prompt, and the store cannot read any of them.',
+  description: DESCRIPTION,
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', description: 'Free in beta' },
   publisher: { '@type': 'Organization', name: 'Fishball Ltd', url: 'https://fishball.ltd' },
 };
 ---
 
 <Layout
-  title="baymutt: secrets your coding agents use without asking"
-  description="A zero-knowledge secret store for coding agents. Agents load and write secrets with no approval prompt, and the store cannot read any of them. Free while in beta."
+  title="baymutt: approve the login once, and your agents handle secrets from there"
+  description={DESCRIPTION}
   structuredData={softwareApplication}
 >
-  <div class="page">
+  <div class="wrap">
     <SiteHeader />
   </div>
 
   <main>
-    <section class="page hero" aria-labelledby="hero-title">
-      <h1 id="hero-title">Agents use secrets without asking you. The store can’t read a single one.</h1>
-      <div class="offer">
-        <p>
-          baymutt is a secret store for people who run coding agents. Approve a login once and
-          your agents load, write and replace secrets as you would, with no prompt. Every value
-          stays sealed, so the store cannot read them.
+    <section class="wrap hero" aria-labelledby="hero-title">
+      <div>
+        <h1 id="hero-title">
+          Approve the login once. <span>Your agents handle secrets from there.</span>
+        </h1>
+        <p class="lede">
+          baymutt is a secret manager for coding agents. From the terminal they load, set and roll
+          back secrets with no prompt, and <strong>no command prints a value</strong>.
         </p>
-        <div class="actions">
-          <a class="primary" href="/signup">Create an account</a>
-          <a class="secondary" href="/signin">Sign in</a>
+        <div class="act">
+          <a class="go" href="/signup">Create an account</a>
+          <span class="offer">Free while baymutt is in beta.</span>
         </div>
-        <p class="beta">Free while baymutt is in beta.</p>
       </div>
-      <div class="board" id="board">
-        <AccessBoard />
-      </div>
-    </section>
-
-    <section class="page ruled problem" aria-labelledby="problem-title">
-      <h2 id="problem-title">An approval you can’t judge protects nothing.</h2>
-      <div class="prose">
-        <p>
-          Give a few agents a password manager and it asks you to approve their loads: a Touch ID
-          prompt here, a dialog per terminal there, and none of them says which agent wants what,
-          or why. You approve them all, because the work stops until you do.
-        </p>
-        <p>
-          The other way out is pasting keys into the conversation, where they sit beside every web
-          page, package and issue comment the agent reads next.
-        </p>
-        <p class="turn">
-          baymutt takes the prompt out of using a secret and keeps you for the one decision that
-          matters: which computers log in as you.
-        </p>
+      <div class="stage">
+        <picture>
+          <source srcset={shoreDusk.src} media="(prefers-color-scheme: dark)" />
+          <img
+            src={shore.src}
+            width={shore.width}
+            height={shore.height}
+            alt="baymutt’s mutt sitting on the shore of a bay, a key hanging from its mouth"
+          />
+        </picture>
+        <Terminal
+          class="start"
+          label="A terminal: you install baymutt and log in, then an agent runs a command with its secrets"
+          lines={START}
+        />
       </div>
     </section>
 
-    <section class="bay" aria-labelledby="how-title" id="how">
-      <div class="page">
-        <header class="bay-head">
-          <h2 id="how-title">In the terminal, nobody waits.</h2>
-          <p>
-            Agents work through the <code>baymutt</code> CLI and a varlock plugin. Every command
-            prints JSON on stdout, and none prints a value. You are needed to approve a login, and
-            to paste a value only you can fetch.
-          </p>
-        </header>
+    <section class="sec" aria-labelledby="once-title">
+      <div class="wrap">
+        <div class="head">
+          <div>
+            <h2 id="once-title">The one decision is yours.</h2>
+            <p class="say">
+              <code>baymutt login</code> prints a link. Open it, check the code matches the
+              terminal’s, and approve. That CLI login then reads and writes every environment of
+              your orgs, until you revoke it.
+            </p>
+          </div>
+          <ul class="nots" aria-label="After approval">
+            <li>No prompt when an agent reads or writes a secret.</li>
+            <li>No key pasted into a chat.</li>
+          </ul>
+        </div>
+        <div class="two">
+          <Terminal
+            label="The terminal that logs in"
+            title={MAC_MINI.name}
+            aside="example account"
+            lines={PAIR}
+          />
+          <Screen path="/pair" label="A drawing of the approval page in your browser">
+            <PairingCode account={ACCOUNT.name} code={MAC_MINI.code} />
+          </Screen>
+        </div>
+      </div>
+    </section>
 
-        <ol class="steps">
-          <li class="step">
-            <div class="step-text">
-              <h3>Log in, once.</h3>
+    <section class="sec bay" aria-labelledby="then-title">
+      <div class="wrap">
+        <h2 id="then-title">Then your agents get on with it.</h2>
+        <p class="say">None of this needs your approval.</p>
+
+        <ol class="rows">
+          <li class="row">
+            <div>
+              <h3>Load values into any command</h3>
               <p>
-                Install the CLI from npm and run <code>baymutt login</code>. It makes the login’s own
-                key and prints a link. You open it, check that the code matches the terminal’s, and
-                approve it. From then on it reads and writes every environment, as you can.
+                Three lines in <code>.env.schema</code> name the environment. <code>varlock run</code>{' '}
+                loads it into the process.
               </p>
             </div>
-            <div class="step-visuals">
-              <Terminal serviceAccount={MAC_MINI.name} lines={PAIR} />
-              <Screen path="/pair" label="The approval page, as the dashboard shows it">
-                <PairingCode serviceAccount={MAC_MINI.name} account={ACCOUNT.name} code={MAC_MINI.code} />
-              </Screen>
-            </div>
-          </li>
-
-          <li class="step">
-            <div class="step-text">
-              <h3>Load with no prompt.</h3>
-              <p>
-                Name the environment in your <code>.env.schema</code>. varlock loads its values through
-                the plugin and opens them on the computer that runs it, with no prompt and no cache. The
-                login’s key stays in the keychain, or the plugin reads a key from <code>BAYMUTT_KEY</code>.
-              </p>
-            </div>
-            <div class="step-visuals single">
-              <figure class="file">
-                <figcaption><code>.env.schema</code></figcaption>
-                <pre><code>{SCHEMA_FILE.map(line => (
+            <div class="stack">
+              <figure class="file" aria-label="An .env.schema file">
+                <figcaption>.env.schema</figcaption>
+                <pre>{SCHEMA_FILE.map(line => (
                   <span class:list={['line', { comment: line.startsWith('#') }]}>{line}</span>
-                ))}</code></pre>
+                ))}</pre>
               </figure>
+              <Terminal label="A terminal" lines={LOAD} />
             </div>
           </li>
 
-          <li class="step">
-            <div class="step-text">
-              <h3>Write without you.</h3>
-              <p>
-                An agent sets, generates, deletes and rolls back values. Every write is a new
-                version and every delete is soft, so a wrong one rolls back. Writing needs no key,
-                so a service account given write alone can never read.
-              </p>
+          <li class="row">
+            <div>
+              <h3>Undo a bad write</h3>
+              <p>Every write is a new version. A deleted secret waits in the bin for 30 days.</p>
             </div>
-            <div class="step-visuals">
-              <Terminal serviceAccount={MACBOOK.name} lines={WRITE} />
-              <Screen
-                path={`/environments/${ENVIRONMENT.id}`}
-                label="An environment’s secrets, as the dashboard shows them"
-                isFlush
-              >
-                <SecretRows
-                  secrets={[
-                    { name: 'DATABASE_URL', size: '157 B', version: 2, by: 'MacBook, yesterday' },
-                    {
-                      name: 'SESSION_SECRET',
-                      size: '103 B',
-                      version: 4,
-                      by: 'MacBook, just now',
-                      isWritten: true,
-                    },
-                    { name: 'STRIPE_SECRET_KEY', size: '167 B', version: 1, by: 'Paste link, 2 days ago' },
-                  ]}
-                />
-              </Screen>
-            </div>
+            <Terminal label="A terminal" lines={ROLLBACK} />
           </li>
 
-          <li class="step">
-            <div class="step-text">
-              <h3>Ask you for what only you can fetch.</h3>
+          <li class="row wide">
+            <div>
+              <h3>Ask you for what only you can fetch</h3>
               <p>
-                When a value lives in a vendor’s dashboard, the agent makes a paste link for it by
-                name. The link works once, for 15 minutes. You paste the value, on your phone if that’s where you
-                are, and your browser seals it before it is sent.
+                The agent makes a paste link for one name. You paste the value, on your phone if
+                that is where you are, and your browser seals it before it is sent.
               </p>
             </div>
-            <div class="step-visuals">
-              <Terminal serviceAccount={MACBOOK.name} lines={PASTE_LINK} />
-              <Screen path="/paste" label="The paste page, as the dashboard shows it">
+            <div class="two">
+              <Terminal label="A terminal" lines={PASTE_LINK} />
+              <Screen path="/paste" label="A drawing of the paste page in your browser">
                 <PastePage
                   name="RESEND_API_KEY"
                   serviceAccount={MACBOOK.name}
@@ -186,394 +166,359 @@ const softwareApplication = {
               </Screen>
             </div>
           </li>
-        </ol>
 
-        <p class="bay-foot">
-          A login can make a service account that reaches only what it names and cannot widen
-          it:{' '}<code>{SERVICE_ACCOUNT_COMMAND}</code>. Its key goes to the command after{' '}
-          <code>--</code>{' '}and is never printed.
-        </p>
-      </div>
-    </section>
-
-    <section class="page limits" aria-labelledby="limits-title" id="limits">
-      <div class="limits-head">
-        <h2 id="limits-title">baymutt cannot read what it stores.</h2>
-        <p>
-          Values are sealed on the computer running the CLI or in your browser, to an environment key the store never
-          holds. Writing needs only the environment’s public key. Reading needs the environment key wrapped
-          to that one reader, which only a holder of the key can make: your browser wraps every
-          environment to each login you approve, and a login hands a narrower service account only what
-          it holds. So a service account cannot widen its own access, and neither can the store.
-        </p>
-      </div>
-
-      <div class="ledger">
-        <div class="column">
-          <h3>The store cannot</h3>
-          <ul>
-            <li>Read a value, in any version.</li>
-            <li>
-              Read an environment’s, the account’s or a service account’s private key, your data key or your
-              recovery key.
-            </li>
-            <li>Let a service account read an environment.</li>
-            <li>Move a value to another name, version or environment.</li>
-          </ul>
-        </div>
-        <div class="column">
-          <h3>The store can still</h3>
-          <ul>
-            <li>See names, sizes, versions, times, and who did what.</li>
-            <li>Withhold anything, or answer with an older version.</li>
-            <li>Put a value of its own in a slot: a sealed box does not say who sealed it.</li>
-            <li>
-              Serve a dashboard or paste page that leaks what is typed into it. The CLI and the
-              plugin run code the store does not serve.
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <ul class="fine">
-        <li>
-          Zero knowledge here is about reading, not integrity or availability. If the store is
-          unreachable, loads stop, locally and in CI.
-        </li>
-        <li>
-          Values are sealed with X25519 and AES-256-GCM, through WebCrypto. A passkey opens your
-          vault through its PRF output, a password through 650,000 rounds of PBKDF2. An email link
-          signs you in and never opens it.
-        </li>
-        <li>
-          Revoking a login or a service account, or letting it expire, stops its next load. What it
-          already read stays read: replace those values at their vendors.
-        </li>
-      </ul>
-    </section>
-
-    <section class="page ruled owner" aria-labelledby="owner-title">
-      <div class="owner-text">
-        <h2 id="owner-title">You open it when an agent asks.</h2>
-        <ul class="duties">
-          <li>Approve a login by comparing a code, and choose when it expires.</li>
-          <li>Paste a value an agent asked for.</li>
-          <li>See every login and service account, what each is for and when it expires.</li>
-          <li>Revoke one, and every service account it made.</li>
-          <li>Read the log: who loaded, wrote or granted what.</li>
-          <li class="with-vault">
-            Reveal or copy a value. It opens in your browser with your vault, and the log records
-            it; a session an email link made cannot open one.
+          <li class="row">
+            <div>
+              <h3>Hand CI a narrower key</h3>
+              <p>
+                A CLI login makes a service account that holds only the environments it names, and
+                cannot widen its own access. Its key goes to the command after <code>--</code>,
+                never to the screen.
+              </p>
+            </div>
+            <Terminal label="A terminal" lines={SERVICE_ACCOUNT} />
           </li>
-        </ul>
+        </ol>
       </div>
-      <Screen path="/activity" label="The activity log, as the dashboard shows it" isFlush>
-        <ActivityRows
-          entries={[
-            { who: 'Owner', what: [`approved the CLI login ${MAC_MINI.name}`], when: 'just now' },
-            {
-              who: 'Paste link',
-              what: [
-                'pasted ',
-                { code: 'STRIPE_SECRET_KEY' },
-                ' (v1) into ',
-                { code: ADDRESS },
-              ],
-              when: '2 days ago',
-            },
-            {
-              who: MACBOOK.name,
-              what: [
-                'made a paste link for ',
-                { code: 'STRIPE_SECRET_KEY' },
-                ' in ',
-                { code: ADDRESS },
-              ],
-              when: '2 days ago',
-            },
-            { who: 'CI deploy', what: ['loaded ', { code: ADDRESS }], when: '2 days ago' },
-            { who: MACBOOK.name, what: ['made the service account CI deploy'], when: '3 days ago' },
-          ]}
-        />
-      </Screen>
     </section>
 
-    <section class="page ruled close" aria-labelledby="close-title">
-      <h2 id="close-title">Start with an email link.</h2>
-      <p>
-        Then a passkey or a password, and keep the recovery key it shows you once. Free while
-        baymutt is in beta; an account holds up to 100 environments, 200 service accounts and 500
-        secrets an environment.
-      </p>
-      <div class="actions">
-        <a class="primary" href="/signup">Create an account</a>
-        <a class="secondary" href="/signin">Sign in</a>
+    <section class="sec keysec" aria-labelledby="key-title">
+      <div class="wrap two">
+        <img class="portrait" src={mark} width="384" height="384" alt="The mutt, a key hanging from its mouth" />
+        <div>
+          <h2 id="key-title">Agents carry the key. No command prints a value.</h2>
+          <p class="say">
+            Each CLI login’s key is made on its own computer and never sent. A confirmation is a
+            name, a version and a length, so a value never lands in an agent’s context. A failure is
+            one JSON line that says what to do next.
+          </p>
+          <Terminal class="confirm" label="A terminal" lines={WRITE} />
+        </div>
+      </div>
+    </section>
+
+    <section class="sec limits" aria-labelledby="read-title">
+      <div class="wrap">
+        <h2 id="read-title">Sealed on your side. Unreadable on ours.</h2>
+        <p class="say">
+          Values are sealed on your computer or in your browser, to keys baymutt never holds, so
+          baymutt cannot read them. <strong>It still sees names, sizes, times and who did what.</strong>
+        </p>
+        <details>
+          <summary>What baymutt can and cannot do</summary>
+          <div class="ledger">
+            <div>
+              <h3>baymutt cannot</h3>
+              <ul>
+                <li>Read a value, in any version.</li>
+                <li>
+                  Read an environment’s, your account’s or a service account’s private key, or your
+                  recovery key.
+                </li>
+                <li>Let a service account read an environment it was not handed.</li>
+                <li>Move a value to another name, version or environment.</li>
+              </ul>
+            </div>
+            <div>
+              <h3>baymutt can still</h3>
+              <ul>
+                <li>See org, environment and secret names, sizes, versions, times, and who did what.</li>
+                <li>Withhold anything, or answer with an older version.</li>
+                <li>Put a value of its own in a slot: a sealed box does not say who sealed it.</li>
+                <li>
+                  Serve a dashboard or paste page that leaks what is typed into it. The CLI and the
+                  varlock plugin run code baymutt does not serve.
+                </li>
+              </ul>
+            </div>
+          </div>
+          <ul class="fine">
+            <li>
+              Revoking a CLI login or service account stops its next load. What it already read stays
+              read.
+            </li>
+            <li>If baymutt is unreachable, loads stop, on your computer and in CI.</li>
+            <li>
+              Values are sealed with X25519 and AES-256-GCM, through WebCrypto. A passkey or a
+              password opens your vault in the browser; an email link signs you in and never opens it.
+            </li>
+          </ul>
+        </details>
+      </div>
+    </section>
+
+    <section class="close" aria-label="Create an account">
+      <div class="wrap">
+        <Mark size={80} class="close-mark" />
+        <div class="act">
+          <a class="go" href="/signup">Create an account</a>
+          <span class="offer">Free while baymutt is in beta.</span>
+        </div>
       </div>
     </section>
   </main>
 
-  <div class="page">
+  <div class="wrap">
     <SiteFooter />
   </div>
 </Layout>
 
 <style>
-  .page {
+  .wrap {
     --gutter: clamp(1.25rem, 4vw, 3rem);
     width: 100%;
-    max-width: 76rem;
+    max-width: 74rem;
     margin-inline: auto;
     padding-inline: var(--gutter);
   }
 
-  /* A hairline over a section, as wide as its content. */
-  .ruled {
-    background: linear-gradient(var(--line) 0 0) top center / calc(100% - 2 * var(--gutter)) 1px
-      no-repeat;
+  h1,
+  h2,
+  h3,
+  p,
+  ul,
+  ol,
+  figure {
+    margin: 0;
   }
 
-  main a:not(.primary, .secondary) {
-    color: inherit;
+  ul,
+  ol {
+    padding: 0;
+    list-style: none;
   }
 
   h1,
   h2,
   h3 {
-    margin: 0;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
   }
 
-  p {
-    margin: 0;
+  p code,
+  li code {
+    font-size: 0.9em;
   }
 
-  code {
-    font-size: 0.92em;
+  main a:not(.go) {
+    color: inherit;
   }
 
-  /* The offer: the headline holds the width, the case and the action sit at its foot. */
-  .hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2rem;
-    padding-block: clamp(2rem, 6vw, 4.5rem) clamp(4rem, 9vw, 7rem);
-  }
-
-  h1 {
-    max-width: 20ch;
-    font-size: clamp(2.375rem, 1.1rem + 4.2vw, 4.75rem);
-    line-height: 1.02;
-    letter-spacing: -0.035em;
-  }
-
-  .offer {
-    display: grid;
-    gap: 1.25rem;
-    max-width: 34rem;
-    font-size: 1.0625rem;
-    color: var(--muted);
-  }
-
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .primary,
-  .secondary {
+  /* The page's one action. */
+  .go {
     display: inline-flex;
     align-items: center;
-    min-height: 2.875rem;
-    padding: 0 1.25rem;
+    justify-content: center;
+    min-height: 3.25rem;
+    padding: 0 1.5rem;
     border-radius: var(--radius-control);
-    font-size: 1rem;
-    font-weight: 500;
-    text-decoration: none;
-    transition:
-      background-color 150ms ease-out,
-      border-color 150ms ease-out;
-  }
-
-  .primary {
     background: var(--accent);
     color: var(--accent-foreground);
+    font-size: 1.0625rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 150ms ease-out;
   }
 
-  .primary:hover {
+  .go:hover {
     background: color-mix(in oklch, var(--accent) 88%, var(--foreground));
   }
 
-  .secondary {
-    border: 1px solid var(--line);
-    color: var(--foreground);
-  }
-
-  .secondary:hover {
-    border-color: var(--accent);
-  }
-
-  .beta {
-    color: var(--foreground);
+  .offer {
+    color: var(--muted);
     font-size: 0.9375rem;
+  }
+
+  .act {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1.25rem;
+    margin-top: 2rem;
+  }
+
+  /* The first screen: the headline and the action, beside the mutt on its shore. */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    align-items: center;
+    gap: clamp(2rem, 5vw, 4.5rem);
+    min-height: min(calc(100svh - 4.75rem), 52rem);
+    padding-block: 1rem 4rem;
+  }
+
+  h1 {
+    font-size: clamp(2.375rem, 1.1rem + 3.7vw, 4.25rem);
+    line-height: 1.02;
+    letter-spacing: -0.038em;
+  }
+
+  h1 span {
+    display: block;
+    color: var(--muted);
+  }
+
+  .lede {
+    max-width: 31rem;
+    margin-top: 1.5rem;
+    color: var(--muted);
+    font-size: 1.1875rem;
+    line-height: 1.5;
+  }
+
+  .lede strong,
+  .say strong {
+    color: var(--foreground);
     font-weight: 500;
   }
 
-  .board {
-    margin-top: clamp(1rem, 3vw, 2.5rem);
-    scroll-margin-top: 1.5rem;
+  .stage {
+    position: relative;
+    padding-bottom: 3.5rem;
   }
 
-  @media (width >= 64rem) {
-    .hero {
-      grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
-      column-gap: 4rem;
-      align-items: end;
-    }
-
-    .offer {
-      padding-bottom: 0.5rem;
-    }
-
-    .board {
-      grid-column: 1 / -1;
-    }
+  .stage img {
+    display: block;
+    width: min(100%, 33rem);
+    height: auto;
+    margin-left: auto;
   }
 
-  /* One claim, held for a screen. */
-  .problem {
-    display: grid;
-    gap: 2rem;
-    padding-block: clamp(3rem, 8vw, 6rem) clamp(5rem, 11vw, 9rem);
+  /* The one shadow on the page: the terminal lies over the sand. */
+  .stage :global(.start) {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: min(23rem, 70%);
+    box-shadow: 0 18px 40px -18px oklch(0.2 0.03 230 / 0.45);
+  }
+
+  /* Sections */
+  .sec {
+    padding-block: clamp(5rem, 10vw, 8rem);
   }
 
   h2 {
-    font-size: clamp(1.875rem, 1.2rem + 2.4vw, 3.25rem);
-    line-height: 1.06;
-    letter-spacing: -0.03em;
+    font-size: clamp(2rem, 1.1rem + 2.6vw, 3.25rem);
+    line-height: 1.05;
+    letter-spacing: -0.032em;
   }
 
-  .problem h2 {
-    max-width: 16ch;
-  }
-
-  .prose {
-    display: grid;
-    gap: 1rem;
-    max-width: 38rem;
+  .say {
+    max-width: 34rem;
+    margin-top: 1.25rem;
     color: var(--muted);
-    font-size: 1.0625rem;
+    font-size: 1.1875rem;
   }
 
-  .turn {
-    margin-top: 0.5rem;
-    color: var(--foreground);
-    font-size: 1.25rem;
-    font-weight: 500;
-    line-height: 1.4;
-    letter-spacing: -0.01em;
+  .two {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+    gap: clamp(1.5rem, 4vw, 3rem);
   }
 
-  @media (width >= 64rem) {
-    .problem {
-      grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
-      column-gap: 4rem;
-    }
+  .head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: end;
+    gap: clamp(1.5rem, 4vw, 3rem);
+    margin-bottom: clamp(2.5rem, 5vw, 3.5rem);
   }
 
-  /* The bay: where the service accounts work. Water in both schemes. */
+  .nots {
+    border-top: 2px solid var(--foreground);
+  }
+
+  .nots li {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* The bay: where the agents work. */
   .bay {
-    padding-block: clamp(4rem, 9vw, 7rem);
-    border-block: 1px solid var(--bay-line);
     background: var(--bay);
     color: var(--fog);
   }
 
-  .bay-head {
-    display: grid;
-    gap: 1.25rem;
-    max-width: 46rem;
+  .bay h2,
+  .bay h3 {
+    color: var(--fog);
   }
 
-  .bay-head p,
-  .step-text p,
-  .bay-foot {
+  .bay .say,
+  .row > div > p {
     color: var(--fog-dim);
-  }
-
-  .bay-head p {
-    font-size: 1.0625rem;
   }
 
   .bay :focus-visible {
     outline-color: var(--bay-accent);
   }
 
-  .steps {
-    margin: clamp(3rem, 6vw, 4.5rem) 0 0;
-    padding: 0;
-    list-style: none;
+  .rows {
+    margin-top: clamp(3rem, 6vw, 4.5rem);
+    border-top: 2px solid var(--fog-dim);
   }
 
-  .step {
+  .row {
     display: grid;
-    gap: 1.5rem;
-    padding-block: 2.5rem;
-    border-top: 1px solid var(--bay-line);
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: clamp(1.5rem, 4vw, 4rem);
+    padding-block: clamp(2rem, 4vw, 3rem);
+    border-bottom: 1px solid var(--bay-line);
   }
 
-  .step-text {
-    display: grid;
-    align-content: start;
-    gap: 0.5rem;
+  .row h3 {
+    font-size: 1.375rem;
+    line-height: 1.25;
+  }
+
+  .row > div > p {
+    max-width: 26rem;
+    margin-top: 0.625rem;
+  }
+
+  .row > div > p code {
+    color: var(--fog);
+  }
+
+  .row.wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .row.wide > div > p {
     max-width: 40rem;
   }
 
-  h3 {
-    font-size: 1.25rem;
-    letter-spacing: -0.02em;
-  }
-
-  .step-visuals {
+  .stack {
     display: grid;
-    gap: 1rem;
-    align-items: start;
-  }
-
-  @media (width >= 64rem) {
-    .step {
-      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
-      column-gap: 3rem;
-    }
-  }
-
-  @media (width >= 80rem) {
-    .step-visuals:not(.single) {
-      grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-    }
+    align-content: start;
+    gap: 0.75rem;
   }
 
   .file {
-    margin: 0;
+    overflow: hidden;
     border: 1px solid var(--bay-line);
-    border-radius: var(--radius-panel);
+    border-radius: 12px;
     background: var(--bay-terminal);
+    color: var(--fog);
   }
 
   .file figcaption {
-    padding: 0.625rem 1rem;
+    padding: 0.5rem 1rem;
     border-bottom: 1px solid var(--bay-line);
     color: var(--fog-dim);
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
   }
 
   .file pre {
     margin: 0;
-    padding: 1rem;
+    padding: 0.875rem 1.125rem 1.125rem;
     font-size: 0.8125rem;
     line-height: 1.6;
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: anywhere;
   }
 
   .file .line {
@@ -584,149 +529,149 @@ const softwareApplication = {
     color: var(--fog-dim);
   }
 
-  .bay-foot {
-    padding-top: 2.5rem;
-    border-top: 1px solid var(--bay-line);
+  /* The key */
+  .keysec .two {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: center;
+    gap: clamp(2.5rem, 6vw, 6rem);
   }
 
-  .bay-foot a {
-    text-decoration-color: var(--bay-accent);
+  .portrait {
+    display: block;
+    justify-self: center;
+    width: min(24rem, 100%);
+    height: auto;
   }
 
-  /* What the store cannot do, and what it still can, side by side as a ledger. */
+  .keysec :global(.confirm) {
+    margin-top: 2rem;
+  }
+
+  /* The limits */
   .limits {
-    display: grid;
-    gap: clamp(2.5rem, 5vw, 3.5rem);
-    padding-block: clamp(5rem, 11vw, 9rem);
+    border-top: 1px solid var(--line);
   }
 
-  .limits-head {
-    display: grid;
-    gap: 1.25rem;
-    max-width: 44rem;
+  details {
+    max-width: 52rem;
+    margin-top: 2rem;
+    border-top: 2px solid var(--foreground);
   }
 
-  .limits-head p {
+  summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 3.25rem;
+    padding-block: 0.75rem;
+    border-bottom: 1px solid var(--line);
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  summary::after {
+    content: "Show";
     color: var(--muted);
-    font-size: 1.0625rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+  }
+
+  details[open] summary::after {
+    content: "Hide";
   }
 
   .ledger {
     display: grid;
-    border-top: 2px solid var(--foreground);
+    grid-template-columns: 1fr 1fr;
+    gap: 0 3rem;
+    padding-top: 1.5rem;
   }
 
-  .column {
-    padding-block: 1.25rem;
+  .ledger h3 {
+    padding-bottom: 0.5rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    letter-spacing: 0;
   }
 
-  .column h3 {
-    font-size: 1rem;
-  }
-
-  .column ul {
-    margin: 0.75rem 0 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .column li {
-    padding-block: 0.75rem;
+  .ledger li {
+    padding-block: 0.625rem;
     border-top: 1px solid var(--line);
-  }
-
-  .column + .column {
-    border-top: 1px solid var(--line);
-  }
-
-  @media (width >= 48rem) {
-    .ledger {
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .column + .column {
-      border-top: 0;
-      border-left: 1px solid var(--line);
-      padding-left: 2rem;
-    }
-
-    .column:first-child {
-      padding-right: 2rem;
-    }
+    font-size: 0.9375rem;
   }
 
   .fine {
     display: grid;
-    gap: 0.75rem;
-    max-width: 46rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    gap: 0.625rem;
+    margin-top: 1.75rem;
     color: var(--muted);
     font-size: 0.9375rem;
   }
 
-  /* The owner's side: what they do, beside the log of what everyone did. */
-  .owner {
-    display: grid;
-    gap: 2.5rem;
+  /* The close: the same action, nothing else to read. */
+  .close {
     padding-block: clamp(4rem, 9vw, 7rem);
-    align-items: start;
-  }
-
-  .owner-text {
-    display: grid;
-    gap: 1.75rem;
-    align-content: start;
-  }
-
-  .owner h2 {
-    max-width: 14ch;
-  }
-
-  .duties {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .duties li {
-    padding-block: 0.75rem;
     border-top: 1px solid var(--line);
+    text-align: center;
   }
 
-  .duties .with-vault {
-    border-top: 2px solid var(--foreground);
-    font-weight: 500;
+  .close :global(.close-mark) {
+    margin: 0 auto 1.75rem;
   }
 
-  @media (width >= 64rem) {
-    .owner {
-      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-      column-gap: 4rem;
+  .close .act {
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.875rem;
+    margin-top: 0;
+  }
+
+  @media (width < 60rem) {
+    .hero,
+    .two,
+    .head,
+    .keysec .two,
+    .row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hero {
+      min-height: 0;
+      padding-block: 1.25rem 4rem;
+    }
+
+    .stage img {
+      margin-inline: auto;
+    }
+
+    .stage :global(.start) {
+      left: 50%;
+      width: min(23rem, 92%);
+      transform: translateX(-50%);
+    }
+
+    .portrait {
+      width: min(16rem, 70%);
     }
   }
 
-  /* The close: the offer once more, then the action. No pitch. */
-  .close {
-    display: grid;
-    gap: 1.25rem;
-    justify-items: start;
-    padding-block: clamp(4rem, 9vw, 7rem) clamp(4rem, 8vw, 6rem);
-  }
+  @media (width < 40rem) {
+    .ledger {
+      grid-template-columns: 1fr;
+    }
 
-  .close h2 {
-    max-width: 18ch;
-    font-size: clamp(2.25rem, 1.2rem + 3.6vw, 4.25rem);
-  }
+    .ledger div + div {
+      margin-top: 1.5rem;
+    }
 
-  .close p {
-    max-width: 40rem;
-    color: var(--muted);
-    font-size: 1.0625rem;
-  }
-
-  .close .actions {
-    margin-top: 0.75rem;
+    .hero .go {
+      width: 100%;
+    }
   }
 </style>

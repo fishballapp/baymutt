@@ -1,14 +1,13 @@
 ---
-// A piece of the dashboard, drawn as the dashboard draws it, under the path it lives at. Its
-// buttons are pictures of buttons: nothing on this page acts on an account. `isFlush` is for a
-// list, whose rows run to the edges as the dashboard's do.
-type Props = { path: string; label: string; isFlush?: boolean };
-const { path, label, isFlush = false } = Astro.props;
+// A page of the dashboard, drawn as the dashboard draws it, in the page's own scheme, under the
+// address it lives at. Its buttons are pictures of buttons: nothing on this page acts on an account.
+type Props = { path: string; label: string };
+const { path, label } = Astro.props;
 ---
 
 <figure class="screen" aria-label={label}>
-  <figcaption><span class="where">In your browser</span> <code>{path}</code></figcaption>
-  <div class:list={['body', { flush: isFlush }]}>
+  <figcaption><code>baymutt.fsh.ba{path}</code><span>In your browser</span></figcaption>
+  <div class="body">
     <slot />
   </div>
 </figure>
@@ -16,43 +15,32 @@ const { path, label, isFlush = false } = Astro.props;
 <style>
   .screen {
     margin: 0;
+    min-width: 0;
+    overflow: hidden;
     border: 1px solid var(--line);
-    border-radius: var(--radius-panel);
+    border-radius: 12px;
     background: var(--background);
     color: var(--foreground);
     font-size: 0.875rem;
-    min-width: 0;
   }
 
   figcaption {
     display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
-    padding: 0.625rem 1rem;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0 1rem;
+    padding: 0.5rem 1rem;
     border-bottom: 1px solid var(--line);
+    background: var(--sunken);
     color: var(--muted);
-    font-size: 0.8125rem;
-  }
-
-  .where {
-    flex: none;
+    font-size: 0.75rem;
   }
 
   figcaption code {
-    min-width: 0;
-    overflow: hidden;
     font-size: 0.75rem;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
 
   .body {
-    padding: 1rem;
-  }
-
-  .flush {
-    padding: 0;
-    border-radius: 0 0 var(--radius-panel) var(--radius-panel);
-    overflow: hidden;
+    padding: clamp(1.25rem, 3vw, 1.75rem);
   }
 </style>
