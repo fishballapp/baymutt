@@ -140,7 +140,7 @@ const Decision = ({ request }: { readonly request: OpenedRequest }) => {
           {choices.map(option => (
             <option key={option} value={option}>
               {option === 'never' ? 'Never' : `${durationWords(Number(option))} after approval`}
-              {option === choiceOf(request.lifetime) && ', as asked'}
+              {option === choiceOf(request.lifetime) && ' (your agent’s pick)'}
             </option>
           ))}
         </SelectField>
