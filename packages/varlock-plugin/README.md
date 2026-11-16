@@ -22,13 +22,12 @@ SESSION_SECRET=
 Then `varlock run -- <command>`.
 
 - An environment is named with its org first: `<org>/<name>`.
-- `key` is a service account key, such as a CI job's `BAYMUTT_KEY`. Left unset or empty,
-  the plugin reads the key `baymutt login` stored on this computer.
+- `key` is a service account key, such as a CI job's `BAYMUTT_KEY`. Left unset or empty, the
+  plugin reads the key file `BAYMUTT_KEY_FILE` names: the one `baymutt ask access` wrote.
 - `url` is optional, for a baymutt that is not `https://baymutt.fsh.ba`:
   `@initBaymutt(key=$BAYMUTT_KEY, url="http://localhost:5183")`.
-- It needs read access to the environment. A CLI login holds it on every environment of its
-  account's orgs; a service account `baymutt service-accounts create --read <environment>` made
-  holds it on the environments it was handed.
+- It needs read access to the environment: a key from `baymutt ask access --read <environment>` that
+  the owner approved. A CLI login lists names and loads nothing.
 
 The CLI that logs in and manages secrets is
 [`baymutt`](https://www.npmjs.com/package/baymutt).

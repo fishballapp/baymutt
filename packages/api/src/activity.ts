@@ -5,7 +5,13 @@ import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
-import { ActorSchema, TimestampSchema } from './fields.ts';
+import {
+  ActorSchema,
+  SealedNameSchema,
+  StoredEnvironmentNameSchema,
+  StoredSecretNameSchema,
+  TimestampSchema,
+} from './fields.ts';
 import { Authenticated, Credentials } from './guards.ts';
 
 export const ACTIVITY_ACTIONS = [
@@ -19,9 +25,16 @@ export const ACTIVITY_ACTIONS = [
   'credential.create',
   'credential.revoke',
   'credential.expiry',
+  'request.create',
+  'request.approve',
+  'request.reject',
+  'request.expire',
   'org.create',
   'org.delete',
+  'names.seal',
   'environment.create',
+  'environment-request.create',
+  'environment-request.reject',
   'environment.delete',
   'environment.restore',
   'environment.purge',
@@ -49,8 +62,11 @@ export const ActivityEventSchema = Schema.Struct({
   /** The org it happened in; null for what concerns the person's own account. */
   orgId: Schema.NullOr(Schema.String),
   environmentId: Schema.NullOr(Schema.String),
-  environmentName: Schema.NullOr(Schema.String),
-  secretName: Schema.NullOr(Schema.String),
+  /** As the store keeps them: an index and the sealed name, or the name itself in an entry written before the org's names were sealed. */
+  environmentName: Schema.NullOr(StoredEnvironmentNameSchema),
+  environmentSealedName: Schema.NullOr(SealedNameSchema),
+  secretName: Schema.NullOr(StoredSecretNameSchema),
+  secretSealedName: Schema.NullOr(SealedNameSchema),
   version: Schema.NullOr(Schema.Int),
   /** The other party or the detail the action names: a credential's name, a grant's shape. */
   detail: Schema.NullOr(Schema.String),

@@ -1,5 +1,5 @@
 // Where the store is, and what this computer remembers about it: the account key it logged in
-// to. Nothing here is secret; the service account key is `KeyStore`'s.
+// to. Nothing here is secret; the keys are `KeyStore`'s and the request key files'.
 import { homedir } from 'node:os';
 import { PublicKeySchema } from '@baymutt/api';
 import * as Config from 'effect/Config';
@@ -18,6 +18,8 @@ const StateSchema = Schema.Struct({
   account: Schema.optionalKey(
     Schema.Struct({ id: Schema.String, name: Schema.String, publicKey: PublicKeySchema }),
   ),
+  /** The CLI login this state is of. Missing from a state written before 0.8.0. */
+  loginId: Schema.optionalKey(Schema.String),
   /** A pairing the owner has not approved yet. Its secret seals the browser's answer. */
   pendingPairing: Schema.optionalKey(
     Schema.Struct({
@@ -50,6 +52,8 @@ const resolve = Effect.gen(function* () {
     origin: url.origin,
     stateFile: path.join(directory, 'state.json'),
     keyFile: path.join(directory, 'key'),
+    /** One owner-only file per key `baymutt ask access` made, named by its id, until it is used up or refused. */
+    keysDirectory: path.join(directory, 'keys'),
     keychainService: `baymutt ${url.origin}`,
   };
 });

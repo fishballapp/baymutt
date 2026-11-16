@@ -66,17 +66,26 @@ export const bytes = (count: number): string =>
 export const counted = (count: number, one: string, many = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
-const DAY_MS = 24 * 3600 * 1000;
+const HOUR_MS = 3600 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
-/** "never expires", "expires in 12 days", "expires in 5 hours", "expired". */
+/** "never expires", "expires in 12 days", "expires in 5 hours", "expires in 14 minutes", "expired". */
 export const expiryWords = (expiresAt: number | null, nowMs: number): string => {
   if (expiresAt === null) return 'never expires';
   const left = expiresAt - nowMs;
   if (left <= 0) return 'expired';
-  if (left < DAY_MS) {
-    return `expires in ${counted(Math.max(1, Math.round(left / 3600_000)), 'hour')}`;
-  }
+  const minutes = Math.max(1, Math.round(left / 60_000));
+  if (minutes < 60) return `expires in ${counted(minutes, 'minute')}`;
+  const hours = Math.round(left / HOUR_MS);
+  if (hours < 24) return `expires in ${counted(hours, 'hour')}`;
   return `expires in ${counted(Math.round(left / DAY_MS), 'day')}`;
+};
+
+/** A length of time in its largest whole unit: "15 minutes", "1 hour", "30 days". */
+export const durationWords = (ms: number): string => {
+  if (ms % DAY_MS === 0) return counted(ms / DAY_MS, 'day');
+  if (ms % HOUR_MS === 0) return counted(ms / HOUR_MS, 'hour');
+  return counted(Math.round(ms / 60_000), 'minute');
 };
 
 /** "Dec 1, 2026", for a day the owner picks or reads. */

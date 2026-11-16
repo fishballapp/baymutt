@@ -23,9 +23,15 @@ type Scope =
 export type AuditEntry = Scope & {
   readonly actor: Actor;
   readonly action: ActivityAction;
+  /** The environment's name and sealed name are copied from its row as the entry is written. */
   readonly environmentId?: string | null;
+  /** For an environment no row holds yet (one asked for); otherwise copied from its row. */
   readonly environmentName?: string | null;
+  readonly environmentSealedName?: string | null;
+  /** As the store keeps it: the index in an org whose names are sealed. */
   readonly secretName?: string | null;
+  /** For a name no secret row holds (a paste link's); otherwise copied from the secret's row. */
+  readonly secretSealedName?: string | null;
   readonly version?: number | null;
   readonly detail?: string | null;
 };
@@ -38,7 +44,9 @@ const EventRowSchema = Schema.Struct({
   orgId: Schema.NullOr(Schema.String),
   environmentId: Schema.NullOr(Schema.String),
   environmentName: Schema.NullOr(Schema.String),
+  environmentSealedName: Schema.NullOr(Schema.String),
   secretName: Schema.NullOr(Schema.String),
+  secretSealedName: Schema.NullOr(Schema.String),
   version: Schema.NullOr(Schema.Finite),
   detail: Schema.NullOr(Schema.String),
 });
@@ -89,7 +97,7 @@ export class Audit extends Context.Service<
         Result: EventRowSchema,
         execute: ({ accountId, actorId, orgId, environmentId, before, limit }) =>
           sql`SELECT id, at, actor, action, org_id, environment_id, environment_name,
-                secret_name, version, detail
+                environment_sealed_name, secret_name, secret_sealed_name, version, detail
               FROM activity_event
               WHERE (org_id IN (${orgsOf(sql, accountId)}) OR account_id = ${accountId})
                 AND (${orgId} IS NULL OR org_id = ${orgId} OR org_id IS NULL)
@@ -102,13 +110,24 @@ export class Audit extends Context.Service<
       return Audit.of({
         entry: Effect.fn('Audit.entry')(function* (entry: AuditEntry, onlyIf?: Statement.Fragment) {
           const now = yield* Clock.currentTimeMillis;
+          const environmentId = entry.environmentId ?? null;
+          const secretName = entry.secretName ?? null;
+          // Copied from the rows inside the batch, so an entry keeps a name as the store holds it
+          // at that moment: sealing an org's names rewrites its entries in one batch too.
           return sql`INSERT INTO activity_event
               (id, org_id, account_id, at, actor, action, environment_id, environment_name,
-               secret_name, version, detail)
+               environment_sealed_name, secret_name, secret_sealed_name, version, detail)
             SELECT ${monotonicUlid(now)}, ${entry.orgId ?? null}, ${entry.accountId ?? null}, ${now},
-              ${encodeActor(entry.actor)},
-              ${entry.action}, ${entry.environmentId ?? null}, ${entry.environmentName ?? null},
-              ${entry.secretName ?? null}, ${entry.version ?? null}, ${entry.detail ?? null}
+              ${encodeActor(entry.actor)}, ${entry.action}, ${environmentId},
+              COALESCE(${entry.environmentName ?? null},
+                (SELECT name FROM environment WHERE id = ${environmentId})),
+              COALESCE(${entry.environmentSealedName ?? null},
+                (SELECT sealed_name FROM environment WHERE id = ${environmentId})),
+              ${secretName},
+              COALESCE(${entry.secretSealedName ?? null},
+                (SELECT sealed_name FROM secret
+                  WHERE environment_id = ${environmentId} AND name = ${secretName})),
+              ${entry.version ?? null}, ${entry.detail ?? null}
             WHERE ${onlyIf ?? sql`1 = 1`}`;
         }),
 

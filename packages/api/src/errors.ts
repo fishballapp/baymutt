@@ -44,6 +44,13 @@ export class NotEmptyError extends Schema.TaggedError<NotEmptyError>()(
   { httpApiStatus: 409 },
 ) {}
 
+/** The org's names are not sealed yet, so nothing with a new name can be written in it. */
+export class NamesNotSealedError extends Schema.TaggedError<NamesNotSealedError>()(
+  'NamesNotSealedError',
+  { message: ErrorMessageSchema },
+  { httpApiStatus: 409 },
+) {}
+
 /** What one account may hold while baymutt is in beta. Environments count across its orgs. */
 export const LIMITS = {
   orgs: 20,

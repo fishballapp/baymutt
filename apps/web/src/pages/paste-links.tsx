@@ -1,6 +1,6 @@
-import type { PasteLink } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
+import { useOwner } from '../components/gate.tsx';
 import {
   Code,
   Empty,
@@ -12,7 +12,13 @@ import {
   Time,
 } from '../components/parts.tsx';
 import { Button, buttonStyles } from '../components/ui/button.tsx';
-import { addressOf, cancelPasteLinkAtom, pasteLinksAtom } from '../lib/data.ts';
+import {
+  addressOf,
+  cancelPasteLinkAtom,
+  NAME_NOT_OPENED,
+  type OpenedPasteLink,
+  pasteLinksAtom,
+} from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
 const Reason = ({ children }: { readonly children: string }) =>
@@ -20,7 +26,7 @@ const Reason = ({ children }: { readonly children: string }) =>
     <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted">{children}</p>
   );
 
-const PasteRow = ({ link }: { readonly link: PasteLink }) => {
+const PasteRow = ({ link }: { readonly link: OpenedPasteLink }) => {
   const [cancelling, cancel] = useAtom(cancelPasteLinkAtom(link.id));
   return (
     <Row>
@@ -28,8 +34,8 @@ const PasteRow = ({ link }: { readonly link: PasteLink }) => {
         <div className="min-w-0 flex-1">
           <p>
             <span className="font-medium">{link.createdBy.name}</span> asks you to paste{' '}
-            <Code>{link.name}</Code> into{' '}
-            <Code>{addressOf({ orgSlug: link.orgSlug, name: link.environmentName })}</Code>
+            <Code>{link.openedName ?? NAME_NOT_OPENED}</Code> into{' '}
+            <Code>{addressOf({ orgSlug: link.orgSlug, name: link.openedEnvironmentName })}</Code>
           </p>
           <Reason>{link.reason}</Reason>
           {link.hint !== '' && (
@@ -56,7 +62,7 @@ const PasteRow = ({ link }: { readonly link: PasteLink }) => {
 };
 
 export const PasteLinksPage = () => {
-  const result = useAtomValue(pasteLinksAtom);
+  const result = useAtomValue(pasteLinksAtom(useOwner()));
   const paste = latest(result);
   const failure = failureMessage(result);
   return (
@@ -70,8 +76,8 @@ export const PasteLinksPage = () => {
       {paste?.length === 0 && (
         <Empty title="Nothing is waiting on you">
           <p>
-            A paste link from <Code>baymutt paste-link</Code> asks for a value only you can fetch.
-            It lands here.
+            A paste link from <Code>baymutt ask paste-link</Code> asks for a value only you can
+            fetch. It lands here.
           </p>
         </Empty>
       )}

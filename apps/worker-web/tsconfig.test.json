@@ -3,7 +3,10 @@
   "compilerOptions": {
     "lib": ["ESNext"],
     "types": ["./worker-configuration.d.ts", "node"],
-    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.test.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "paths": {
+      "@baymutt/keys": ["./src/test-keys.d.ts"]
+    }
   },
   "include": ["./src/**/*", "./worker-configuration.d.ts"]
 }

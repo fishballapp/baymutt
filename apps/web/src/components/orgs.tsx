@@ -15,6 +15,7 @@ import {
 } from '../lib/data.ts';
 import { counted } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
+import { useOwner } from './gate.tsx';
 import { Code, Notice, Row, RowActions, Rows, Time } from './parts.tsx';
 import { Button } from './ui/button.tsx';
 import { Confirm } from './ui/confirm.tsx';
@@ -81,6 +82,7 @@ const slugOf = (name: string) =>
 
 /** Creates an org and shows it in the picker. */
 export const NewOrg = ({ className }: { readonly className?: string }) => {
+  const owner = useOwner();
   const [creation, create] = useAtom(createOrgAtom, { mode: 'promiseExit' });
   const { pick } = usePickedOrg();
   const [name, setName] = useState('');
@@ -92,7 +94,7 @@ export const NewOrg = ({ className }: { readonly className?: string }) => {
       className={className}
       onSubmit={async event => {
         event.preventDefault();
-        const exit = await create({ name, slug: shownSlug });
+        const exit = await create({ owner, name, slug: shownSlug });
         if (exit._tag === 'Success') {
           pick(exit.value.id);
           setName('');

@@ -1,5 +1,6 @@
-// Paste links: a single-use link a credential makes, to a page where the owner pastes one value
-// only they can fetch.
+// Paste links: a single-use link a credential makes, to a page where the signed-in owner pastes
+// one value only they can fetch. The link carries nothing but its id: the owner's open vault is
+// what answers it. One nobody answers within the hour has expired, and its maker makes another.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -11,40 +12,47 @@ import {
   AlreadyExistsError,
   LimitReachedError,
   LinkSpentError,
+  NamesNotSealedError,
   NoAccessError,
   NotFoundError,
   VersionConflictError,
 } from './errors.ts';
 import {
   ActorSchema,
-  EnvironmentNameSchema,
-  HashSchema,
   IdSchema,
+  NameIndexSchema,
   OrgSlugSchema,
   PublicKeySchema,
   ReasonSchema,
-  SecretNameSchema,
+  SealedNameSchema,
+  StoredEnvironmentNameSchema,
+  StoredSecretNameSchema,
   TimestampSchema,
   VersionSchema,
 } from './fields.ts';
-import { Authenticated, Credentials, MaybeAuthenticated, UnauthorizedError } from './guards.ts';
-import { SecretSchema, WriteSecretPayloadSchema } from './secrets.ts';
+import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
+import { SealedValuePayloadSchema, SecretSchema } from './secrets.ts';
+
+/** How long a paste link waits for the owner, in milliseconds. Unanswered by then, it has expired. */
+export const PASTE_LINK_WAIT_MS = 3600 * 1000;
 
 export const PasteLinkSchema = Schema.Struct({
-  id: Schema.String,
+  id: IdSchema,
   orgId: Schema.String,
   orgSlug: OrgSlugSchema,
   environmentId: Schema.String,
-  environmentName: EnvironmentNameSchema,
-  name: SecretNameSchema,
+  environmentName: StoredEnvironmentNameSchema,
+  environmentSealedName: Schema.NullOr(SealedNameSchema),
+  name: StoredSecretNameSchema,
+  /** Null only on a link made before its org's names were sealed. */
+  sealedName: Schema.NullOr(SealedNameSchema),
   reason: ReasonSchema,
   /** Where the owner finds the value, such as "Stripe dashboard, Developers, API keys". */
   hint: ReasonSchema,
-  status: Schema.Literals(['pending', 'fulfilled', 'cancelled']),
+  /** `expired`: nobody answered it within `PASTE_LINK_WAIT_MS` of `createdAt`. */
+  status: Schema.Literals(['pending', 'fulfilled', 'cancelled', 'expired']),
   createdBy: ActorSchema,
   createdAt: TimestampSchema,
-  /** When the link stops working. The owner can still answer from the dashboard after it. */
-  linkExpiresAt: TimestampSchema,
 }).annotate({ identifier: 'PasteLink' });
 export type PasteLink = typeof PasteLinkSchema.Type;
 
@@ -58,13 +66,6 @@ export const PasteTargetSchema = Schema.Struct({
 }).annotate({ identifier: 'PasteTarget' });
 export type PasteTarget = typeof PasteTargetSchema.Type;
 
-/** The link's token, sent as a header so it stays out of URLs and logs. */
-export const PASTE_TOKEN_HEADER = 'x-baymutt-paste-token';
-
-const pasteHeaders = Schema.Struct({
-  [PASTE_TOKEN_HEADER]: Schema.optionalKey(Schema.String),
-});
-
 export class PasteLinksGroup extends HttpApiGroup.make('pasteLinks')
   .add(
     HttpApiEndpoint.get('list', '/paste-links', {
@@ -73,26 +74,41 @@ export class PasteLinksGroup extends HttpApiGroup.make('pasteLinks')
       OpenApi.annotations({
         summary: 'List paste links waiting for a value',
         description:
-          'The owner sees every pending one in their orgs; a credential sees those it made.',
+          'The owner sees every pending one in their orgs; a CLI login or service account sees those it made.',
       }),
     ),
     HttpApiEndpoint.post('create', '/paste-links', {
       payload: Schema.Struct({
         id: IdSchema,
         environmentId: Schema.String,
-        name: SecretNameSchema,
+        /** The secret's name, as its index and sealed: the secret need not exist yet. */
+        name: NameIndexSchema,
+        sealedName: SealedNameSchema,
         reason: ReasonSchema,
         hint: ReasonSchema,
-        /** SHA-256 of the link's token, which the credential made and the store never sees. */
-        tokenHash: HashSchema,
       }),
       success: PasteLinkSchema.pipe(HttpApiSchema.status(201)),
-      error: [coded(NotFoundError), coded(NoAccessError), coded(AlreadyExistsError)],
+      error: [
+        coded(NotFoundError),
+        coded(NoAccessError),
+        coded(AlreadyExistsError),
+        coded(NamesNotSealedError),
+      ],
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Make a paste link',
         description:
-          'For a value only the owner can fetch from a vendor. Needs a write grant. The link is single-use and bound to this environment and name.',
+          'For a value only the owner can fetch from a vendor. For a CLI login of the environment’s org, or a service account with a write grant. The link is single-use, bound to this environment and name, answered only by the signed-in owner, and expires after an hour unanswered.',
+      }),
+    ),
+    HttpApiEndpoint.get('get', '/paste-links/:id', {
+      params: { id: Schema.String },
+      success: PasteLinkSchema,
+      error: coded(NotFoundError),
+    }).annotateMerge(
+      OpenApi.annotations({
+        summary: 'One paste link, answered or not',
+        description: 'For the owner, and for the CLI login or service account that made it.',
       }),
     ),
     HttpApiEndpoint.delete('cancel', '/paste-links/:id', {
@@ -105,29 +121,27 @@ export class PasteLinksGroup extends HttpApiGroup.make('pasteLinks')
   .middleware(Credentials)
   .annotateMerge(OpenApi.annotations({ title: 'Paste links' })) {}
 
-// The paste page's two calls. Answered to the link's token or to the owner's session.
+// The paste page's two calls: the owner's alone, signed in with the vault open.
 export class PasteGroup extends HttpApiGroup.make('paste')
   .add(
     HttpApiEndpoint.get('target', '/paste/:id', {
       params: { id: Schema.String },
-      headers: pasteHeaders,
       success: PasteTargetSchema,
-      error: [coded(NotFoundError), coded(LinkSpentError), coded(UnauthorizedError)],
+      error: [coded(NotFoundError), coded(LinkSpentError), coded(OwnerRequiredError)],
     }),
     HttpApiEndpoint.post('fulfil', '/paste/:id', {
       params: { id: Schema.String },
-      headers: pasteHeaders,
-      payload: WriteSecretPayloadSchema,
+      payload: SealedValuePayloadSchema,
       success: SecretSchema,
       error: [
         coded(NotFoundError),
         coded(LinkSpentError),
-        coded(UnauthorizedError),
+        coded(OwnerRequiredError),
         coded(VersionConflictError),
         coded(LimitReachedError),
       ],
     }),
   )
-  .middleware(MaybeAuthenticated)
+  .middleware(Authenticated)
   .middleware(Credentials)
   .annotateMerge(OpenApi.annotations({ exclude: true })) {}

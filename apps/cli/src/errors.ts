@@ -26,7 +26,17 @@ type ExitKind = keyof typeof EXIT_CODES;
 /** The command was used wrongly, or this computer is not logged in for it. */
 export class UsageError extends Schema.TaggedError<UsageError>()('UsageError', {
   message: Schema.String,
-  kind: Schema.Literals(['usage', 'notLoggedIn', 'noAccess', 'notFound', 'integrity', 'differs']),
+  kind: Schema.Literals([
+    'failure',
+    'usage',
+    'notLoggedIn',
+    'noAccess',
+    'notFound',
+    'conflict',
+    'unreachable',
+    'integrity',
+    'differs',
+  ]),
 }) {}
 
 export const usage = (message: string, kind: UsageError['kind'] = 'usage') =>
@@ -56,6 +66,7 @@ const API_ERROR_KINDS: { readonly [code: string]: ExitKind } = {
   VersionConflictError: 'conflict',
   LinkSpentError: 'conflict',
   LimitReachedError: 'conflict',
+  NamesNotSealedError: 'conflict',
   InvalidRequestError: 'usage',
 };
 
@@ -108,6 +119,14 @@ export const describeFailure = (
   });
 };
 
+/**
+ * Whether the store refused with one of the API's own coded errors, so that what it was asked to
+ * make was not made. Anything else (no answer, an edge's error page, an answer that does not
+ * decode) proves nothing either way.
+ */
+export const isRefusal = (error: Error & { readonly _tag: string }): Effect.Effect<boolean> =>
+  Effect.map(describeFailure(error), ({ code }) => Object.hasOwn(API_ERROR_KINDS, code));
+
 /** Prints a failure as `{"error":{code,message,exitCode}}` on stderr and exits with its code. */
 export const report = <A, E extends Error & { readonly _tag: string }, R>(
   effect: Effect.Effect<A, E, R>,
@@ -121,6 +140,24 @@ export const report = <A, E extends Error & { readonly _tag: string }, R>(
       return yield* new Reported({ exitCode });
     }),
   );
+
+/**
+ * The store's answer about `id`, refused unless it names that same id: files here are found by the
+ * id, so an answer about another one could hand out or remove what is not its own.
+ */
+export const answerFor =
+  (id: string) =>
+  <A extends { readonly id: string }, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | IntegrityError, R> =>
+    Effect.filterOrFail(
+      effect,
+      answer => answer.id === id,
+      () =>
+        new IntegrityError({
+          message: `The store answered about something other than ${id}. Nothing here was touched.`,
+        }),
+    );
 
 /** A promise from `@baymutt/keys`: its rejection is a `VaultError`, or a fault. */
 export const crypto_ = <A>(run: () => Promise<A>): Effect.Effect<A, IntegrityError> =>

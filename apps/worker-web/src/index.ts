@@ -3,6 +3,7 @@ import * as HttpRouter from 'effect/http/HttpRouter';
 import * as Layer from 'effect/Layer';
 import { HttpApp } from './http/app.ts';
 import { runtime, WorkerLive } from './runtime.ts';
+import { Access } from './services/access.ts';
 import { Bin } from './services/bin.ts';
 
 // Built once per isolate, at module load: `toWebHandler` builds the app layer (and, through the
@@ -27,8 +28,14 @@ export default {
     if (isFilePath(pathname)) return env.ASSETS.fetch(request);
     return env.ASSETS.fetch(new Request(new URL('/_shell', request.url), request));
   },
-  // The daily Cron Trigger (wrangler.jsonc): what has been in the bin for 30 days goes for good.
+  // The daily Cron Trigger (wrangler.jsonc): what has been in the bin for 30 days goes for good, a
+  // request nobody answered is rejected, and a key whose time is up is revoked.
   scheduled: async () => {
-    await runtime.runPromise(Effect.flatMap(Bin, bin => bin.sweep));
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        yield* (yield* Bin).sweep;
+        yield* (yield* Access).sweepRequests;
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;

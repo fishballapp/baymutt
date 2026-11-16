@@ -1,16 +1,20 @@
-import type { ActivityAction, ActivityEvent, Org } from '@baymutt/api';
+import type { ActivityAction, Org } from '@baymutt/api';
 import { useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
+import { useOwner } from '../components/gate.tsx';
 import { usePickedOrg } from '../components/orgs.tsx';
 import { Code, Empty, Notice, PageHeader, Skeleton } from '../components/parts.tsx';
-import { activityAtom } from '../lib/data.ts';
+import { activityAtom, addressOf, NAME_NOT_OPENED, type OpenedActivityEvent } from '../lib/data.ts';
 import { clockTime, dayLabel, dayOf, exactTime } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-const environment = ({ environmentName }: ActivityEvent) => <Code>{environmentName}</Code>;
-const secret = ({ secretName, version }: ActivityEvent) => (
+/** An entry as a row shows it: its environment by its address, or null for none. */
+type Entry = OpenedActivityEvent & { readonly address: string | null };
+
+const environment = ({ address }: Entry) => <Code>{address}</Code>;
+const secret = ({ openedSecretName, version }: Entry) => (
   <>
-    <Code>{secretName}</Code>
+    <Code>{openedSecretName ?? NAME_NOT_OPENED}</Code>
     {version !== null && ` (v${version})`}
   </>
 );
@@ -19,14 +23,14 @@ const secret = ({ secretName, version }: ActivityEvent) => (
  * A grant's detail is "<service account>: <read + write>": as a sentence, "<read + write> for <service account>".
  * Anything else is shown as it came.
  */
-const grantDetail = ({ detail }: ActivityEvent) => {
+const grantDetail = ({ detail }: Entry) => {
   const split = detail?.lastIndexOf(': ') ?? -1;
   if (detail === null || split === -1) return detail;
   return `${detail.slice(split + 2)} for ${detail.slice(0, split)}`;
 };
 
 /** What happened, as the rest of a sentence that starts with who did it. */
-const DEEDS: Record<ActivityAction, (event: ActivityEvent) => ReactNode> = {
+const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   'account.create': () => 'created the account',
   'passkey.add': () => 'added a passkey that opens the vault',
   'passkey.remove': () => 'removed a passkey',
@@ -35,6 +39,20 @@ const DEEDS: Record<ActivityAction, (event: ActivityEvent) => ReactNode> = {
   'recovery.rotate': () => 'made a new recovery key',
   'credential.pair': ({ detail }) => <>approved the CLI login {detail}</>,
   'credential.create': ({ detail }) => <>made the service account {detail}</>,
+  'request.create': ({ detail }) => <>asked for a key, {detail}</>,
+  'request.approve': ({ detail }) => {
+    // "<key>: <until …, or no end>", as `credential.expiry` writes its detail.
+    const split = detail?.lastIndexOf(': ') ?? -1;
+    if (detail === null || split === -1) return <>approved the request {detail}</>;
+    const end = detail.slice(split + 2);
+    return (
+      <>
+        approved the request {detail.slice(0, split)}, {end === 'no end' ? 'with no end' : end}
+      </>
+    );
+  },
+  'request.reject': ({ detail }) => <>rejected the request {detail}</>,
+  'request.expire': ({ detail }) => <>expired the request {detail}, unanswered for an hour</>,
   'credential.revoke': ({ detail }) => <>revoked {detail}</>,
   'credential.expiry': ({ detail }) => {
     const split = detail?.lastIndexOf(': ') ?? -1;
@@ -52,7 +70,17 @@ const DEEDS: Record<ActivityAction, (event: ActivityEvent) => ReactNode> = {
     </>
   ),
   'org.delete': ({ detail }) => <>deleted the org {detail}</>,
+  'names.seal': () => 'sealed the names of the org’s environments and secrets',
   'environment.create': event => <>created {environment(event)}</>,
+  'environment-request.create': event => (
+    <>
+      asked for a new environment, {environment(event)}
+      {event.detail !== null && `: “${event.detail}”`}
+    </>
+  ),
+  'environment-request.reject': event => (
+    <>rejected the request for a new environment, {environment(event)}</>
+  ),
   'environment.delete': event => <>deleted {environment(event)}</>,
   'environment.restore': event => <>restored {environment(event)} from the bin</>,
   'environment.purge': event => (
@@ -121,7 +149,7 @@ const DEEDS: Record<ActivityAction, (event: ActivityEvent) => ReactNode> = {
 
 /** An org's entries, each environment named by its address; the account's own name none. */
 const OrgActivity = ({ org }: { readonly org: Org }) => {
-  const result = useAtomValue(activityAtom(org.id));
+  const result = useAtomValue(activityAtom(useOwner())(org.id));
   const events = latest(result);
   const now = Date.now();
   // Newest first, so each day's entries stay in the order they came.
@@ -151,10 +179,10 @@ const OrgActivity = ({ org }: { readonly org: Org }) => {
                     <span className="font-medium">{event.actor.name}</span>{' '}
                     {DEEDS[event.action]({
                       ...event,
-                      environmentName:
+                      address:
                         event.environmentName === null
                           ? null
-                          : `${org.slug}/${event.environmentName}`,
+                          : addressOf({ orgSlug: org.slug, name: event.openedEnvironmentName }),
                     })}
                   </p>
                   <time

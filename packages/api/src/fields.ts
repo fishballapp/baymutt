@@ -61,6 +61,30 @@ export const SecretNameSchema = Schema.String.check(
     'Letters, digits and underscores, not starting with a digit, such as `STRIPE_SECRET_KEY`.',
 });
 
+/**
+ * An environment's name as the store keeps it: its index under the org's names key, which the
+ * store cannot read. In an org whose names are not sealed yet, the name itself.
+ */
+export const StoredEnvironmentNameSchema = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9._/-]{1,120}$/u),
+).annotate({
+  description:
+    'The name’s index under the org’s names key, base64url. The store cannot read the name. In an org whose names are not sealed yet, the name itself.',
+});
+
+/** A secret's name as the store keeps it, as `StoredEnvironmentNameSchema` is for an environment. */
+export const StoredSecretNameSchema = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u),
+).annotate({
+  description:
+    'The name’s index under the org’s names key, base64url. The store cannot read the name. In an org whose names are not sealed yet, the name itself.',
+});
+
+/** What a client files a new name under: 256 bits of HMAC, so one name in one scope has one spelling. */
+export const NameIndexSchema = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u),
+).annotate({ description: 'A name’s index under the org’s names key, base64url without padding.' });
+
 /** A value may be 64 KiB; a box adds 60 bytes, and base64 a third. */
 export const MAX_VALUE_BYTES = 65_536;
 
@@ -72,6 +96,17 @@ const base64 = (maxBytes: number) =>
 
 export const CiphertextSchema = base64(MAX_VALUE_BYTES + 60).annotate({
   description: 'A value sealed to the environment’s public key, base64. The store cannot open it.',
+});
+
+/** A name of up to 128 bytes sealed with the org's names key: 12 of IV and 16 of tag beside it. */
+export const SealedNameSchema = base64(156).annotate({
+  description: 'A name sealed with the org’s names key, base64. The store cannot open it.',
+});
+
+/** The org's 32-byte names key in a vouched box. */
+export const NamesKeyWrapSchema = base64(60).annotate({
+  description:
+    'The org’s names key as the owner wrapped it to one reader, base64. The store cannot open or make one.',
 });
 
 /** An environment private key (PKCS #8, base64url) in a box. */
@@ -96,6 +131,13 @@ export const VoucherSchema = base64(128).annotate({
   description:
     'A public key the login that made a service account vouches for to one reader, base64. The store cannot make one.',
 });
+
+/** An org's names key as the owner wrapped it to one reader: the caller's own copy in an answer, a credential's in a payload. */
+export const OrgNamesKeyWrapSchema = Schema.Struct({
+  orgId: Schema.String,
+  wrap: NamesKeyWrapSchema,
+}).annotate({ identifier: 'OrgNamesKeyWrap' });
+export type OrgNamesKeyWrap = typeof OrgNamesKeyWrapSchema.Type;
 
 export const VersionSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 

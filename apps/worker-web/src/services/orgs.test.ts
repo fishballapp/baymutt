@@ -1,14 +1,13 @@
 /** Orgs: who creates and deletes one, what each caller sees, and that an environment stays in its own. */
-import { tokenHash } from '@baymutt/keys/wire';
 import { describe, expect, it } from 'vitest';
-import { call, newAccount, ok, storeWorld, VAULT_PROOF, VOUCHERS } from '../test-store.ts';
+import { call, indexOf, newAccount, ok, sealedOf, storeWorld, VAULT_PROOF } from '../test-store.ts';
 import { keyLike, sealedLike, send } from '../test-support.ts';
 
 describe('an org', () => {
   it('is created by the owner in the dashboard, never by a CLI login or a service account', async () => {
     const world = await storeWorld();
-    const { w, owner, locked, pair, environment } = world;
-    const login = await pair('laptop', { environments: [] });
+    const { w, owner, locked, pair, environment, serviceAccount } = world;
+    const login = await pair('laptop');
 
     expect(
       await call(w, 'POST', '/orgs', login.headers, { name: 'Fishball Ltd', slug: 'fishball' }),
@@ -17,7 +16,7 @@ describe('an org', () => {
       await call(w, 'POST', '/orgs', owner, { name: 'Fishball Ltd', slug: 'fishball' }),
     ).toMatchObject({
       status: 201,
-      body: { name: 'Fishball Ltd', slug: 'fishball', environmentCount: 0 },
+      body: { name: 'Fishball Ltd', slug: 'fishball', environmentCount: 0, areNamesSealed: false },
     });
     // A locked session changes nothing, an org included.
     expect(
@@ -31,32 +30,10 @@ describe('an org', () => {
       { status: 400 },
     );
 
-    const environmentId = await environment('app/production', owner, [login.id]);
-    const id = crypto.randomUUID();
-    const secret = keyLike('s');
-    await ok(
-      w,
-      'POST',
-      '/credentials',
-      login.headers,
-      {
-        id,
-        name: 'ci',
-        publicKey: keyLike('k'),
-        bearerHash: await tokenHash(secret),
-        grants: [
-          {
-            environmentId,
-            canWrite: false,
-            readWrap: sealedLike('wrap'),
-            keyProof: sealedLike('proof'),
-          },
-        ],
-        vouchers: VOUCHERS,
-      },
-      201,
-    );
-    const ci = { authorization: `Bearer baymutt_${id}_${secret}` };
+    const environmentId = await environment('app/production');
+    const { headers: ci } = await serviceAccount([{ environmentId, read: true }], {
+      maker: login,
+    });
 
     expect(await call(w, 'POST', '/orgs', ci, { name: 'Mine', slug: 'mine' })).toMatchObject({
       status: 403,
@@ -77,7 +54,7 @@ describe('an org', () => {
     const { w, owner, pair, org, environment } = await storeWorld();
     const login = await pair('laptop');
     const orgId = await org('fishball');
-    const environmentId = await environment('app/production', owner, [], orgId);
+    const environmentId = await environment('app/production', orgId);
 
     expect(await call(w, 'DELETE', `/orgs/${orgId}`, login.headers)).toMatchObject({
       status: 403,
@@ -132,7 +109,10 @@ describe('another person', () => {
     const otherOwner = { ...otherLocked, 'x-baymutt-vault-proof': VAULT_PROOF };
 
     expect(await ok(one.w, 'GET', '/orgs', otherOwner)).toEqual({ orgs: [] });
-    expect(await ok(one.w, 'GET', '/environments', otherOwner)).toEqual({ environments: [] });
+    expect(await ok(one.w, 'GET', '/environments', otherOwner)).toEqual({
+      environments: [],
+      namesKeys: [],
+    });
     expect(await ok(one.w, 'GET', '/bin', otherOwner)).toEqual({ environments: [], secrets: [] });
     expect(
       await call(one.w, 'GET', `/environments/${environmentId}/secrets`, otherOwner),
@@ -141,12 +121,11 @@ describe('another person', () => {
       await call(one.w, 'POST', '/environments', otherOwner, {
         id: crypto.randomUUID(),
         orgId: one.orgId,
-        name: 'intruder',
+        name: indexOf(one.orgId, 'intruder'),
+        sealedName: sealedOf('intruder'),
         publicKey: keyLike('p'),
         memberWrap: sealedLike('w'),
         memberProof: sealedLike('p'),
-        creatorWrap: null,
-        creatorProof: null,
       }),
     ).toMatchObject({ status: 404, body: { code: 'NotFoundError' } });
     expect(await call(one.w, 'DELETE', `/orgs/${one.orgId}`, otherOwner)).toMatchObject({
@@ -159,20 +138,19 @@ describe('another person', () => {
   });
 
   it('names environments alike in two orgs without a clash', async () => {
-    const { w, owner, org, environment } = await storeWorld();
+    const { w, owner, orgId, org, environment } = await storeWorld();
     const second = await org('second');
     await environment('app/production');
-    await environment('app/production', owner, [], second);
+    await environment('app/production', second);
 
-    const { environments } = await ok<{ environments: { orgSlug: string; name: string }[] }>(
-      w,
-      'GET',
-      '/environments',
-      owner,
-    );
-    expect(environments.map(({ orgSlug, name }) => `${orgSlug}/${name}`)).toEqual([
-      'org-user-1/app/production',
-      'second/app/production',
+    const { environments } = await ok<{
+      environments: { orgSlug: string; name: string; sealedName: string }[];
+    }>(w, 'GET', '/environments', owner);
+    expect(
+      environments.map(({ orgSlug, name, sealedName }) => [orgSlug, name, sealedName]),
+    ).toEqual([
+      ['org-user-1', indexOf(orgId, 'app/production'), sealedOf('app/production')],
+      ['second', indexOf(second, 'app/production'), sealedOf('app/production')],
     ]);
   });
 });

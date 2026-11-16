@@ -1,10 +1,11 @@
 // Environments and the grants on them.
 import {
   type ActorIdentity,
-  AlreadyExistsError,
   type Grant,
+  InvalidRequestError,
   NotFoundError,
   OwnerRequiredError,
+  PASTE_LINK_WAIT_MS,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
 import * as Clock from 'effect/Clock';
@@ -14,7 +15,20 @@ import * as SqlSchema from 'effect/sql/SqlSchema';
 import { actorOf, encodeActor } from '../actors.ts';
 import type { Audit } from '../audit.ts';
 import { BIN_MS } from '../bin.ts';
-import type { Lookups } from './rows.ts';
+import {
+  environmentRequestRows,
+  isWaiting,
+  spent as spentRequest,
+} from './environment-requests.ts';
+import {
+  addressOf,
+  grantStatement,
+  isLogin,
+  type Lookups,
+  namesNotSealed,
+  newEnvironmentStatements,
+  orgsOf,
+} from './rows.ts';
 
 const GrantRowSchema = Schema.Struct({
   credentialId: Schema.String,
@@ -30,12 +44,22 @@ const GrantRowSchema = Schema.Struct({
 export const environments = ({
   sql,
   audit,
-  lookups: { environmentsOf, environmentFor, ownersEnvironment, serviceAccountIn, underLimit },
+  lookups: {
+    environmentsOf,
+    environmentFor,
+    ownersEnvironment,
+    approvedServiceAccountIn,
+    underLimit,
+    ownedOrg,
+    nameTaken,
+  },
 }: {
   readonly sql: D1Client.D1Client;
   readonly audit: Audit['Service'];
   readonly lookups: Lookups;
 }) => {
+  const requestRows = environmentRequestRows(sql);
+
   const grantRows = SqlSchema.findAll({
     Request: Schema.Struct({
       environmentId: Schema.String,
@@ -64,15 +88,14 @@ export const environments = ({
           WHERE id = ${id} AND account_id = ${accountId}`,
   });
 
-  /** The org, when the caller's person is its owner; a login acts for its person. */
-  const ownedOrg = SqlSchema.findAll({
-    Request: Schema.Struct({ accountId: Schema.String, orgId: Schema.String }),
-    Result: Schema.Struct({ slug: Schema.String, role: Schema.String }),
-    execute: ({ accountId, orgId }) =>
-      sql`SELECT o.slug, m.role FROM organization o
-          JOIN member m ON m.organizationId = o.id
-          JOIN store_account a ON a.user_id = m.userId
-          WHERE o.id = ${orgId} AND a.id = ${accountId}`,
+  /** The caller's own copy of the names key of each org it reaches whose names are sealed. */
+  const namesKeysOf = SqlSchema.findAll({
+    Request: Schema.Struct({ accountId: Schema.String, readerId: Schema.String }),
+    Result: Schema.Struct({ orgId: Schema.String, wrap: Schema.String }),
+    execute: ({ accountId, readerId }) =>
+      sql`SELECT org_id, wrap FROM names_key_wrap
+          WHERE reader_id = ${readerId} AND org_id IN (${orgsOf(sql, accountId)})
+          ORDER BY org_id`,
   });
 
   const grantsOn = (
@@ -94,37 +117,19 @@ export const environments = ({
       ),
     );
 
-  /** A grant written by the owner. `readWrap` null with `canWrite` false is no grant at all. */
-  const grantStatement = ({
-    environmentId,
-    credentialId,
-    canWrite,
-    readWrap,
-    keyProof,
-    keyVersion,
-    now,
-  }: {
-    readonly environmentId: string;
-    readonly credentialId: string;
-    readonly canWrite: boolean;
-    readonly readWrap: string | null;
-    readonly keyProof: string;
-    readonly keyVersion: number;
-    readonly now: number;
-  }) =>
-    sql`INSERT INTO environment_grant
-          (environment_id, credential_id, can_write, read_wrap, key_proof, key_version, created_at)
-        VALUES (${environmentId}, ${credentialId}, ${canWrite ? 1 : 0}, ${readWrap},
-          ${keyProof}, ${keyVersion}, ${now})
-        ON CONFLICT (environment_id, credential_id) DO UPDATE
-          SET can_write = excluded.can_write, read_wrap = excluded.read_wrap,
-              key_proof = excluded.key_proof, key_version = excluded.key_version`;
-
   return {
-    grantStatement,
-
     listEnvironments: Effect.fn('Access.listEnvironments')(function* (actor: ActorIdentity) {
-      return (yield* environmentsOf(actor)).map(({ environment }) => environment);
+      const [listed, namesKeys] = yield* Effect.all(
+        [
+          environmentsOf(actor),
+          namesKeysOf({
+            accountId: actor.accountId,
+            readerId: actor._tag === 'Owner' ? actor.accountId : actor.credentialId,
+          }).pipe(Effect.orDie),
+        ],
+        { concurrency: 2 },
+      );
+      return { environments: listed.map(({ environment }) => environment), namesKeys };
     }),
 
     environment: environmentFor,
@@ -138,117 +143,76 @@ export const environments = ({
         readonly id: string;
         readonly orgId: string;
         readonly name: string;
+        readonly sealedName: string;
         readonly publicKey: string;
         readonly memberWrap: string;
         readonly memberProof: string;
-        readonly creatorWrap: string | null;
-        readonly creatorProof: string | null;
-        readonly loginGrants?: ReadonlyArray<{
-          readonly credentialId: string;
-          readonly readWrap: string;
-          readonly keyProof: string;
-        }>;
+        /** The environment request this approves. */
+        readonly answers?: string;
       };
     }) {
-      const loginGrants = environment.loginGrants ?? [];
-      // The owner's vault vouches for a login's key and for no other, so an environment made by a
-      // service account is one the owner could never open or hand to a login.
-      if (actor._tag === 'Credential' && actor.parentId !== null) {
+      if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
-          message:
-            'A service account cannot create an environment. The owner or a CLI login creates it and hands this service account access.',
+          message: isLogin(actor)
+            ? 'A CLI login does not create an environment: it asks for one, and the owner creates it. `baymutt ask create-environment <org>/<name> --reason "<why>"`.'
+            : 'A service account cannot create an environment. A CLI login asks for one with `baymutt ask create-environment`.',
         });
       }
-      if (actor._tag === 'Credential' && loginGrants.length > 0) {
-        return yield* new OwnerRequiredError({
-          message:
-            'Only the owner’s vault vouches for a CLI login’s key, so only the owner hands a new environment to the CLI logins. The dashboard does it once the owner opens it.',
-        });
-      }
-      if (
-        actor._tag === 'Credential' &&
-        (environment.creatorWrap === null || environment.creatorProof === null)
-      ) {
-        return yield* new OwnerRequiredError({
-          message:
-            'A CLI login that creates an environment wraps the environment key to itself and vouches for it (`creatorWrap`, `creatorProof`), or it could never read what it made.',
-        });
-      }
-      const [org] = yield* ownedOrg({ accountId: actor.accountId, orgId: environment.orgId }).pipe(
-        Effect.orDie,
-      );
-      if (org === undefined) {
-        return yield* new NotFoundError({
-          message: 'No org of yours has this id.',
-        });
-      }
-      if (org.role !== 'owner') {
-        return yield* new OwnerRequiredError({
-          message: `Only an owner of ${org.slug} creates an environment in it.`,
-        });
+      const org = yield* ownedOrg(actor, environment.orgId, 'creates an environment in it');
+      if (!org.areNamesSealed) return yield* namesNotSealed(org.slug);
+      const { answers } = environment;
+      if (answers !== undefined) {
+        const request = yield* requestRows.visible(actor, answers);
+        if (request.status !== 'pending') return yield* spentRequest(request);
+        if (
+          request.id !== environment.id ||
+          request.orgId !== environment.orgId ||
+          request.name !== environment.name ||
+          request.sealedName !== environment.sealedName
+        ) {
+          return yield* new InvalidRequestError({
+            message:
+              'The environment does not match the request it answers: the same id, org and name. Read the request again and create what it names.',
+          });
+        }
       }
       yield* underLimit(actor.accountId, 'environments');
       const now = yield* Clock.currentTimeMillis;
-      // The row is this request's own: an id that was taken leaves another's there.
-      const made = sql`EXISTS (SELECT 1 FROM environment
-        WHERE id = ${environment.id} AND created_at = ${now} AND public_key = ${environment.publicKey})`;
-      // One batch: the environment, its creator's member copy and grant, and the log entry, or
-      // none. `OR IGNORE` leaves a taken name or id without a row.
+      const { made, statements } = newEnvironmentStatements(sql, environment, {
+        accountId: actor.accountId,
+        createdBy: encodeActor(actorOf(actor)),
+        now,
+        // An answer creates the environment only while its request still waits.
+        onlyIf: answers === undefined ? sql`1 = 1` : isWaiting(sql, answers, now),
+      });
+      // One batch: the environment, the owner's member copy, the log entry and the request it
+      // answers, approved only if the environment was made; or none of them.
       const [inserted] = yield* sql
         .batch([
-          sql`INSERT OR IGNORE INTO environment
-                (id, org_id, name, public_key, key_version, created_by, created_at)
-              VALUES (${environment.id}, ${environment.orgId}, ${environment.name},
-                ${environment.publicKey}, 1, ${encodeActor(actorOf(actor))}, ${now})
-              RETURNING id`,
-          sql`INSERT INTO member_wrap (environment_id, account_id, wrap, proof, key_version, created_at)
-              SELECT ${environment.id}, ${actor.accountId}, ${environment.memberWrap},
-                ${environment.memberProof}, 1, ${now}
-              WHERE ${made}`,
-          ...(actor._tag === 'Credential'
-            ? [
-                sql`INSERT INTO environment_grant
-                      (environment_id, credential_id, can_write, read_wrap, key_proof, key_version,
-                       created_at)
-                    SELECT ${environment.id}, ${actor.credentialId}, 1, ${environment.creatorWrap},
-                      ${environment.creatorProof}, 1, ${now}
-                    WHERE ${made}`,
-              ]
-            : []),
-          // Each login the owner wrapped the key to, if it is still a live login of this account.
-          ...loginGrants.map(
-            grant =>
-              sql`INSERT INTO environment_grant
-                    (environment_id, credential_id, can_write, read_wrap, key_proof, key_version,
-                     created_at)
-                  SELECT ${environment.id}, id, 1, ${grant.readWrap}, ${grant.keyProof}, 1, ${now}
-                  FROM credential
-                  WHERE id = ${grant.credentialId} AND account_id = ${actor.accountId}
-                    AND parent_id IS NULL AND revoked_at IS NULL AND ${made}`,
-          ),
+          ...statements,
           yield* audit.entry(
             {
               orgId: environment.orgId,
               actor: actorOf(actor),
               action: 'environment.create',
               environmentId: environment.id,
-              environmentName: environment.name,
             },
             made,
           ),
+          ...(answers === undefined
+            ? []
+            : [
+                sql`UPDATE environment_request SET status = 'approved', resolved_at = ${now}
+                    WHERE id = ${answers} AND ${isWaiting(sql, answers, now)} AND ${made}`,
+              ]),
         ])
         .pipe(Effect.orDie);
       if ((inserted ?? []).length === 0) {
-        // A name in the bin stays taken: reusing it would leave two environments to tell apart.
-        const [binned] = yield* sql`SELECT 1 AS binned FROM environment
-          WHERE org_id = ${environment.orgId} AND name = ${environment.name}
-            AND deleted_at IS NOT NULL`.pipe(Effect.orDie);
-        return yield* new AlreadyExistsError({
-          message:
-            binned === undefined
-              ? `An environment named ${org.slug}/${environment.name} exists.`
-              : `An environment named ${org.slug}/${environment.name} is in the bin, and keeps its name until it is removed for good. The owner can restore it, or remove it for good, from the Bin in the dashboard.`,
-        });
+        if (answers !== undefined) {
+          const after = yield* requestRows.visible(actor, answers).pipe(Effect.orDie);
+          if (after.status !== 'pending') return yield* spentRequest(after);
+        }
+        return yield* yield* nameTaken({ ...environment, orgSlug: org.slug });
       }
       return (yield* environmentFor(actor, environment.id).pipe(Effect.orDie)).environment;
     }),
@@ -267,14 +231,15 @@ export const environments = ({
         .batch([
           sql`UPDATE environment SET deleted_at = ${now}, purge_at = ${purgeAt}
               WHERE id = ${id} AND deleted_at IS NULL`,
+          // An expired link stays expired.
           sql`UPDATE paste_link SET status = 'cancelled', resolved_at = ${now}
-              WHERE environment_id = ${id} AND status = 'pending'`,
+              WHERE environment_id = ${id} AND status = 'pending'
+                AND created_at > ${now - PASTE_LINK_WAIT_MS}`,
           yield* audit.entry({
             orgId: environment.orgId,
             actor: actorOf(actor),
             action: 'environment.delete',
             environmentId: id,
-            environmentName: environment.name,
           }),
         ])
         .pipe(Effect.orDie);
@@ -295,9 +260,8 @@ export const environments = ({
         });
       }
       const [binned] = yield* sql<{
-        readonly name: string;
         readonly orgId: string;
-      }>`SELECT e.name, e.org_id FROM environment e
+      }>`SELECT e.org_id FROM environment e
           JOIN member m ON m.organizationId = e.org_id AND m.role = 'owner'
           JOIN store_account a ON a.user_id = m.userId
           WHERE e.id = ${id} AND a.id = ${actor.accountId} AND e.deleted_at IS NOT NULL`.pipe(
@@ -318,7 +282,6 @@ export const environments = ({
             actor: actorOf(actor),
             action: 'environment.restore',
             environmentId: id,
-            environmentName: binned.name,
           }),
         ])
         .pipe(Effect.orDie);
@@ -339,7 +302,7 @@ export const environments = ({
       );
       if (memberWrap === null || memberProof === null) {
         return yield* new NotFoundError({
-          message: `${environment.orgSlug}/${environment.name} holds no copy of its key for you.`,
+          message: `${addressOf(environment)} holds no copy of its key for you.`,
         });
       }
       // The creator's key as the store holds it, revoked or not: the owner's vault decides whether
@@ -387,7 +350,13 @@ export const environments = ({
       readonly keyVersion: number;
     }) {
       const { environment } = yield* ownersEnvironment(actor, id, 'grants access');
-      const serviceAccount = yield* serviceAccountIn(actor.accountId, credentialId);
+      const serviceAccount = yield* approvedServiceAccountIn(actor.accountId, credentialId);
+      if (serviceAccount.parentId === null) {
+        return yield* new InvalidRequestError({
+          message:
+            'A CLI login holds no environment. It asks for one with `baymutt ask access`, and approving the request makes a service account that holds it.',
+        });
+      }
       if (!canWrite && readWrap === null) {
         return yield* new NotFoundError({
           message: 'A grant gives read, write or both. To take access away, remove the grant.',
@@ -396,7 +365,7 @@ export const environments = ({
       const now = yield* Clock.currentTimeMillis;
       yield* sql
         .batch([
-          grantStatement({
+          grantStatement(sql, {
             environmentId: id,
             credentialId,
             canWrite,
@@ -410,7 +379,6 @@ export const environments = ({
             actor: actorOf(actor),
             action: 'grant.set',
             environmentId: id,
-            environmentName: environment.name,
             detail: `${serviceAccount.name}: ${[readWrap !== null && 'read', canWrite && 'write'].filter(Boolean).join(' + ')}`,
           }),
         ])
@@ -430,21 +398,17 @@ export const environments = ({
       readonly credentialId: string;
     }) {
       const { environment } = yield* ownersEnvironment(actor, id, 'removes access');
-      const serviceAccount = yield* serviceAccountIn(actor.accountId, credentialId);
-      // A service account made by this one holds a copy of the same access, so it loses it too.
+      const serviceAccount = yield* approvedServiceAccountIn(actor.accountId, credentialId);
       const [removed] = yield* sql
         .batch([
           sql`DELETE FROM environment_grant
-              WHERE environment_id = ${id}
-                AND credential_id IN (SELECT id FROM credential
-                                      WHERE id = ${credentialId} OR parent_id = ${credentialId})
+              WHERE environment_id = ${id} AND credential_id = ${credentialId}
               RETURNING credential_id`,
           yield* audit.entry({
             orgId: environment.orgId,
             actor: actorOf(actor),
             action: 'grant.remove',
             environmentId: id,
-            environmentName: environment.name,
             detail: serviceAccount.name,
           }),
         ])

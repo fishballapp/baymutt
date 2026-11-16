@@ -6,9 +6,11 @@ import * as Command from 'effect/cli/Command';
 import * as Flag from 'effect/cli/Flag';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
-import { resolveEnvironment } from '../environments.ts';
+import { listEnvironments, resolveEnvironment } from '../environments.ts';
 import { report, usage } from '../errors.ts';
+import { openStoredName } from '../names.ts';
 import { print } from '../output.ts';
+import { openSecret, secretParams, shownSecret } from '../secrets.ts';
 import { ServiceAccount } from '../service-account.ts';
 import { environmentArgument } from './environments.ts';
 
@@ -17,13 +19,52 @@ const listCommand = Command.make(
   {},
   Effect.fn('bin.list')(function* () {
     const { api } = yield* ServiceAccount;
-    yield* print(yield* api.bin.list());
+    const [bin, { namesKeys }] = yield* Effect.all([api.bin.list(), listEnvironments()], {
+      concurrency: 2,
+    });
+    const namesKeyOf = (orgId: string) => namesKeys.get(orgId) ?? null;
+    const environments = yield* Effect.forEach(
+      bin.environments,
+      ({ name, sealedName, ...environment }) =>
+        Effect.map(
+          openStoredName(namesKeyOf(environment.orgId), {
+            scopeId: environment.orgId,
+            stored: { name, sealedName },
+          }),
+          opened => ({ ...environment, name: opened }),
+        ),
+      { concurrency: 'unbounded' },
+    );
+    const secrets = yield* Effect.forEach(
+      bin.secrets,
+      Effect.fnUntraced(function* ({
+        name,
+        sealedName,
+        environmentName,
+        environmentSealedName,
+        ...secret
+      }) {
+        const namesKey = namesKeyOf(secret.orgId);
+        return {
+          ...secret,
+          environmentName: yield* openStoredName(namesKey, {
+            scopeId: secret.orgId,
+            stored: { name: environmentName, sealedName: environmentSealedName },
+          }),
+          name: yield* openStoredName(namesKey, {
+            scopeId: secret.environmentId,
+            stored: { name, sealedName },
+          }),
+        };
+      }),
+      { concurrency: 'unbounded' },
+    );
+    yield* print({ environments, secrets });
   }, report),
 ).pipe(
   Command.withDescription(
     'Deleted environments and secrets, newest first, with when each is removed for good (`purgeAt`)',
   ),
-  Command.withAlias('ls'),
 );
 
 const restoreCommand = Command.make(
@@ -42,25 +83,27 @@ const restoreCommand = Command.make(
   },
   Effect.fn('bin.restore')(function* ({ environment, name, to }) {
     const { api } = yield* ServiceAccount;
-    const { id } = yield* resolveEnvironment(environment);
+    const resolved = yield* resolveEnvironment(environment);
+    const params = yield* secretParams(resolved, name);
     const { secrets } = yield* api.bin.list();
-    const binned = secrets.find(secret => secret.environmentId === id && secret.name === name);
+    const binned = secrets.find(
+      secret => secret.environmentId === params.environmentId && secret.name === params.name,
+    );
     if (binned === undefined) {
       return yield* usage(
         `${name} is not in the bin of ${environment}. See what is with \`baymutt bin list\`.`,
         'notFound',
       );
     }
-    yield* print(
-      yield* api.secrets.rollback({
-        params: { environmentId: id, name },
-        payload: {
-          version: Option.getOrElse(to, () => binned.latestVersion),
-          // Refused if something set it again since the list above.
-          fromBin: true,
-        },
-      }),
-    );
+    const restored = yield* api.secrets.rollback({
+      params,
+      payload: {
+        version: Option.getOrElse(to, () => binned.latestVersion),
+        // Refused if something set it again since the list above.
+        fromBin: true,
+      },
+    });
+    yield* print(shownSecret(yield* openSecret(resolved, restored)));
   }, report),
 ).pipe(
   Command.withDescription(

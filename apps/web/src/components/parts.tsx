@@ -227,3 +227,18 @@ export const Skeleton = ({ rows = 3 }: { readonly rows?: number }) => (
     ))}
   </Rows>
 );
+
+/** A label over what the terminal says, and the words that say it is the terminal's. */
+export const Claim = ({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: ReactNode;
+}) => (
+  <div className="rounded-panel border border-line bg-surface px-5 py-4 sm:px-6">
+    <p className="text-sm text-muted">{label}</p>
+    <div className="mt-1 [overflow-wrap:anywhere]">{children}</div>
+    <p className="mt-2 text-sm text-muted">In the terminal’s own words.</p>
+  </div>
+);

@@ -2,15 +2,16 @@ import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { cn } from 'cn';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import * as Atom from 'effect/reactivity/Atom';
 import { createContext, type ReactNode, use, useEffect, useState } from 'react';
 import {
-  environmentsAtom,
-  isLogin,
-  pasteLinksAtom,
+  orgsAtom,
+  pendingEnvironmentRequestsAtom,
+  pendingPasteLinksAtom,
+  pendingRequestsAtom,
   resumeAtom,
-  serviceAccountsAtom,
+  sealOrgsAtom,
   signOutAtom,
-  topUpLoginsAtom,
 } from '../lib/data.ts';
 import { type Owner, useOwnerStore } from '../lib/owner.ts';
 import { failureMessage, latest } from '../lib/result.ts';
@@ -59,22 +60,35 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
 };
 
 const NAV = [
-  { to: '/environments', label: 'Environments' },
-  { to: '/service-accounts', label: 'Service accounts' },
-  { to: '/paste-links', label: 'Paste links' },
-  { to: '/activity', label: 'Activity' },
-  { to: '/bin', label: 'Bin' },
-  { to: '/account', label: 'Account' },
+  // Environment requests wait under Environments: approving one creates it.
+  { to: '/environments', label: 'Environments', pending: pendingEnvironmentRequestsAtom },
+  // Requests wait under Service accounts: approving one makes its key a service account.
+  { to: '/service-accounts', label: 'Service accounts', pending: pendingRequestsAtom },
+  { to: '/paste-links', label: 'Paste links', pending: pendingPasteLinksAtom },
+  { to: '/activity', label: 'Activity', pending: null },
+  { to: '/bin', label: 'Bin', pending: null },
+  { to: '/account', label: 'Account', pending: null },
 ] as const;
 
 type NavPath = (typeof NAV)[number]['to'];
 
-/** The nav item a page belongs to: a pairing link is about a service account. */
-const sectionOf = (path: string): NavPath | undefined =>
-  path.startsWith('/pair') ? '/service-accounts' : NAV.find(({ to }) => path.startsWith(to))?.to;
+/**
+ * The nav item a page belongs to: a pairing link and a request are about service accounts, an
+ * environment request about environments.
+ */
+const sectionOf = (path: string): NavPath | undefined => {
+  if (path.startsWith('/pair') || path.startsWith('/requests')) return '/service-accounts';
+  if (path.startsWith('/environment-requests')) return '/environments';
+  return NAV.find(({ to }) => path.startsWith(to))?.to;
+};
 
-const PendingCount = () => {
-  const pending = latest(useAtomValue(pasteLinksAtom))?.length ?? 0;
+/** How many things under a nav item wait on the owner. */
+const PendingCount = ({
+  atom,
+}: {
+  readonly atom: Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<unknown>, unknown>>;
+}) => {
+  const pending = latest(useAtomValue(atom))?.length ?? 0;
   if (pending === 0) return null;
   return (
     <span className="absolute top-0.5 right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-xs leading-none font-medium text-accent-foreground tabular-nums md:static md:ml-auto md:h-5 md:min-w-5 md:px-1.5">
@@ -85,38 +99,45 @@ const PendingCount = () => {
 };
 
 /**
- * Keeps every CLI login holding every environment of every org. An environment another login made
- * reaches the others only through the owner's vault, so whenever it is open and a login lacks one,
- * this grants it. Keyed on what is missing: a grant that fails is not retried until the lists
- * change.
+ * Seals the names of every org that has not sealed them yet, once the vault is open: the store
+ * keeps an org's names as written until then, and nothing with a new name can be made in it.
+ * Keyed on which orgs are unsealed, so a failure is not retried until that changes. A CLI login
+ * or service account whose key cannot be verified is left out, and the owner is told which.
  */
-const LoginTopUp = () => {
+const NamesSealing = () => {
   const owner = useOwner();
-  const [toppingUp, topUp] = useAtom(topUpLoginsAtom);
-  const serviceAccounts = latest(useAtomValue(serviceAccountsAtom));
-  const environments = latest(useAtomValue(environmentsAtom));
-  const missing =
-    serviceAccounts === null || environments === null
-      ? ''
-      : serviceAccounts
-          .filter(isLogin)
-          .flatMap(login =>
-            environments
-              .filter(environment => {
-                const held = login.grants.find(grant => grant.environmentId === environment.id);
-                return !(held?.canRead && held.canWrite);
-              })
-              .map(environment => `${login.id}/${environment.id}`),
-          )
-          .join(' ');
+  const [sealing, seal] = useAtom(sealOrgsAtom);
+  const unsealed =
+    latest(useAtomValue(orgsAtom))
+      ?.filter(org => !org.areNamesSealed)
+      .map(org => org.id)
+      .join(' ') ?? '';
   useEffect(() => {
-    if (missing !== '') topUp(owner);
-  }, [missing, owner, topUp]);
-  const failure = failureMessage(toppingUp);
-  return failure === null ? null : (
-    <Notice className="mb-6">
-      Could not give every CLI login the environments it lacks: {failure} It is tried again when you
-      next open the dashboard.
+    if (unsealed !== '') seal(owner);
+  }, [unsealed, owner, seal]);
+  const failure = failureMessage(sealing);
+  if (failure !== null) {
+    return (
+      <Notice className="mb-6">
+        Could not seal the names in your orgs: {failure} It is tried again when you next open the
+        dashboard.
+      </Notice>
+    );
+  }
+  const leftOut = AsyncResult.isSuccess(sealing) ? sealing.value : [];
+  if (leftOut.length === 0) return null;
+  return (
+    <Notice tone="warn" className="mb-6">
+      {leftOut.map(({ org, leftOut: names }) => (
+        <span key={org} className="block">
+          The names in {org} are sealed. {names.join(', ')} {names.length === 1 ? 'was' : 'were'}{' '}
+          left out: {names.length === 1 ? 'its' : 'their'} key cannot be verified, so{' '}
+          {names.length === 1 ? 'it' : 'they'} cannot list the names there until replaced.
+        </span>
+      ))}
+      <Button size="sm" intent="quiet" className="mt-1 -ml-2.5" onClick={() => seal(Atom.Reset)}>
+        Dismiss
+      </Button>
     </Notice>
   );
 };
@@ -156,7 +177,7 @@ export const Shell = () => {
             aria-label="Main"
             className="grid grid-cols-3 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:py-4"
           >
-            {NAV.map(({ to, label }) => (
+            {NAV.map(({ to, label, pending }) => (
               <Link
                 key={to}
                 to={to}
@@ -164,7 +185,7 @@ export const Shell = () => {
                 className={navItem(current === to)}
               >
                 {label}
-                {to === '/paste-links' && <PendingCount />}
+                {pending !== null && <PendingCount atom={pending} />}
               </Link>
             ))}
           </nav>
@@ -183,7 +204,7 @@ export const Shell = () => {
       </aside>
       <main className="min-w-0 px-5 pt-7 pb-16 md:px-10 md:pt-10 lg:px-14">
         <div className="max-w-[60rem]">
-          <LoginTopUp />
+          <NamesSealing />
           <Outlet />
         </div>
       </main>

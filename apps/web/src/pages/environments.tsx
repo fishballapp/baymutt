@@ -8,18 +8,23 @@ import { useOwner } from '../components/gate.tsx';
 import { NewOrg, usePickedOrg } from '../components/orgs.tsx';
 import {
   Code,
-  CommandLine,
   Empty,
   Notice,
   PageHeader,
   Row,
   Rows,
+  Section,
   Skeleton,
   Time,
 } from '../components/parts.tsx';
-import { Button } from '../components/ui/button.tsx';
+import { Button, buttonStyles } from '../components/ui/button.tsx';
 import { TextField } from '../components/ui/field.tsx';
-import { addressOf, createEnvironmentAtom, environmentsAtom } from '../lib/data.ts';
+import {
+  addressOf,
+  createEnvironmentAtom,
+  environmentRequestsAtom,
+  environmentsAtom,
+} from '../lib/data.ts';
 import { counted } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
@@ -69,8 +74,55 @@ const NewEnvironment = ({ org }: { readonly org: Org }) => {
   );
 };
 
+/**
+ * Environment requests waiting for the owner, in every org: each as a sentence, its decision on
+ * its own page.
+ */
+const EnvironmentRequests = () => {
+  const requests = latest(useAtomValue(environmentRequestsAtom(useOwner())));
+  if (requests === null || requests.length === 0) return null;
+  return (
+    <Section
+      title="Requests"
+      lede="Each waits for you. Approving one creates the environment."
+      className="mb-10"
+    >
+      <Rows>
+        {requests.map(request => (
+          <Row key={request.id}>
+            <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
+              <div className="min-w-0 flex-1">
+                <p>
+                  <span className="font-medium">{request.createdBy.name}</span> asks for a new
+                  environment,{' '}
+                  <Code>{addressOf({ orgSlug: request.orgSlug, name: request.openedName })}</Code>
+                </p>
+                <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted [overflow-wrap:anywhere]">
+                  {request.reason}
+                </p>
+                <p className="mt-1.5 text-sm text-muted">
+                  asked <Time at={request.createdAt} />
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1.5 sm:shrink-0">
+                <Link
+                  to="/environment-requests/$id"
+                  params={{ id: request.id }}
+                  className={buttonStyles()}
+                >
+                  Review
+                </Link>
+              </div>
+            </div>
+          </Row>
+        ))}
+      </Rows>
+    </Section>
+  );
+};
+
 export const EnvironmentsPage = () => {
-  const result = useAtomValue(environmentsAtom);
+  const result = useAtomValue(environmentsAtom(useOwner()));
   const { orgs, org } = usePickedOrg();
   const environments = latest(result)?.filter(environment => environment.orgId === org?.id) ?? null;
   if (orgs !== null && org === null) {
@@ -88,18 +140,18 @@ export const EnvironmentsPage = () => {
     <>
       <PageHeader
         title="Environments"
-        lede="An environment is the unit of access. Every CLI login reads and writes each one; a service account holds only the ones it was handed."
+        lede="An environment is the unit of access. A CLI login lists it and opens nothing in it; a service account reaches it when a request you approved named it."
       />
+      <EnvironmentRequests />
       {org !== null && <NewEnvironment org={org} />}
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
       {(environments === null || org === null) && !failureMessage(result) && <Skeleton />}
       {org !== null && environments?.length === 0 && (
         <Empty title={`No environments in ${org.name} yet`}>
           <p>
-            Create one above, or from a CLI login. An environment a CLI login creates shows up here,
-            and you can read it.
+            Create one above. A CLI login asks for one with{' '}
+            <Code>baymutt ask create-environment</Code>.
           </p>
-          <CommandLine>{`baymutt environments create ${org.slug}/app/production`}</CommandLine>
         </Empty>
       )}
       {environments !== null && environments.length > 0 && (
@@ -112,7 +164,9 @@ export const EnvironmentsPage = () => {
                 className="group flex items-center gap-4 px-4 py-3 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:-outline-offset-2"
               >
                 <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-6 gap-y-0.5">
-                  <Code className="text-base font-medium">{addressOf(environment)}</Code>
+                  <Code className="text-base font-medium">
+                    {addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })}
+                  </Code>
                   <span className="text-sm text-muted">
                     {counted(environment.secretCount, 'secret')} · made by{' '}
                     {environment.createdBy.name} <Time at={environment.createdAt} />

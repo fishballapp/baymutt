@@ -7,8 +7,23 @@ import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
-import { AlreadyExistsError, LimitReachedError, NotEmptyError, NotFoundError } from './errors.ts';
-import { LabelSchema, OrgSlugSchema, TimestampSchema } from './fields.ts';
+import {
+  AlreadyExistsError,
+  LimitReachedError,
+  NamesNotSealedError,
+  NotEmptyError,
+  NotFoundError,
+} from './errors.ts';
+import {
+  LabelSchema,
+  NameIndexSchema,
+  NamesKeyWrapSchema,
+  OrgSlugSchema,
+  SealedNameSchema,
+  StoredEnvironmentNameSchema,
+  StoredSecretNameSchema,
+  TimestampSchema,
+} from './fields.ts';
 import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const OrgSchema = Schema.Struct({
@@ -17,9 +32,33 @@ export const OrgSchema = Schema.Struct({
   slug: OrgSlugSchema,
   /** Live environments; the bin's are not counted. */
   environmentCount: Schema.Int,
+  /**
+   * Whether the org has a names key. Until it does, its names are stored as written, and nothing
+   * with a new name can be made in it: the owner's dashboard seals them when it is next opened.
+   */
+  areNamesSealed: Schema.Boolean,
   createdAt: TimestampSchema,
 }).annotate({ identifier: 'Org' });
 export type Org = typeof OrgSchema.Type;
+
+/** One reader's copy of an org's names key. A reader is the owner's account, a CLI login or a service account. */
+export const NamesKeyReaderWrapSchema = Schema.Struct({
+  readerId: Schema.String,
+  wrap: NamesKeyWrapSchema,
+}).annotate({ identifier: 'NamesKeyReaderWrap' });
+
+/** Every name an org still stores as written: what the owner's browser seals, once. */
+export const UnsealedNamesSchema = Schema.Struct({
+  /** Every environment of the org, the bin's and those only the activity still names included. */
+  environments: Schema.Array(
+    Schema.Struct({ id: Schema.String, name: StoredEnvironmentNameSchema }),
+  ),
+  /** Every secret name, per environment: live, in the bin, on a paste link or only in the activity. */
+  secrets: Schema.Array(
+    Schema.Struct({ environmentId: Schema.String, name: StoredSecretNameSchema }),
+  ),
+}).annotate({ identifier: 'UnsealedNames' });
+export type UnsealedNames = typeof UnsealedNamesSchema.Type;
 
 export class OrgsGroup extends HttpApiGroup.make('orgs')
   .add(
@@ -43,6 +82,43 @@ export class OrgsGroup extends HttpApiGroup.make('orgs')
           'A person signed in to the dashboard, vault open; never a CLI login or service account. The person becomes its owner. A slug is unique across baymutt.',
       }),
     ),
+    // The owner's alone, from the dashboard with the vault open.
+    HttpApiEndpoint.get('unsealedNames', '/orgs/:id/unsealed-names', {
+      params: { id: Schema.String },
+      success: UnsealedNamesSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
+    HttpApiEndpoint.post('sealNames', '/orgs/:id/seal-names', {
+      params: { id: Schema.String },
+      payload: Schema.Struct({
+        /** The new names key, wrapped to the owner's account and to every CLI login and service account that reaches the org. */
+        wraps: Schema.Array(NamesKeyReaderWrapSchema),
+        environments: Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            name: NameIndexSchema,
+            sealedName: SealedNameSchema,
+          }),
+        ),
+        secrets: Schema.Array(
+          Schema.Struct({
+            environmentId: Schema.String,
+            /** The name as the store holds it now. */
+            unsealedName: StoredSecretNameSchema,
+            name: NameIndexSchema,
+            sealedName: SealedNameSchema,
+          }),
+        ),
+      }),
+      success: OrgSchema,
+      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(AlreadyExistsError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
+    HttpApiEndpoint.put('putNamesKeyWrap', '/orgs/:id/names-key-wraps/:readerId', {
+      params: { id: Schema.String, readerId: Schema.String },
+      payload: Schema.Struct({ wrap: NamesKeyWrapSchema }),
+      success: Schema.Struct({ readerId: Schema.String }),
+      error: [coded(NotFoundError), coded(OwnerRequiredError), coded(NamesNotSealedError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
     HttpApiEndpoint.delete('remove', '/orgs/:id', {
       params: { id: Schema.String },
       success: Schema.Struct({ deleted: Schema.Boolean }),

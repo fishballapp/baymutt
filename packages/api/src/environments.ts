@@ -8,16 +8,26 @@ import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
-import { AlreadyExistsError, LimitReachedError, NoAccessError, NotFoundError } from './errors.ts';
+import {
+  AlreadyExistsError,
+  LimitReachedError,
+  LinkSpentError,
+  NamesNotSealedError,
+  NoAccessError,
+  NotFoundError,
+} from './errors.ts';
 import {
   ActorSchema,
-  EnvironmentNameSchema,
   IdSchema,
   KeyProofSchema,
   LabelSchema,
+  NameIndexSchema,
+  OrgNamesKeyWrapSchema,
   OrgSlugSchema,
   PublicKeySchema,
+  SealedNameSchema,
   SealedSchema,
+  StoredEnvironmentNameSchema,
   TimestampSchema,
   WrapSchema,
 } from './fields.ts';
@@ -28,7 +38,13 @@ export const EnvironmentSchema = Schema.Struct({
   orgId: Schema.String,
   /** The first segment of its address: `<orgSlug>/<name>`. */
   orgSlug: OrgSlugSchema,
-  name: EnvironmentNameSchema,
+  /** Its index under the org's names key: what the store keeps in place of the name. */
+  name: StoredEnvironmentNameSchema,
+  /**
+   * The name, for whoever holds the names key. Null in an org whose names are not sealed yet;
+   * missing too, for 0.8.0 only, from the store a deploy is about to replace.
+   */
+  sealedName: Schema.optionalKey(Schema.NullOr(SealedNameSchema)),
   publicKey: PublicKeySchema,
   keyVersion: Schema.Int,
   createdAt: TimestampSchema,
@@ -37,10 +53,10 @@ export const EnvironmentSchema = Schema.Struct({
   /**
    * The proof of `publicKey` made for the calling credential: a client seals to the key the proof
    * opens to, never to `publicKey` as it stands here. Null for the owner, whose proof comes with
-   * the member wrap.
+   * the member wrap, and for a caller with no grant on it.
    */
   keyProof: Schema.NullOr(KeyProofSchema),
-  /** What the caller may do. An owner of its org may always do both. */
+  /** What the caller may do. An owner of its org may always do both; a CLI login, neither. */
   canRead: Schema.Boolean,
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'Environment' });
@@ -63,50 +79,52 @@ const idParam = { id: Schema.String };
 export class EnvironmentsGroup extends HttpApiGroup.make('environments')
   .add(
     HttpApiEndpoint.get('list', '/environments', {
-      success: Schema.Struct({ environments: Schema.Array(EnvironmentSchema) }),
+      success: Schema.Struct({
+        environments: Schema.Array(EnvironmentSchema),
+        /**
+         * The caller's copy of the names key of each org it reaches whose names are sealed. Missing,
+         * for 0.8.0 only, from the store a deploy is about to replace.
+         */
+        namesKeys: Schema.optionalKey(Schema.Array(OrgNamesKeyWrapSchema)),
+      }),
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'List environments',
         description:
-          'Across every org the caller reaches. The owner sees every environment of their orgs. A CLI login sees them too, and `keyProof` is null on one the owner’s dashboard has not wrapped to it yet; a service account sees those it holds a grant on.',
+          'Across every org the caller reaches. The owner and a CLI login see every environment of the person’s orgs; a CLI login holds none of them, so each is listed with no proof and no access. A service account sees those it holds a grant on.',
       }),
     ),
     HttpApiEndpoint.post('create', '/environments', {
       payload: Schema.Struct({
         id: IdSchema,
         orgId: Schema.String,
-        name: EnvironmentNameSchema,
+        name: NameIndexSchema,
+        sealedName: SealedNameSchema,
         publicKey: PublicKeySchema,
-        /** The private key wrapped to the creating person's account key: their member copy. */
+        /** The private key wrapped to the owner's account key: their member copy. */
         memberWrap: WrapSchema,
-        /** The creator's proof of `publicKey`, to that account. */
+        /** The owner's proof of `publicKey`, to their own account. */
         memberProof: KeyProofSchema,
-        /** The private key wrapped to the CLI login creating it, and its proof to itself. Null when the owner creates it. */
-        creatorWrap: Schema.NullOr(WrapSchema),
-        creatorProof: Schema.NullOr(KeyProofSchema),
-        /** Owner only: read and write for each CLI login, the key wrapped and vouched for by the owner's vault. */
-        loginGrants: Schema.optionalKey(
-          Schema.Array(
-            Schema.Struct({
-              credentialId: Schema.String,
-              readWrap: WrapSchema,
-              keyProof: KeyProofSchema,
-            }),
-          ),
-        ),
+        /**
+         * The environment request this approves: `id`, `orgId`, `name` and `sealedName` must be
+         * the request's own, and it is approved in the same write that creates the environment.
+         */
+        answers: Schema.optionalKey(IdSchema),
       }),
       success: EnvironmentSchema.pipe(HttpApiSchema.status(201)),
       error: [
+        coded(LinkSpentError),
         coded(AlreadyExistsError),
         coded(OwnerRequiredError),
         coded(LimitReachedError),
         coded(NotFoundError),
+        coded(NamesNotSealedError),
       ],
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Create an environment',
         description:
-          'In an org of the caller’s person, by its owner or a CLI login. Its creator makes the key pair and gets read and write on it.',
+          'An owner of the org only, from the dashboard: the owner’s browser makes the key pair. A CLI login asks for one with an environment request, which the owner approves by creating it here with `answers`. `LinkSpentError` when that request was already answered or has expired.',
       }),
     ),
     HttpApiEndpoint.get('get', '/environments/:id', {
@@ -175,17 +193,16 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Grant a CLI login or service account access',
-        description: 'An owner of its org only: it is what lets a new party read.',
+        summary: 'Grant a service account access',
+        description:
+          'An owner of its org only: it is what lets a new party read. Refused for a CLI login, which holds no environment.',
       }),
     ),
     HttpApiEndpoint.delete('removeGrant', '/environments/:id/grants/:credentialId', {
       params: { ...idParam, credentialId: Schema.String },
       success: Schema.Struct({ removed: Schema.Boolean }),
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
-    }).annotateMerge(
-      OpenApi.annotations({ summary: 'Remove a CLI login’s or service account’s access' }),
-    ),
+    }).annotateMerge(OpenApi.annotations({ summary: 'Remove a service account’s access' })),
   )
   .middleware(Authenticated)
   .middleware(Credentials)

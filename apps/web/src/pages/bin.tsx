@@ -1,6 +1,6 @@
-import type { BinEnvironment, BinSecret } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
+import { useOwner } from '../components/gate.tsx';
 import { usePickedOrg } from '../components/orgs.tsx';
 import {
   Code,
@@ -19,6 +19,9 @@ import { Confirm } from '../components/ui/confirm.tsx';
 import {
   addressOf,
   binAtom,
+  NAME_NOT_OPENED,
+  type OpenedBinEnvironment,
+  type OpenedBinSecret,
   purgeEnvironmentAtom,
   purgeSecretAtom,
   restoreEnvironmentAtom,
@@ -93,12 +96,13 @@ const BinRow = ({
   </Row>
 );
 
-const EnvironmentRow = ({ environment }: { readonly environment: BinEnvironment }) => {
+const EnvironmentRow = ({ environment }: { readonly environment: OpenedBinEnvironment }) => {
   const [restoring, restore] = useAtom(restoreEnvironmentAtom(environment.id));
   const [purging, purge] = useAtom(purgeEnvironmentAtom(environment.id));
+  const address = addressOf({ orgSlug: environment.orgSlug, name: environment.openedName });
   return (
     <BinRow
-      name={<Code className="text-base font-medium">{addressOf(environment)}</Code>}
+      name={<Code className="text-base font-medium">{address}</Code>}
       deleted={
         <>
           deleted <Time at={environment.deletedAt} />
@@ -111,7 +115,7 @@ const EnvironmentRow = ({ environment }: { readonly environment: BinEnvironment 
         error: failureMessage(restoring),
       }}
       purge={{
-        title: `Delete ${addressOf(environment)} for good?`,
+        title: `Delete ${address} for good?`,
         body: 'Its secrets, every version of each, and who could reach it are removed from baymutt.',
         onConfirm: () => purge(environment.id),
         waiting: purging.waiting,
@@ -121,7 +125,7 @@ const EnvironmentRow = ({ environment }: { readonly environment: BinEnvironment 
   );
 };
 
-const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
+const SecretRow = ({ secret }: { readonly secret: OpenedBinSecret }) => {
   const slot = `${secret.environmentId}/${secret.name}`;
   const [restoring, restore] = useAtom(restoreSecretAtom(slot));
   const [purging, purge] = useAtom(purgeSecretAtom(slot));
@@ -130,9 +134,9 @@ const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
     <BinRow
       name={
         <p>
-          <Code className="text-base font-medium">{secret.name}</Code>{' '}
+          <Code className="text-base font-medium">{secret.openedName ?? NAME_NOT_OPENED}</Code>{' '}
           <span className="text-muted">in</span>{' '}
-          <Code>{addressOf({ orgSlug: secret.orgSlug, name: secret.environmentName })}</Code>
+          <Code>{addressOf({ orgSlug: secret.orgSlug, name: secret.openedEnvironmentName })}</Code>
         </p>
       }
       deleted={
@@ -147,7 +151,7 @@ const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
         error: failureMessage(restoring),
       }}
       purge={{
-        title: `Delete ${secret.name} for good?`,
+        title: `Delete ${secret.openedName ?? 'this secret'} for good?`,
         body: `Every version of it is removed from baymutt.`,
         onConfirm: () => purge(key),
         waiting: purging.waiting,
@@ -158,7 +162,7 @@ const SecretRow = ({ secret }: { readonly secret: BinSecret }) => {
 };
 
 export const BinPage = () => {
-  const result = useAtomValue(binAtom);
+  const result = useAtomValue(binAtom(useOwner()));
   const { org } = usePickedOrg();
   const all = latest(result);
   const bin =

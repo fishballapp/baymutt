@@ -1,6 +1,6 @@
-import type { Environment, ServiceAccount } from '@baymutt/api';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { RobotIcon, TerminalWindowIcon } from '@phosphor-icons/react';
+import { Link } from '@tanstack/react-router';
 import * as Atom from 'effect/reactivity/Atom';
 import { useState } from 'react';
 import { ExpiryField, expiryLabel } from '../components/expiry.tsx';
@@ -15,11 +15,12 @@ import {
   Row,
   RowActions,
   Rows,
+  Section,
   Skeleton,
   Tag,
   Time,
 } from '../components/parts.tsx';
-import { Button } from '../components/ui/button.tsx';
+import { Button, buttonStyles } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
 import {
   type AccessChange,
@@ -28,6 +29,10 @@ import {
   environmentsAtom,
   isLogin,
   isVouched,
+  type OpenedEnvironment,
+  type OpenedRequest,
+  type OpenedServiceAccount,
+  requestsAtom,
   revokeServiceAccountAtom,
   serviceAccountsAtom,
   setExpiryAtom,
@@ -36,7 +41,7 @@ import { counted, expiryWords } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
 /** A login and a scoped service account are told apart by a glyph and a word, never by colour. */
-export const KindIcon = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) => {
+const KindIcon = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
   const Icon = isLogin(serviceAccount) ? TerminalWindowIcon : RobotIcon;
   return (
     <Icon
@@ -48,7 +53,7 @@ export const KindIcon = ({ serviceAccount }: { readonly serviceAccount: ServiceA
   );
 };
 
-const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) => {
+const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
   const [saving, save] = useAtom(setExpiryAtom, { mode: 'promiseExit' });
   const [isOpen, setIsOpen] = useState(false);
   const [expiresAt, setExpiresAt] = useState<number | null | undefined>(serviceAccount.expiresAt);
@@ -82,7 +87,7 @@ const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: ServiceAcco
       />
       <p>
         Once it expires its key stops working
-        {isLogin(serviceAccount) && ', and so do the service accounts it made'}. A later date
+        {isLogin(serviceAccount) && ', and so do the service accounts it asked for'}. A later date
         revives it. What it already read stays read.
       </p>
     </Confirm>
@@ -91,7 +96,7 @@ const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: ServiceAcco
 
 type Held = { readonly canRead: boolean; readonly canWrite: boolean };
 
-const heldOn = (serviceAccount: ServiceAccount, environmentId: string): Held => {
+const heldOn = (serviceAccount: OpenedServiceAccount, environmentId: string): Held => {
   const grant = serviceAccount.grants.find(held => held.environmentId === environmentId);
   return { canRead: grant?.canRead ?? false, canWrite: grant?.canWrite ?? false };
 };
@@ -120,33 +125,33 @@ const AccessBox = ({
 );
 
 /**
- * What a scoped service account can reach, changed here under the key it already has. A read or
- * an environment it gains needs its key as its maker vouched for it; one made by a CLI before 0.4.0 has
- * no such voucher, so it can only lose access, and gain write on an environment it holds.
+ * What a service account can reach, changed here under the key it already has. A read or an
+ * environment it gains needs its key as its CLI login vouched for it; one made by a CLI before
+ * 0.4.0 has no such voucher, so it can only lose access, and gain write on an environment it holds.
  */
 const ChangeAccess = ({
   serviceAccount,
   maker,
 }: {
-  readonly serviceAccount: ServiceAccount;
-  readonly maker: ServiceAccount | undefined;
+  readonly serviceAccount: OpenedServiceAccount;
+  readonly maker: OpenedServiceAccount | undefined;
 }) => {
   const owner = useOwner();
-  const environments = latest(useAtomValue(environmentsAtom)) ?? [];
+  const environments = latest(useAtomValue(environmentsAtom(owner))) ?? [];
   const [saving, save] = useAtom(changeAccessAtom, { mode: 'promiseExit' });
   // One atom serves every row, so an earlier row's failure is cleared when this dialog opens.
   const forget = useAtomSet(changeAccessAtom);
   const [isOpen, setIsOpen] = useState(false);
   const [chosen, setChosen] = useState<Readonly<Record<string, Held>>>({});
   const vouched = isVouched(serviceAccount) && maker !== undefined;
-  const accessOn = (environment: Environment) =>
+  const accessOn = (environment: OpenedEnvironment) =>
     chosen[environment.id] ?? heldOn(serviceAccount, environment.id);
   const changes: ReadonlyArray<AccessChange> = environments.flatMap(environment => {
     const before = heldOn(serviceAccount, environment.id);
     const after = accessOn(environment);
     return before.canRead === after.canRead && before.canWrite === after.canWrite
       ? []
-      : [{ environmentId: environment.id, ...after }];
+      : [{ environmentId: environment.id, orgId: environment.orgId, ...after }];
   });
   return (
     <Confirm
@@ -186,7 +191,7 @@ const ChangeAccess = ({
           return (
             <li key={environment.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
               <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                {addressOf(environment)}
+                {addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })}
               </Code>
               <AccessBox
                 label="read"
@@ -216,12 +221,13 @@ const ChangeAccess = ({
   );
 };
 
-/** What it can reach: every environment for a login, what it was handed for any other. */
-const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) => {
+/** What it can reach: the names alone for a login, the environments it holds for any other. */
+const Reach = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
   if (isLogin(serviceAccount)) {
     return (
       <p className="mt-2 text-sm">
-        <span className="text-muted">can read + write</span> every environment of your orgs
+        <span className="text-muted">lists</span> the names in your orgs{' '}
+        <span className="text-muted">and opens no value</span>
       </p>
     );
   }
@@ -233,7 +239,7 @@ const Reach = ({ serviceAccount }: { readonly serviceAccount: ServiceAccount }) 
       {serviceAccount.grants.map(grant => (
         <li key={grant.environmentId}>
           <span className="text-muted">can {grantWords(grant)}</span>{' '}
-          <Code>{addressOf({ orgSlug: grant.orgSlug, name: grant.environmentName })}</Code>
+          <Code>{addressOf({ orgSlug: grant.orgSlug, name: grant.openedEnvironmentName })}</Code>
         </li>
       ))}
     </ul>
@@ -245,8 +251,8 @@ const ServiceAccountRow = ({
   maker,
   made,
 }: {
-  readonly serviceAccount: ServiceAccount;
-  readonly maker: ServiceAccount | undefined;
+  readonly serviceAccount: OpenedServiceAccount;
+  readonly maker: OpenedServiceAccount | undefined;
   readonly made: number;
 }) => {
   const [revoking, revoke] = useAtom(revokeServiceAccountAtom, { mode: 'promiseExit' });
@@ -258,17 +264,21 @@ const ServiceAccountRow = ({
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium">{serviceAccount.name}</span>
-            {serviceAccount.expiresAt !== null && (
-              <Tag tone={serviceAccount.expiresAt <= Date.now() ? 'warn' : 'plain'}>
-                {expiryWords(serviceAccount.expiresAt, Date.now())}
-              </Tag>
-            )}
+            <Tag
+              tone={
+                serviceAccount.expiresAt !== null && serviceAccount.expiresAt <= Date.now()
+                  ? 'warn'
+                  : 'plain'
+              }
+            >
+              {expiryWords(serviceAccount.expiresAt, Date.now())}
+            </Tag>
           </p>
           {serviceAccount.description !== null && (
             <p className="mt-0.5 text-sm [overflow-wrap:anywhere]">{serviceAccount.description}</p>
           )}
           <p className="mt-0.5 text-sm text-muted">
-            {isLogin(serviceAccount) ? 'CLI login, approved' : 'Service account, made by'}{' '}
+            {isLogin(serviceAccount) ? 'CLI login, approved' : 'Service account, asked for by'}{' '}
             {maker !== undefined && `${maker.name} `}
             <Time at={serviceAccount.createdAt} /> ·{' '}
             {serviceAccount.lastUsedAt === null ? (
@@ -308,7 +318,7 @@ const ServiceAccountRow = ({
           >
             <p>
               Its key stops working at once
-              {made > 0 && `, and so do the ${counted(made, 'service account')} it made`}.
+              {made > 0 && `, and so do the ${counted(made, 'service account')} it asked for`}.
             </p>
             <p>
               What it already read stays read. If the key may have leaked, replace those values at
@@ -321,41 +331,94 @@ const ServiceAccountRow = ({
   );
 };
 
+/** One request waiting for the owner, as a sentence: who asks for what. Its decision is on its own page. */
+const RequestRow = ({ request }: { readonly request: OpenedRequest }) => (
+  <Row>
+    <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
+      <div className="min-w-0 flex-1">
+        <p>
+          <span className="font-medium">{request.maker.name}</span> asks for{' '}
+          {request.items.map((item, index) => (
+            <span key={item.environmentId}>
+              {index > 0 && ', '}
+              <Code>{addressOf({ orgSlug: item.orgSlug, name: item.openedEnvironmentName })}</Code>{' '}
+              <span className="text-muted">({grantWords(item)})</span>
+            </span>
+          ))}
+        </p>
+        <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted [overflow-wrap:anywhere]">
+          {request.reason}
+        </p>
+        <p className="mt-1.5 text-sm text-muted">
+          asked <Time at={request.createdAt} />
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5 sm:shrink-0">
+        <Link to="/requests/$id" params={{ id: request.id }} className={buttonStyles()}>
+          Review
+        </Link>
+      </div>
+    </div>
+  </Row>
+);
+
+const Requests = () => {
+  const requests = latest(useAtomValue(requestsAtom(useOwner())));
+  if (requests === null || requests.length === 0) return null;
+  return (
+    <Section
+      title="Requests"
+      lede="Each waits for you. Approving one makes its key a service account."
+    >
+      <Rows>
+        {requests.map(request => (
+          <RequestRow key={request.id} request={request} />
+        ))}
+      </Rows>
+    </Section>
+  );
+};
+
 export const ServiceAccountsPage = () => {
-  const result = useAtomValue(serviceAccountsAtom);
+  const result = useAtomValue(serviceAccountsAtom(useOwner()));
   const serviceAccounts = latest(result);
   return (
     <>
       <PageHeader
         title="Service accounts"
-        lede="Each has its own key that the CLI acts as. A CLI login reads and writes every environment of your orgs; a service account a CLI login made reaches only what it was handed, by that login or by you."
+        lede="A CLI login lists the names in your orgs and opens nothing. A service account is the key of a request you approved: it reaches what the request named, until it ends."
       />
-      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
-      {serviceAccounts?.length === 0 && (
-        <Empty title="No service accounts yet">
-          <p>Install the CLI and log in:</p>
-          <CommandLine>npm install -g baymutt</CommandLine>
-          <CommandLine>baymutt login</CommandLine>
-          <p>
-            It prints a link and a code. Open the link here and approve it if the codes match. The
-            CLI login can then read and write every environment of your orgs, and make service
-            accounts that hold part of its access.
-          </p>
-        </Empty>
-      )}
-      {serviceAccounts !== null && serviceAccounts.length > 0 && (
-        <Rows>
-          {serviceAccounts.map(serviceAccount => (
-            <ServiceAccountRow
-              key={serviceAccount.id}
-              serviceAccount={serviceAccount}
-              maker={serviceAccounts.find(({ id }) => id === serviceAccount.parentId)}
-              made={serviceAccounts.filter(({ parentId }) => parentId === serviceAccount.id).length}
-            />
-          ))}
-        </Rows>
-      )}
+      <Requests />
+      <Section title="CLI logins and service accounts">
+        {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
+        {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
+        {serviceAccounts?.length === 0 && (
+          <Empty title="No CLI logins yet">
+            <p>Install the CLI and log in:</p>
+            <CommandLine>npm install -g baymutt</CommandLine>
+            <CommandLine>baymutt auth login</CommandLine>
+            <p>
+              It prints a link and a code. Open the link here and approve it if the codes match. The
+              CLI login then lists the names in your orgs, and asks you for environments with{' '}
+              <Code>baymutt ask access</Code>.
+            </p>
+          </Empty>
+        )}
+        {serviceAccounts !== null && serviceAccounts.length > 0 && (
+          <Rows>
+            {serviceAccounts.map(serviceAccount => (
+              <ServiceAccountRow
+                key={serviceAccount.id}
+                serviceAccount={serviceAccount}
+                maker={serviceAccounts.find(({ id }) => id === serviceAccount.parentId)}
+                made={
+                  serviceAccounts.filter(({ parentId }) => parentId === serviceAccount.id).length
+                }
+              />
+            ))}
+          </Rows>
+        )}
+      </Section>
     </>
   );
 };

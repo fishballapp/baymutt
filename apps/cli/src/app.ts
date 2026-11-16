@@ -5,26 +5,28 @@ import * as GlobalFlag from 'effect/cli/GlobalFlag';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as Layer from 'effect/Layer';
 import * as Logger from 'effect/Logger';
-import { activityCommand, serviceAccountsCommand } from './commands/access.ts';
+import { activityCommand, serviceAccountCommand } from './commands/access.ts';
+import { askCommand } from './commands/ask.ts';
+import { authCommand } from './commands/auth.ts';
 import { binCommand } from './commands/bin.ts';
-import { environmentsCommand, whoamiCommand } from './commands/environments.ts';
-import { loginCommand, logoutCommand } from './commands/login.ts';
-import { secretCommands } from './commands/secrets.ts';
+import { envCommand } from './commands/environments.ts';
+import { orgCommand } from './commands/org.ts';
+import { secretCommand } from './commands/secrets.ts';
 import { KeyStore } from './key-store.ts';
 import { Settings } from './settings.ts';
 
 export const cli = Command.make('baymutt').pipe(
   Command.withDescription(
-    'A zero-knowledge secret store, from an agent’s side. Values are sealed and opened on this computer; every command prints JSON on stdout and no command prints a value. Failures are one JSON line on stderr: exit 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict, 7 unreachable, 8 integrity, 9 check differs.',
+    'A zero-knowledge secret store, from an agent’s side. Values are sealed and opened on this computer; every command prints JSON on stdout and no command prints a value. A CLI login (`baymutt auth login`) lists orgs, environments and secret names, and holds no environment: `baymutt ask access` asks the owner for the ones a task needs, and gives a key that holds exactly those once approved; `baymutt ask` also asks for a new environment or a value. Use that key with varlock through @baymutt/varlock-plugin, as BAYMUTT_KEY_FILE=<key file>, or its content as BAYMUTT_KEY (inside a sandbox, or in CI); every baymutt command takes them too. Failures are one JSON line on stderr: exit 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict, 7 unreachable, 8 integrity, 9 check differs or still waiting.',
   ),
   Command.withSubcommands([
-    loginCommand,
-    logoutCommand,
-    whoamiCommand,
-    environmentsCommand,
-    ...secretCommands,
+    authCommand,
+    askCommand,
+    orgCommand,
+    envCommand,
+    secretCommand,
     binCommand,
-    serviceAccountsCommand,
+    serviceAccountCommand,
     activityCommand,
   ]),
   // Inside the tree, so `--help` and `--version` never read the settings or the key.

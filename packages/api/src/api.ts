@@ -7,17 +7,21 @@ import { AccountGroup } from './account.ts';
 import { ActivityGroup } from './activity.ts';
 import { BinGroup } from './bin.ts';
 import { CredentialsGroup } from './credentials.ts';
+import { EnvironmentRequestsGroup } from './environment-requests.ts';
 import { EnvironmentsGroup } from './environments.ts';
 import { RequestValidation } from './guards.ts';
 import { OrgsGroup } from './orgs.ts';
 import { PasteGroup, PasteLinksGroup } from './paste-links.ts';
+import { RequestsGroup } from './requests.ts';
 import { SecretsGroup } from './secrets.ts';
 
 export class Api extends HttpApi.make('baymutt')
   .add(AccountGroup)
   .add(CredentialsGroup)
+  .add(RequestsGroup)
   .add(OrgsGroup)
   .add(EnvironmentsGroup)
+  .add(EnvironmentRequestsGroup)
   .add(SecretsGroup)
   .add(PasteLinksGroup)
   .add(PasteGroup)

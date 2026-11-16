@@ -21,8 +21,10 @@ import { Route as AppPasteLinksRouteImport } from './routes/_app.paste-links'
 import { Route as AppServiceAccountsRouteImport } from './routes/_app.service-accounts'
 import { Route as AppSigninRouteImport } from './routes/_app.signin'
 import { Route as PasteIdRouteImport } from './routes/paste.$id'
+import { Route as AppEnvironmentRequestsIdRouteImport } from './routes/_app.environment-requests.$id'
 import { Route as AppEnvironmentsIndexRouteImport } from './routes/_app.environments.index'
 import { Route as AppEnvironmentsIdRouteImport } from './routes/_app.environments.$id'
+import { Route as AppRequestsIdRouteImport } from './routes/_app.requests.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -83,6 +85,12 @@ const PasteIdRoute = PasteIdRouteImport.update({
   path: '/paste/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppEnvironmentRequestsIdRoute =
+  AppEnvironmentRequestsIdRouteImport.update({
+    id: '/environment-requests/$id',
+    path: '/environment-requests/$id',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppEnvironmentsIndexRoute = AppEnvironmentsIndexRouteImport.update({
   id: '/environments/',
   path: '/environments/',
@@ -91,6 +99,11 @@ const AppEnvironmentsIndexRoute = AppEnvironmentsIndexRouteImport.update({
 const AppEnvironmentsIdRoute = AppEnvironmentsIdRouteImport.update({
   id: '/environments/$id',
   path: '/environments/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRequestsIdRoute = AppRequestsIdRouteImport.update({
+  id: '/requests/$id',
+  path: '/requests/$id',
   getParentRoute: () => AppRoute,
 } as any)
 
@@ -106,7 +119,9 @@ export interface FileRoutesByFullPath {
   '/service-accounts': typeof AppServiceAccountsRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
+  '/environment-requests/$id': typeof AppEnvironmentRequestsIdRoute
   '/environments/$id': typeof AppEnvironmentsIdRoute
+  '/requests/$id': typeof AppRequestsIdRoute
   '/environments/': typeof AppEnvironmentsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -121,7 +136,9 @@ export interface FileRoutesByTo {
   '/service-accounts': typeof AppServiceAccountsRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
+  '/environment-requests/$id': typeof AppEnvironmentRequestsIdRoute
   '/environments/$id': typeof AppEnvironmentsIdRoute
+  '/requests/$id': typeof AppRequestsIdRoute
   '/environments': typeof AppEnvironmentsIndexRoute
 }
 export interface FileRoutesById {
@@ -138,7 +155,9 @@ export interface FileRoutesById {
   '/_app/service-accounts': typeof AppServiceAccountsRoute
   '/_app/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
+  '/_app/environment-requests/$id': typeof AppEnvironmentRequestsIdRoute
   '/_app/environments/$id': typeof AppEnvironmentsIdRoute
+  '/_app/requests/$id': typeof AppRequestsIdRoute
   '/_app/environments/': typeof AppEnvironmentsIndexRoute
 }
 export interface FileRouteTypes {
@@ -155,7 +174,9 @@ export interface FileRouteTypes {
     | '/service-accounts'
     | '/signin'
     | '/paste/$id'
+    | '/environment-requests/$id'
     | '/environments/$id'
+    | '/requests/$id'
     | '/environments/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -170,7 +191,9 @@ export interface FileRouteTypes {
     | '/service-accounts'
     | '/signin'
     | '/paste/$id'
+    | '/environment-requests/$id'
     | '/environments/$id'
+    | '/requests/$id'
     | '/environments'
   id:
     | '__root__'
@@ -186,7 +209,9 @@ export interface FileRouteTypes {
     | '/_app/service-accounts'
     | '/_app/signin'
     | '/paste/$id'
+    | '/_app/environment-requests/$id'
     | '/_app/environments/$id'
+    | '/_app/requests/$id'
     | '/_app/environments/'
   fileRoutesById: FileRoutesById
 }
@@ -284,6 +309,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PasteIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/environment-requests/$id': {
+      id: '/_app/environment-requests/$id'
+      path: '/environment-requests/$id'
+      fullPath: '/environment-requests/$id'
+      preLoaderRoute: typeof AppEnvironmentRequestsIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/environments/': {
       id: '/_app/environments/'
       path: '/environments'
@@ -298,6 +330,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvironmentsIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/requests/$id': {
+      id: '/_app/requests/$id'
+      path: '/requests/$id'
+      fullPath: '/requests/$id'
+      preLoaderRoute: typeof AppRequestsIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -309,7 +348,9 @@ interface AppRouteChildren {
   AppPasteLinksRoute: typeof AppPasteLinksRoute
   AppServiceAccountsRoute: typeof AppServiceAccountsRoute
   AppSigninRoute: typeof AppSigninRoute
+  AppEnvironmentRequestsIdRoute: typeof AppEnvironmentRequestsIdRoute
   AppEnvironmentsIdRoute: typeof AppEnvironmentsIdRoute
+  AppRequestsIdRoute: typeof AppRequestsIdRoute
   AppEnvironmentsIndexRoute: typeof AppEnvironmentsIndexRoute
 }
 
@@ -321,7 +362,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppPasteLinksRoute: AppPasteLinksRoute,
   AppServiceAccountsRoute: AppServiceAccountsRoute,
   AppSigninRoute: AppSigninRoute,
+  AppEnvironmentRequestsIdRoute: AppEnvironmentRequestsIdRoute,
   AppEnvironmentsIdRoute: AppEnvironmentsIdRoute,
+  AppRequestsIdRoute: AppRequestsIdRoute,
   AppEnvironmentsIndexRoute: AppEnvironmentsIndexRoute,
 }
 

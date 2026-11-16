@@ -23,7 +23,8 @@ export const Platform = Context.Reference<NodeJS.Platform>('@baymutt/cli/Platfor
 const ACCOUNT = 'baymutt';
 
 type Store = {
-  readonly source: 'environment' | 'keychain' | 'file';
+  /** `keyFile`: the file BAYMUTT_KEY_FILE names, which may hold any key; `file`: this computer's own. */
+  readonly source: 'environment' | 'keychain' | 'file' | 'keyFile';
   readonly read: Effect.Effect<Option.Option<Redacted.Redacted<string>>>;
   readonly write: (
     token: Redacted.Redacted<string>,
@@ -72,7 +73,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
             Effect.fail(usage('BAYMUTT_KEY is set, so the key comes from it. Unset it to log in.')),
           remove: Effect.fail(
             usage(
-              'BAYMUTT_KEY is set, so this key belongs to whatever set it, not to this computer. Revoke it with `baymutt service-accounts revoke <id>` or in the dashboard, and remove it from where it is kept.',
+              'BAYMUTT_KEY is set, so this key belongs to whatever set it, not to this computer. Revoke it with `baymutt service-account revoke <id>` or in the dashboard, and remove it from where it is kept.',
             ),
           ),
         });
@@ -129,7 +130,7 @@ export class KeyStore extends Context.Service<KeyStore, Store>()('@baymutt/cli/K
       }
 
       return KeyStore.of({
-        source: 'file',
+        source: Option.isSome(keyFileOverride) ? 'keyFile' : 'file',
         read: fs.readFileString(file).pipe(
           Effect.map(text => Option.some(Redacted.make(text.trim()))),
           Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeedNone),

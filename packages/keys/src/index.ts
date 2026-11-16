@@ -22,6 +22,16 @@ export {
   wrapEnvironmentKey,
 } from './environment.ts';
 export {
+  createNamesKey,
+  type NamesKey,
+  nameIndex,
+  openName,
+  openNamesKey,
+  rewrapNamesKey,
+  type StoredName,
+  sealName,
+} from './names.ts';
+export {
   approvePairing,
   createAccountKey,
   createVault,

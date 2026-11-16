@@ -1,7 +1,7 @@
 /**
  * Drives the whole product in a real browser against `wrangler dev`: the dashboard with a virtual
- * passkey, the built CLI, and the built varlock plugin. Needs both dev servers up and the CLI and
- * plugin built:
+ * passkey, the built CLI, and the built varlock plugin. Needs both dev servers up on a fresh local
+ * database, and the CLI and plugin built:
  *
  *   pnpm -F @baymutt/worker-web dev        # :8790
  *   pnpm -F @baymutt/web dev               # :5183
@@ -10,11 +10,15 @@
  *
  * Chromium only: its CDP virtual authenticator can do PRF headlessly. Screens land in
  * `apps/web/tmp/drive/`. Every value here is made up for the run.
+ *
+ * One org is put back the way 0.7 stored it (names as written, no names key) with SQL on the local
+ * D1 through `wrangler d1 execute --local`, to show the dashboard sealing it and its service
+ * account loading throughout.
  */
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Browser, chromium, type Page } from '@playwright/test';
 
@@ -24,9 +28,9 @@ const cliBin = fileURLToPath(new URL('../../cli/dist/bin.js', import.meta.url));
 const pluginFile = fileURLToPath(
   new URL('../../../packages/varlock-plugin/dist/plugin.cjs', import.meta.url),
 );
-const varlockBin = fileURLToPath(
-  new URL('../../worker-web/node_modules/.bin/varlock', import.meta.url),
-);
+const workerDir = fileURLToPath(new URL('../../worker-web/', import.meta.url));
+const varlockBin = join(workerDir, 'node_modules/.bin/varlock');
+const wranglerBin = join(workerDir, 'node_modules/.bin/wrangler');
 
 const PHONE = { width: 390, height: 844 };
 
@@ -51,8 +55,8 @@ const check = (label: string, isTrue: boolean) => {
   console.log(`✓ ${label}`);
 };
 
-/** A service account: its own key file and state, so nothing touches this Mac's keychain. */
-const serviceAccount = (name: string) => {
+/** A computer with a CLI login: its own key file and state, so nothing touches this Mac's keychain. */
+const computer = (name: string) => {
   const home = mkdtempSync(join(tmpdir(), `baymutt-drive-${name}-`));
   const env = {
     ...process.env,
@@ -63,9 +67,16 @@ const serviceAccount = (name: string) => {
   return {
     home,
     env,
-    /** Runs the CLI; answers its exit code and its JSON result. */
-    cli: (args: readonly string[], stdin?: string) => {
-      const run = spawnSync('node', [cliBin, ...args], { env, input: stdin, encoding: 'utf8' });
+    /** Runs the CLI as the CLI login, or as the key in `keyFile`; answers its exit code and its JSON result. */
+    cli: (
+      args: readonly string[],
+      { stdin, keyFile }: { stdin?: string; keyFile?: string } = {},
+    ) => {
+      const run = spawnSync('node', [cliBin, ...args], {
+        env: keyFile === undefined ? env : { ...env, BAYMUTT_KEY_FILE: keyFile },
+        input: stdin,
+        encoding: 'utf8',
+      });
       return {
         status: run.status,
         stderr: run.stderr,
@@ -142,6 +153,54 @@ const keepRecoveryKey = async (page: Page): Promise<string> => {
   await page.getByRole('checkbox').check();
   return recoveryKey;
 };
+
+/**
+ * Whether `varlock run`, through the built plugin, loads `environment` with the key `env` names
+ * and hands the child exactly `expected`.
+ */
+const varlockLoads = (
+  env: NodeJS.ProcessEnv,
+  environment: string,
+  expected: Readonly<Record<string, string>>,
+) => {
+  const dir = mkdtempSync(join(tmpdir(), 'baymutt-drive-schema-'));
+  copyFileSync(pluginFile, join(dir, 'plugin.cjs'));
+  writeFileSync(
+    join(dir, '.env.schema'),
+    `# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("${environment}"))\n# ---\n${Object.keys(
+      expected,
+    )
+      .map(name => `${name}=\n`)
+      .join('')}`,
+  );
+  const probe = `const e=process.env,x=${JSON.stringify(expected)};process.exit(Object.keys(x).every(k=>e[k]===x[k])?0:1)`;
+  const run = spawnSync(varlockBin, ['run', '--', 'node', '-e', probe], {
+    cwd: dir,
+    env,
+    encoding: 'utf8',
+  });
+  rmSync(dir, { recursive: true, force: true });
+  return { isLoaded: run.status === 0, stderr: run.stderr };
+};
+
+/** SQL on the local D1 the dev Worker uses. Answers the rows of the last statement. */
+const d1 = (sql: string): ReadonlyArray<Record<string, unknown>> => {
+  const file = join(mkdtempSync(join(tmpdir(), 'baymutt-drive-sql-')), 'run.sql');
+  writeFileSync(file, sql);
+  const run = spawnSync(
+    wranglerBin,
+    ['d1', 'execute', 'baymutt', '--local', '--json', '--file', file],
+    { cwd: workerDir, encoding: 'utf8' },
+  );
+  rmSync(dirname(file), { recursive: true, force: true });
+  if (run.status !== 0) fail(`wrangler d1 execute failed: ${run.stderr}${run.stdout}`);
+  const results = JSON.parse(run.stdout) as ReadonlyArray<{ results: Record<string, unknown>[] }>;
+  return results.at(-1)?.results ?? [];
+};
+
+const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`;
+
+const MINUTE_MS = 60_000;
 
 const main = async (browser: Browser) => {
   rmSync(shots, { recursive: true, force: true });
@@ -241,12 +300,16 @@ const main = async (browser: Browser) => {
     'each reveal and copy is in the activity log',
     (await page.getByText(/revealed or copied/).count()) === 3,
   );
-  await page.goBack();
-  await page.getByRole('button', { name: 'Add a secret' }).waitFor();
+  check(
+    'the activity names the secret and the environment, opened in the browser',
+    (await page.getByText('acme/app/production').count()) > 0 &&
+      (await page.getByText('SIGNING_KEY').count()) > 0,
+  );
 
-  // --- log in: approving gives every environment -------------------------------------------------
-  const laptop = serviceAccount('laptop');
+  // --- log in: approving lists names and holds no environment ------------------------------------
+  const laptop = computer('laptop');
   const pending = laptop.cli([
+    'auth',
     'login',
     '--name',
     'Work laptop',
@@ -257,7 +320,7 @@ const main = async (browser: Browser) => {
     '--wait',
     '0',
   ]);
-  check('`baymutt login` prints a link and a code', pending.json?.status === 'pending');
+  check('`baymutt auth login` prints a link and a code', pending.json?.status === 'pending');
   const signedOut = await browser.newContext({ viewport: DESKTOP });
   const signedOutPage = await signedOut.newPage();
   await signedOutPage.goto(pending.json.url);
@@ -269,68 +332,335 @@ const main = async (browser: Browser) => {
   await signedOut.close();
   await page.goto(pending.json.url);
   await page.getByText(pending.json.code).waitFor();
-  check('the approval page shows the terminal’s code', true);
   check(
     'the approval page shows the terminal’s description and the expiry it asked for',
     (await page.getByText('Coding agents on the work laptop').count()) === 1 &&
       (await page.getByLabel('Expires').inputValue()) === 'kept',
   );
   check(
-    'the approval page says a login reads and writes every environment',
-    (await page.getByText(/read and write every environment/).count()) === 1,
+    'the approval page says a login lists names and opens no value',
+    (await page.getByText(/list the names of your orgs, environments and secrets/).count()) === 1 &&
+      (await page.getByText(/opens no value and writes none/).count()) === 1,
   );
   await shoot(page, '07-approve');
   await shootPhone(page, '07b-approve-phone');
   await page.getByRole('button', { name: 'The codes match: approve it' }).click();
   await page.getByRole('heading', { name: /is approved/ }).waitFor();
   check(
-    '`baymutt login` finishes once approved',
-    laptop.cli(['login', '--wait', '0']).json?.status === 'loggedIn',
+    '`baymutt auth login` finishes once approved',
+    laptop.cli(['auth', 'login', '--wait', '0']).json?.status === 'loggedIn',
+  );
+  const listed = laptop.cli(['env', 'list']).json?.environments ?? [];
+  const production = listed.find(
+    (environment: { name: string }) => environment.name === 'app/production',
   );
   check(
-    'a login approved after an environment was made reads and writes it',
+    'the CLI login lists the environment by its name, and holds neither read nor write',
+    production !== undefined && !production.canRead && !production.canWrite,
+  );
+  check(
+    'the CLI login lists the secret names',
     laptop
-      .cli(['environments', 'list'])
-      .json?.environments.some(
-        (environment: { name: string; canRead: boolean; canWrite: boolean }) =>
-          environment.name === 'app/production' && environment.canRead && environment.canWrite,
-      ) === true,
+      .cli(['secret', 'list', 'acme/app/production'])
+      .json?.secrets?.some((secret: { name: string }) => secret.name === 'SIGNING_KEY') === true,
   );
-
-  const set = laptop.cli(['set', 'acme/app/production', 'API_KEY'], 'value-from-the-cli\n');
   check(
-    'the service account sets a value from stdin',
-    set.json?.version === 1 && set.json?.length === 18,
+    'the CLI login loads nothing through varlock',
+    !varlockLoads(laptop.env, 'acme/app/production', { SIGNING_KEY: 'x' }).isLoaded,
   );
-  const generated = laptop.cli(['generate', 'acme/app/production', 'SESSION_SECRET']);
-  check('the service account generates a value without showing it', generated.json?.length === 43);
+  check(
+    'the CLI login writes nothing',
+    laptop.cli(['secret', 'set', 'acme/app/production', 'API_KEY'], { stdin: 'nope' }).status === 4,
+  );
 
-  // The varlock plugin loads the environment and gives the values to a child process only.
-  const schemaDir = mkdtempSync(join(tmpdir(), 'baymutt-drive-schema-'));
-  copyFileSync(pluginFile, join(schemaDir, 'plugin.cjs'));
-  writeFileSync(
-    join(schemaDir, '.env.schema'),
-    '# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("acme/app/production"))\n# ---\nAPI_KEY=\nSIGNING_KEY=\nSESSION_SECRET=\n',
+  // --- baymutt ask access: approved with a shorter end, the key file loads through varlock --------------
+  const asked = laptop.cli([
+    'ask',
+    'access',
+    '--read',
+    'acme/app/production',
+    '--write',
+    'acme/app/production',
+    '--reason',
+    'run the migration',
+    '--expires',
+    '1h',
+    '--name',
+    'Migration agent',
+  ]);
+  check(
+    '`baymutt ask access` prints the request’s link and returns',
+    asked.status === 0 &&
+      asked.json?.status === 'pending' &&
+      asked.json?.url.includes('/requests/'),
   );
-  const probe =
-    "const e=process.env;process.exit(e.API_KEY==='value-from-the-cli'&&e.SIGNING_KEY.split('\\n').length===3&&e.SESSION_SECRET.length===43?0:1)";
-  const loaded = spawnSync(varlockBin, ['run', '--', 'node', '-e', probe], {
-    cwd: schemaDir,
-    env: laptop.env,
-    encoding: 'utf8',
+  await page.goto(`${WEB}/service-accounts`);
+  await page.getByRole('heading', { name: 'Requests' }).waitFor();
+  check(
+    'a request waits under Service accounts, counted in the nav',
+    (await page.getByText('run the migration').count()) === 1 &&
+      (await page
+        .getByRole('navigation', { name: 'Main' })
+        .getByText('1 waiting for you')
+        .count()) === 1,
+  );
+  await shoot(page, '08-service-accounts-request-waiting');
+  await page.getByRole('link', { name: 'Review' }).click();
+  await page.getByRole('heading', { name: 'Approve this request?' }).waitFor();
+  check('the Review link opens the request’s own page', page.url() === asked.json.url);
+  check(
+    'the request page shows the login, the reason, the environment and what was asked for',
+    (await page.getByText('Work laptop').count()) > 0 &&
+      (await page.getByText('“run the migration”').count()) === 1 &&
+      (await page.getByText('acme/app/production').count()) === 1 &&
+      (await page.getByText('read + write').count()) === 1 &&
+      (await page.getByLabel('Ends').inputValue()) === `${60 * MINUTE_MS}`,
+  );
+  await page.getByLabel('Ends').selectOption(`${15 * MINUTE_MS}`);
+  await shoot(page, '08b-request');
+  await shootPhone(page, '08c-request-phone');
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  await shoot(page, '08d-request-approved');
+  const approved = laptop.cli(['ask', 'wait', asked.json.id]);
+  check(
+    'the terminal gets a key file, which ends when the owner chose and not when it asked',
+    approved.json?.status === 'approved' &&
+      typeof approved.json?.keyFile === 'string' &&
+      Math.abs(approved.json.expiresAt - (Date.now() + 15 * MINUTE_MS)) < 2 * MINUTE_MS,
+  );
+  const agentKey: string = approved.json.keyFile;
+  const set = laptop.cli(['secret', 'set', 'acme/app/production', 'API_KEY'], {
+    stdin: 'value-from-the-cli\n',
+    keyFile: agentKey,
   });
   check(
-    `varlock loads the environment through the plugin${loaded.status === 0 ? '' : `: ${loaded.stderr}`}`,
-    loaded.status === 0,
+    'the approved key sets a value from stdin',
+    set.json?.version === 1 && set.json?.length === 18,
+  );
+  const generated = laptop.cli(['secret', 'generate', 'acme/app/production', 'SESSION_SECRET'], {
+    keyFile: agentKey,
+  });
+  check('the approved key generates a value without showing it', generated.json?.length === 43);
+  const agentEnv = { ...laptop.env, BAYMUTT_KEY_FILE: agentKey };
+  const loaded = varlockLoads(agentEnv, 'acme/app/production', {
+    API_KEY: 'value-from-the-cli',
+    SIGNING_KEY: '-----BEGIN KEY-----\nmade-up-line-two\n-----END KEY-----',
+  });
+  check(
+    `the key file loads the environment through the plugin under varlock run${loaded.isLoaded ? '' : `: ${loaded.stderr}`}`,
+    loaded.isLoaded,
+  );
+  await page.goto(asked.json.url);
+  await page.getByRole('heading', { name: 'Already approved' }).waitFor();
+  check('an answered request says so', true);
+
+  // --- an environment request: the owner creates it, then a request reaches it ----------------
+  check(
+    '`baymutt ask access` names only an environment that exists',
+    laptop.cli(['ask', 'access', '--write', 'acme/app/staging', '--reason', 'set up staging'])
+      .status !== 0,
+  );
+  const creating = laptop.cli([
+    'ask',
+    'create-environment',
+    'acme/app/staging',
+    '--reason',
+    'set up staging',
+  ]);
+  check(
+    '`baymutt ask create-environment` prints the environment request’s link and returns',
+    creating.status === 0 &&
+      creating.json?.status === 'pending' &&
+      creating.json?.url === `${WEB}/environment-requests/${creating.json?.id}`,
+  );
+  await page.goto(`${WEB}/environments`);
+  await page.getByRole('heading', { name: 'Requests' }).waitFor();
+  check(
+    'an environment request waits at the top of Environments, counted on its nav item',
+    (await page.getByText('set up staging').count()) === 1 &&
+      (await page
+        .getByRole('navigation', { name: 'Main' })
+        .getByRole('link', { name: /^Environments/ })
+        .getByText('1 waiting for you')
+        .count()) === 1,
+  );
+  await shoot(page, '08e-environments-request-waiting');
+  await page.getByRole('link', { name: 'Review' }).click();
+  await page.getByRole('heading', { name: 'Create this environment?' }).waitFor();
+  check('the Review link opens the environment request’s page', page.url() === creating.json.url);
+  check(
+    'the environment request page shows the login, the opened name and the reason',
+    (await page.getByText('Work laptop').count()) > 0 &&
+      (await page.getByText('acme/app/staging', { exact: true }).count()) === 1 &&
+      (await page.getByText('“set up staging”').count()) === 1,
+  );
+  await shoot(page, '08e1-environment-request');
+  await shootPhone(page, '08e2-environment-request-phone');
+  await page.getByRole('button', { name: 'Create environment' }).click();
+  await page.getByRole('heading', { name: 'Created', exact: true }).waitFor();
+  await shoot(page, '08e3-environment-request-created');
+  const created = laptop.cli(['ask', 'wait', creating.json.id]);
+  check(
+    '`baymutt ask wait` says the owner created it',
+    created.status === 0 &&
+      created.json?.status === 'approved' &&
+      created.json?.environment === 'acme/app/staging',
   );
   check(
-    '`baymutt check` finds the schema satisfied',
-    laptop.cli(['check', 'acme/app/production', '--schema', join(schemaDir, '.env.schema')])
-      .status === 0,
+    'the environment has the id the request asked for, and nobody but the owner reaches it',
+    laptop
+      .cli(['env', 'list'])
+      .json?.environments?.some(
+        (environment: { id: string; name: string; canRead: boolean; canWrite: boolean }) =>
+          environment.id === creating.json.id &&
+          environment.name === 'app/staging' &&
+          !environment.canRead &&
+          !environment.canWrite,
+      ) === true,
   );
+  await page.goto(creating.json.url);
+  await page.getByRole('heading', { name: 'Already created' }).waitFor();
+  check('an answered environment request says so', true);
+  const staging = laptop.cli([
+    'ask',
+    'access',
+    '--write',
+    'acme/app/staging',
+    '--read',
+    'acme/app/staging',
+    '--reason',
+    'set up staging',
+  ]);
+  await page.goto(staging.json.url);
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  const stagingKey: string = laptop.cli(['ask', 'wait', staging.json.id]).json?.keyFile;
+  check(
+    'a request for the new environment, once approved, writes it',
+    laptop.cli(['secret', 'set', 'acme/app/staging', 'API_KEY'], {
+      stdin: 'staging-value',
+      keyFile: stagingKey,
+    }).status === 0,
+  );
+  check(
+    'and loads it through varlock',
+    varlockLoads({ ...laptop.env, BAYMUTT_KEY_FILE: stagingKey }, 'acme/app/staging', {
+      API_KEY: 'staging-value',
+    }).isLoaded,
+  );
+  await page.goto(`${WEB}/environments`);
+  await page.getByRole('link', { name: /acme\/app\/staging/ }).waitFor();
+  check('the new environment is listed in the dashboard by its name', true);
 
-  // --- a paste link, answered by someone with no session --------------------------------------
+  const scratch = laptop.cli([
+    'ask',
+    'create-environment',
+    'acme/app/scratch',
+    '--reason',
+    'somewhere to try things',
+  ]);
+  await page.goto(scratch.json.url);
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
+  await shoot(page, '08e4-environment-request-rejected');
+  check(
+    'a rejected environment request ends the terminal’s wait, and creates nothing',
+    laptop.cli(['ask', 'wait', scratch.json.id]).status === 4 &&
+      laptop
+        .cli(['env', 'list'])
+        .json?.environments?.every(
+          (environment: { name: string }) => environment.name !== 'app/scratch',
+        ) === true,
+  );
+  await page.goto(`${WEB}/environment-requests/${crypto.randomUUID()}`);
+  await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
+  check('a missing environment request says so', true);
+
+  // --- a rejected request ---------------------------------------------------------------------
+  const rejected = laptop.cli([
+    'ask',
+    'access',
+    '--read',
+    'acme/app/production',
+    '--reason',
+    'read everything, just in case',
+  ]);
+  await page.goto(rejected.json.url);
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
+  await shoot(page, '08f-request-rejected');
+  const rejectedWait = laptop.cli(['ask', 'wait', rejected.json.id]);
+  check('a rejected request ends the terminal’s wait with no key', rejectedWait.status === 4);
+  await page.goto(`${WEB}/requests/${crypto.randomUUID()}`);
+  await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
+  await shoot(page, '08g-request-missing');
+  check('a missing request says so', true);
+
+  // --- a name that does not open: nothing is approved or pasted for it ---------------------------
+  const unopenedAsk = laptop.cli([
+    'ask',
+    'access',
+    '--read',
+    'acme/app/production',
+    '--reason',
+    'read production',
+  ]);
+  const unopenedPaste = laptop.cli([
+    'ask',
+    'paste-link',
+    'acme/app/production',
+    'UNOPENED_KEY',
+    '--reason',
+    'to check names',
+    '--where',
+    'nowhere',
+  ]);
+  if (unopenedAsk.json === undefined || unopenedPaste.json === undefined) {
+    fail(
+      `the request and paste link for a name that does not open: ${unopenedAsk.stderr}${unopenedPaste.stderr}`,
+    );
+  }
+  // The store files production's sealed name as staging's: it opens, but not to its own index.
+  const [productionRow] = d1(
+    `SELECT id, sealed_name FROM environment WHERE id = ${sqlText(String(production?.id))}`,
+  );
+  await page.goto('about:blank');
+  d1(`UPDATE environment SET sealed_name =
+        (SELECT sealed_name FROM environment WHERE id = ${sqlText(creating.json.id)})
+      WHERE id = ${sqlText(String(productionRow?.id))}`);
+  await page.goto(unopenedAsk.json.url);
+  await page.getByText('acme/name does not open').waitFor();
+  check(
+    'a request naming an environment whose name does not open says so, and cannot be approved',
+    (await page.getByText(/so this request cannot be approved/).count()) === 1 &&
+      (await page.getByRole('button', { name: 'Approve', exact: true }).isDisabled()),
+  );
+  await shoot(page, '08i-request-name-unopened');
+  await page.goto(unopenedPaste.json.url);
+  await page.getByLabel('Value').fill('never-sent');
+  check(
+    'a paste link whose environment’s name does not open says so, and saves nothing',
+    (await page.getByText(/nothing can be saved for it/).count()) === 1 &&
+      (await page.getByRole('button', { name: 'Seal and save' }).isDisabled()),
+  );
+  await shoot(page, '09e-paste-name-unopened');
+  await page.goto('about:blank');
+  d1(`UPDATE environment SET sealed_name = ${sqlText(String(productionRow?.sealed_name))}
+        WHERE id = ${sqlText(String(productionRow?.id))};
+      UPDATE paste_link SET status = 'cancelled' WHERE id = ${sqlText(unopenedPaste.json.id)};`);
+  await page.goto(unopenedAsk.json.url);
+  await page.getByText('acme/app/production', { exact: true }).waitFor();
+  check(
+    'once the name opens again, the request can be approved',
+    !(await page.getByRole('button', { name: 'Approve', exact: true }).isDisabled()),
+  );
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
+
+  // --- a paste link, answered by the signed-in owner alone -------------------------------------
   const pasteLink = laptop.cli([
+    'ask',
     'paste-link',
     'acme/app/production',
     'STRIPE_SECRET_KEY',
@@ -339,143 +669,198 @@ const main = async (browser: Browser) => {
     '--where',
     'Stripe dashboard, Developers, API keys',
   ]);
-  check('`baymutt paste-link` prints a paste link', typeof pasteLink.json?.url === 'string');
+  check(
+    'the CLI login makes a paste link that carries nothing but its id',
+    pasteLink.json?.url === `${WEB}/paste/${pasteLink.json?.id}`,
+  );
   const stranger = await browser.newContext({ viewport: { width: 420, height: 800 } });
-  const pastePage = await stranger.newPage();
-  await pastePage.goto(pasteLink.json.url);
-  await pastePage.getByLabel('Value').fill('sk_made_up_for_this_run');
-  await shoot(pastePage, '09-paste-phone');
-  await pastePage.getByRole('button', { name: 'Seal and save' }).click();
-  await pastePage.getByRole('heading', { name: 'Saved' }).waitFor();
-  await pastePage.reload();
-  await pastePage.getByRole('heading', { name: 'This link cannot be used' }).waitFor();
-  check('a paste link works once', true);
+  const strangerPage = await stranger.newPage();
+  await strangerPage.goto(pasteLink.json.url);
+  await strangerPage.getByRole('heading', { name: 'Sign in to baymutt' }).waitFor();
+  check(
+    'a paste link opened signed out asks to sign in where it is',
+    strangerPage.url() === pasteLink.json.url &&
+      (await strangerPage.getByLabel('Value').count()) === 0,
+  );
+  await shoot(strangerPage, '09-paste-signed-out-phone');
   await stranger.close();
+  await page.goto(`${WEB}/paste-links`);
+  await page.getByText('to take payments').waitFor();
+  await shoot(page, '09a-paste-links');
+  // The store points the link at another name after the page showed it: nothing is sealed to that.
+  const decoy = laptop.cli([
+    'ask',
+    'paste-link',
+    'acme/app/production',
+    'DECOY_KEY',
+    '--reason',
+    'decoy',
+    '--where',
+    'nowhere',
+  ]);
+  if (decoy.json === undefined) fail(`the decoy paste link: ${decoy.stderr}`);
+  const [shownLink] = d1(
+    `SELECT name, sealed_name FROM paste_link WHERE id = ${sqlText(pasteLink.json.id)}`,
+  );
+  await page.getByRole('link', { name: 'Paste value' }).first().click();
+  await page.getByRole('heading', { name: /Paste STRIPE_SECRET_KEY/ }).waitFor();
+  d1(`UPDATE paste_link SET (name, sealed_name) =
+        (SELECT name, sealed_name FROM paste_link WHERE id = ${sqlText(decoy.json.id)})
+      WHERE id = ${sqlText(pasteLink.json.id)}`);
+  await page.getByLabel('Value').fill('sk_made_up_for_this_run');
+  await page.getByRole('button', { name: 'Seal and save' }).click();
+  await page.getByText(/names something other than what this page shows/).waitFor();
   check(
-    'the pasted value is the environment’s',
-    laptop.cli(['secrets', 'acme/app/production']).json?.secrets.length === 5,
+    'a paste link that names something else by the time it is saved is refused',
+    d1(`SELECT status FROM paste_link WHERE id = ${sqlText(pasteLink.json.id)}`)[0]?.status ===
+      'pending' &&
+      laptop
+        .cli(['secret', 'list', 'acme/app/production'])
+        .json?.secrets?.every((secret: { name: string }) => secret.name !== 'DECOY_KEY') === true,
+  );
+  d1(`UPDATE paste_link SET name = ${sqlText(String(shownLink?.name))},
+        sealed_name = ${sqlText(String(shownLink?.sealed_name))}
+      WHERE id = ${sqlText(pasteLink.json.id)};
+      UPDATE paste_link SET status = 'cancelled' WHERE id = ${sqlText(decoy.json.id)};`);
+  await page.reload();
+  await page.getByRole('heading', { name: /Paste STRIPE_SECRET_KEY/ }).waitFor();
+  await page.getByLabel('Value').fill('sk_made_up_for_this_run');
+  await shoot(page, '09b-paste');
+  await page.setViewportSize({ width: 420, height: 800 });
+  await shoot(page, '09c-paste-phone');
+  await page.setViewportSize(DESKTOP);
+  await page.getByRole('button', { name: 'Seal and save' }).click();
+  await page.getByRole('heading', { name: 'Saved' }).waitFor();
+  await shoot(page, '09d-paste-saved');
+  await page.reload();
+  await page.getByRole('heading', { name: 'This link cannot be used' }).waitFor();
+  check('a paste link works once', true);
+  check(
+    'the pasted value is the environment’s, under its name',
+    varlockLoads(agentEnv, 'acme/app/production', {
+      STRIPE_SECRET_KEY: 'sk_made_up_for_this_run',
+    }).isLoaded,
   );
 
-  // --- a second login; an environment one login makes reaches the other through the dashboard ------
-  const server = serviceAccount('server');
-  const serverPending = server.cli(['login', '--name', 'Build server', '--wait', '0']);
-  await page.goto(serverPending.json.url);
-  await page.getByText(serverPending.json.code).waitFor();
-  await page.getByRole('button', { name: 'The codes match: approve it' }).click();
-  await page.getByRole('heading', { name: /is approved/ }).waitFor();
-  server.cli(['login', '--wait', '0']);
-  laptop.cli(['environments', 'create', 'acme/app/staging']);
-  laptop.cli(['set', 'acme/app/staging', 'API_KEY'], 'staging-value');
-  const waiting = server.cli(['secrets', 'acme/app/staging']);
-  check(
-    'another login waits for the dashboard on an environment a login made, and is told so',
-    waiting.status === 4 && waiting.stderr.includes('open the baymutt dashboard'),
-  );
-  await page.goto(`${WEB}/environments`);
-  await page.getByRole('link', { name: /app\/staging/ }).waitFor();
-  let toppedUp = false;
-  for (let attempt = 0; attempt < 20 && !toppedUp; attempt++) {
-    toppedUp = server.cli(['secrets', 'acme/app/staging']).status === 0;
-    if (!toppedUp) await page.waitForTimeout(250);
-  }
-  check('opening the dashboard grants it to every login', toppedUp);
-
-  await page.getByLabel('New environment').fill('app/preview');
-  await page.getByRole('button', { name: 'Create environment' }).click();
-  await page.getByRole('link', { name: /app\/preview/ }).waitFor();
-  laptop.cli(['set', 'acme/app/preview', 'API_KEY'], 'preview-value');
-  check(
-    'an environment made in the dashboard reaches every login at once',
-    laptop.cli(['secrets', 'acme/app/preview']).status === 0 &&
-      server.cli(['secrets', 'acme/app/preview']).status === 0,
-  );
-
-  // --- a narrower service account for CI --------------------------------------------------------------
+  // --- a key for CI: piped into a command once approved -------------------------------------------
   const ciKey = join(laptop.home, 'ci-key');
-  const created = laptop.cli([
-    'service-accounts',
-    'create',
-    '--name',
-    'CI deploy',
-    '--description',
-    'Deploys app/production from CI',
-    '--expires',
-    '30d',
+  const piped = laptop.cli([
+    'ask',
+    'access',
     '--read',
     'acme/app/production',
+    '--reason',
+    'CI: deploy',
+    '--name',
+    'CI deploy',
     '--',
     'sh',
     '-c',
     `cat > ${ciKey}`,
   ]);
+  await page.goto(piped.json.url);
+  await page.getByText(`sh -c 'cat > ${ciKey}'`).waitFor();
   check(
-    'the login makes a read-only one for CI, with a description and an expiry',
-    created.json?.grants?.[0]?.canWrite === false &&
-      created.json?.description === 'Deploys app/production from CI' &&
-      typeof created.json?.expiresAt === 'number',
+    'the request page shows the command the key goes to, and no end as asked',
+    (await page.getByLabel('Ends').inputValue()) === 'never' &&
+      (await page.getByText(/With no end, it works until you revoke it/).count()) === 1,
   );
-  const ci = serviceAccount('ci');
-  const ciEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(ciKey, 'utf8') };
-  const ciAsked = spawnSync('node', [cliBin, 'secrets', 'acme/app/staging'], {
-    env: ciEnv,
-    encoding: 'utf8',
-  });
-  check('the CI service account reaches nothing it was not handed', ciAsked.status === 5);
-
-  /** Whether the CI service account, with the key it was made with, loads `API_KEY` of an environment through varlock. */
-  const ciLoads = (environment: string, value: string) => {
-    const dir = mkdtempSync(join(tmpdir(), 'baymutt-drive-ci-'));
-    copyFileSync(pluginFile, join(dir, 'plugin.cjs'));
-    writeFileSync(
-      join(dir, '.env.schema'),
-      `# @defaultSensitive=true\n# @plugin(./plugin.cjs)\n# @initBaymutt()\n# @setValuesBulk(baymuttLoad("${environment}"))\n# ---\nAPI_KEY=\n`,
-    );
-    return (
-      spawnSync(
-        varlockBin,
-        [
-          'run',
-          '--',
-          'node',
-          '-e',
-          `process.exit(process.env.API_KEY===${JSON.stringify(value)}?0:1)`,
-        ],
-        { cwd: dir, env: ciEnv, encoding: 'utf8' },
-      ).status === 0
-    );
-  };
-  const ciId: string = created.json.id;
-  const handedOn = laptop.cli(['service-accounts', 'access', ciId, '--read', 'acme/app/staging']);
+  await shoot(page, '08h-request-piped');
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  const delivered = laptop.cli(['ask', 'wait', piped.json.id]);
   check(
-    'its login hands it another environment from the CLI, and it loads it with the key it already had',
-    handedOn.status === 0 && ciLoads('acme/app/staging', 'staging-value'),
+    'the key is piped into the command once approved, and kept nowhere else',
+    delivered.json?.piped === true && delivered.json?.expiresAt === null,
+  );
+  const ci = computer('ci');
+  const ciEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(ciKey, 'utf8').trim() };
+  check(
+    'the CI key loads its environment under varlock run',
+    varlockLoads(ciEnv, 'acme/app/production', { API_KEY: 'value-from-the-cli' }).isLoaded,
   );
   check(
-    'it cannot change its own access',
-    spawnSync('node', [cliBin, 'service-accounts', 'access', ciId, '--read', 'acme/app/preview'], {
+    'the CI key reaches nothing it was not given',
+    spawnSync('node', [cliBin, 'secret', 'list', 'acme/app/staging'], {
       env: ciEnv,
       encoding: 'utf8',
-    }).status !== 0 && !ciLoads('acme/app/preview', 'preview-value'),
+    }).status === 5,
   );
 
-  // A secret an agent deleted: it is in the bin, not in the environment's list.
-  laptop.cli(['set', 'acme/app/production', 'OLD_TOKEN'], 'old-value');
-  const binned = laptop.cli(['delete', 'acme/app/production', 'OLD_TOKEN']);
+  // --- the service accounts page, and access changed by the owner ------------------------------
+  await page.goto(`${WEB}/service-accounts`);
+  await page.getByText('CI deploy').waitFor();
+  await shoot(page, '11-service-accounts');
   check(
-    'a deleted secret goes to the bin, and the CLI lists it there',
+    'the list tells CLI logins from service accounts, with when each ends',
+    (await page.getByRole('img', { name: 'CLI login' }).count()) === 1 &&
+      (await page.getByRole('img', { name: 'Service account' }).count()) === 3 &&
+      (await page.getByText('never expires').count()) === 1 &&
+      (await page.getByText(/expires in 1[0-5] minutes/).count()) === 1 &&
+      (await page.getByText(/expires in (1 hour|5[0-9] minutes)/).count()) === 1 &&
+      (await page.getByText(/expires in 90 days/).count()) === 1,
+  );
+  check(
+    'a CLI login offers no access change',
+    (await page
+      .getByRole('listitem')
+      .filter({ hasText: 'Work laptop' })
+      .filter({ has: page.getByRole('img', { name: 'CLI login' }) })
+      .getByRole('button', { name: 'Access' })
+      .count()) === 0,
+  );
+  await shootPhone(page, '11b-service-accounts-phone');
+  const ciRow = page.getByRole('listitem').filter({ hasText: 'CI deploy' });
+  await ciRow.getByRole('button', { name: 'Access' }).click();
+  const accessDialog = page.getByRole('alertdialog');
+  await accessDialog.waitFor();
+  await accessDialog
+    .getByRole('listitem')
+    .filter({ hasText: 'acme/app/staging' })
+    .getByLabel('read')
+    .check();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(shots, '11e-access.png') });
+  await page.getByRole('button', { name: 'Save access' }).click();
+  await accessDialog.waitFor({ state: 'hidden' });
+  await ciRow.getByText('acme/app/staging', { exact: true }).waitFor();
+  check(
+    'the owner gives a service account another environment, and it loads it with the key it had',
+    varlockLoads(ciEnv, 'acme/app/staging', { API_KEY: 'staging-value' }).isLoaded,
+  );
+  await ciRow.getByRole('button', { name: 'Expiry' }).click();
+  await page.getByLabel('Expires').selectOption('30');
+  await page.getByRole('button', { name: 'Save expiry' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'hidden' });
+  await ciRow.getByText(/expires in 30 days/).waitFor();
+  check('the owner changes when a service account ends', true);
+  await shoot(page, '11g-service-accounts-after-access');
+
+  // --- the environment, the bin and the activity --------------------------------------------------
+  laptop.cli(['secret', 'set', 'acme/app/production', 'OLD_TOKEN'], {
+    stdin: 'old-value',
+    keyFile: agentKey,
+  });
+  const binned = laptop.cli(['secret', 'delete', 'acme/app/production', 'OLD_TOKEN'], {
+    keyFile: agentKey,
+  });
+  check(
+    'a deleted secret goes to the bin, and the CLI login lists it there by name',
     typeof binned.json?.purgeAt === 'number' &&
       laptop.cli(['bin', 'list']).json?.secrets?.[0]?.name === 'OLD_TOKEN',
   );
-
-  // --- the dashboard after all that -----------------------------------------------------------
   await page.goto(`${WEB}/environments`);
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByText('STRIPE_SECRET_KEY').waitFor();
-  await shoot(page, '10-environment');
+  const shownNames = await page.locator('main li code.text-base').allInnerTexts();
   check(
-    'the environment lists no deleted secret',
-    (await page.getByText('OLD_TOKEN').count()) === 0,
+    'the environment lists its secrets by name, sorted in the browser, and no deleted one',
+    JSON.stringify(shownNames) ===
+      JSON.stringify(shownNames.toSorted((a, b) => a.localeCompare(b))) &&
+      !shownNames.includes('OLD_TOKEN') &&
+      shownNames.includes('API_KEY'),
   );
+  await shoot(page, '10-environment');
   await page.getByRole('button', { name: 'History' }).first().click();
   await page.getByText(/^v1$/).waitFor();
   await shoot(page, '10b-environment-history');
@@ -495,57 +880,9 @@ const main = async (browser: Browser) => {
   await page.setViewportSize(DESKTOP);
   await shoot(page, '10d-environments');
   await shootPhone(page, '10d-environments-phone');
-  await page.goto(`${WEB}/service-accounts`);
-  await page.getByText('CI deploy').waitFor();
-  check(
-    'the list tells a CLI login from a service account, and shows descriptions and expiry',
-    (await page.getByRole('img', { name: 'CLI login' }).count()) === 2 &&
-      (await page.getByRole('img', { name: 'Service account' }).count()) === 1 &&
-      (await page.getByText('Deploys app/production from CI').count()) === 1 &&
-      (await page.getByText(/expires in \d+ days/).count()) === 2,
-  );
-  await shoot(page, '11-service-accounts');
-  await shootPhone(page, '11b-service-accounts-phone');
 
-  // The owner hands the CI service account an environment from the dashboard, under its old key.
-  await page.getByRole('button', { name: 'Access' }).click();
-  const accessDialog = page.getByRole('alertdialog');
-  await accessDialog.waitFor();
-  await accessDialog
-    .getByRole('listitem')
-    .filter({ hasText: 'acme/app/preview' })
-    .getByLabel('read')
-    .check();
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: join(shots, '11e-access.png') });
-  await page.setViewportSize(PHONE);
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: join(shots, '11f-access-phone.png') });
-  await page.setViewportSize(DESKTOP);
-  await page.getByRole('button', { name: 'Save access' }).click();
-  await accessDialog.waitFor({ state: 'hidden' });
-  await page.getByText('acme/app/preview', { exact: true }).waitFor();
-  check(
-    'the owner hands it an environment from the dashboard, and it loads it with the key it already had',
-    ciLoads('acme/app/preview', 'preview-value'),
-  );
-  await shoot(page, '11g-service-accounts-after-access');
-  await page.getByRole('button', { name: 'Expiry' }).last().click();
-  await page.getByLabel('Expires').selectOption('never');
-  await page.getByRole('alertdialog').waitFor();
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: join(shots, '11c-expiry.png') });
-  await page.getByRole('button', { name: 'Save expiry' }).click();
-  await page.getByRole('alertdialog').waitFor({ state: 'hidden' });
-  await page.getByText(/expires in 30 days/).waitFor({ state: 'detached' });
-  check(
-    'the owner changes when a service account expires',
-    (await page.getByText(/expires in \d+ days/).count()) === 1,
-  );
-  await shoot(page, '11d-service-accounts-after-expiry');
-  // --- the bin ---------------------------------------------------------------------------------
-  laptop.cli(['environments', 'create', 'acme/app/old']);
-  await page.goto(`${WEB}/environments`);
+  await page.getByLabel('New environment').fill('app/old');
+  await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/old/ }).click();
   await page.getByRole('button', { name: 'Delete environment' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete environment' }).click();
@@ -553,57 +890,196 @@ const main = async (browser: Browser) => {
   await page.getByRole('link', { name: 'Bin' }).first().click();
   await page.getByText('OLD_TOKEN').waitFor();
   await page.getByText('acme/app/old').waitFor();
-  await shoot(page, '11g-bin');
-  await shootPhone(page, '11h-bin-phone');
+  await shoot(page, '11h-bin');
+  await shootPhone(page, '11i-bin-phone');
   const secretRow = page.getByRole('listitem').filter({ hasText: 'OLD_TOKEN' });
   await secretRow.getByRole('button', { name: 'Restore' }).click();
   await page.getByText('OLD_TOKEN').waitFor({ state: 'detached' });
   check(
-    'the owner restores a secret from the bin, and the CLI loads it again',
+    'the owner restores a secret from the bin, and the CLI lists it again',
     laptop
-      .cli(['secrets', 'acme/app/production'])
+      .cli(['secret', 'list', 'acme/app/production'])
       .json?.secrets?.some((secret: { name: string }) => secret.name === 'OLD_TOKEN') === true,
   );
   const environmentRow = page.getByRole('listitem').filter({ hasText: 'acme/app/old' });
   await environmentRow.getByRole('button', { name: 'Delete for good' }).click();
-  await page.getByRole('alertdialog').waitFor();
-  await page.waitForTimeout(300);
-  await shoot(page, '11i-bin-delete-for-good');
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete for good' }).click();
   await page.getByText('The bin is empty').waitFor();
-  check(
-    'the owner deletes an environment in the bin for good, and its name is free again',
-    laptop.cli(['environments', 'create', 'acme/app/old']).status === 0,
-  );
+  await page.goto(`${WEB}/environments`);
+  await page.getByLabel('New environment').fill('app/old');
+  await page.getByRole('button', { name: 'Create environment' }).click();
+  await page.getByRole('link', { name: /app\/old/ }).waitFor();
+  check('an environment deleted for good frees its name', true);
 
   await page.goto(`${WEB}/activity`);
   await page.getByText('pasted').waitFor();
+  check(
+    'the activity shows requests approved and rejected, and names opened in the browser',
+    (await page.getByText(/approved the request/).count()) >= 1 &&
+      (await page.getByText(/rejected the request/).count()) === 3 &&
+      (await page.getByText(/asked for a new environment/).count()) === 2 &&
+      (await page.getByText(/rejected the request for a new environment/).count()) === 1 &&
+      (await page.getByText('STRIPE_SECRET_KEY').count()) >= 1,
+  );
   await shoot(page, '12-activity');
   await shootPhone(page, '12b-activity-phone');
   await page.goto(`${WEB}/account`);
   await page.getByRole('heading', { name: 'Passkeys' }).waitFor();
   await shoot(page, '13-account');
-  await shootPhone(page, '13b-account-phone');
 
-  // A second org, made in the dashboard: the CLI has none to make, and the picker scopes
-  // Environments to it.
-  check(
-    'the CLI has no orgs command: orgs are made in the dashboard',
-    laptop.cli(['orgs', 'list']).status !== 0,
-  );
-  await page.goto(`${WEB}/account`);
-  await page.getByLabel('Org name').fill('Globex Corp');
-  await page.getByLabel('Slug').fill('globex');
+  // --- an org stored the 0.7 way: the dashboard seals it, CI keeps loading ----------------------
+  await page.getByLabel('Org name').fill('Legacy Ltd');
+  await page.getByLabel('Slug').fill('legacy');
   await page.getByRole('button', { name: 'Create org' }).click();
-  await page.getByRole('main').getByText('Globex Corp').waitFor();
+  await page.getByRole('main').getByText('Legacy Ltd').waitFor();
   await shoot(page, '13e-account-orgs');
   await page.goto(`${WEB}/environments`);
-  await page.getByText('No environments in Globex Corp yet').waitFor();
-  check('a new org is the one the picker shows', true);
-  await shoot(page, '13c-environments-other-org');
-  await shootPhone(page, '13d-environments-other-org-phone');
-  const picker = page.getByLabel('Org', { exact: true });
-  await picker.selectOption({ label: 'Acme' });
+  await page.getByText('No environments in Legacy Ltd yet').waitFor();
+  await page.getByLabel('New environment').fill('app/legacy');
+  await page.getByRole('button', { name: 'Create environment' }).click();
+  await page.getByRole('link', { name: /legacy\/app\/legacy/ }).click();
+  await page.getByRole('button', { name: 'Add a secret' }).click();
+  await page.getByLabel('Name').fill('LEGACY_TOKEN');
+  await page.getByLabel('Value').fill('legacy-value');
+  await page.getByRole('button', { name: 'Seal and save' }).click();
+  await page.getByText(/sealed · \d+ B · v1/).waitFor();
+  const legacyCiKey = join(laptop.home, 'legacy-ci-key');
+  const legacyAsk = laptop.cli([
+    'ask',
+    'access',
+    '--read',
+    'legacy/app/legacy',
+    '--reason',
+    'CI: legacy deploy',
+    '--name',
+    'Legacy CI',
+    '--',
+    'sh',
+    '-c',
+    `cat > ${legacyCiKey}`,
+  ]);
+  await page.goto(legacyAsk.json.url);
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  laptop.cli(['ask', 'wait', legacyAsk.json.id]);
+  const legacyEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(legacyCiKey, 'utf8').trim() };
+  const legacyOrg = laptop
+    .cli(['org', 'list'])
+    .json?.orgs?.find((org: { slug: string }) => org.slug === 'legacy');
+  const legacyEnvironment = laptop
+    .cli(['env', 'list'])
+    .json?.environments?.find((environment: { name: string }) => environment.name === 'app/legacy');
+  if (legacyOrg === undefined || legacyEnvironment === undefined) fail('the legacy org is listed');
+  // Leave the dashboard before the store changes under it, so nothing seals until it is opened. A
+  // browser that saw the org sealed would refuse it unsealed: this one forgets it ever did, as a
+  // browser from before 0.8 never knew.
+  await page.goto(`${WEB}/signin`);
+  await page.evaluate(orgId => {
+    for (const key of Object.keys(localStorage).filter(key =>
+      key.startsWith('baymutt.sealedOrgs.'),
+    )) {
+      const seen: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+      if (Array.isArray(seen)) {
+        localStorage.setItem(key, JSON.stringify(seen.filter(id => id !== orgId)));
+      }
+    }
+  }, legacyOrg.id);
+  await page.goto('about:blank');
+  const [org, environment] = [sqlText(legacyOrg.id), sqlText(legacyEnvironment.id)];
+  d1(`
+    PRAGMA defer_foreign_keys = on;
+    DELETE FROM names_key_wrap WHERE org_id = ${org};
+    UPDATE environment SET name = 'app/legacy', sealed_name = NULL WHERE id = ${environment};
+    UPDATE secret_version SET name = 'LEGACY_TOKEN' WHERE environment_id = ${environment};
+    UPDATE secret SET name = 'LEGACY_TOKEN', sealed_name = NULL WHERE environment_id = ${environment};
+    UPDATE activity_event SET environment_name = 'app/legacy', environment_sealed_name = NULL
+      WHERE environment_id = ${environment};
+    UPDATE activity_event SET secret_name = 'LEGACY_TOKEN', secret_sealed_name = NULL
+      WHERE environment_id = ${environment} AND secret_name IS NOT NULL;
+  `);
+  const isSealed = () =>
+    d1(`SELECT count(*) AS wraps FROM names_key_wrap WHERE org_id = ${org}`)[0]?.wraps !== 0;
+  check(
+    'an org stored the 0.7 way has its names as written and no names key',
+    !isSealed() &&
+      laptop
+        .cli(['org', 'list'])
+        .json?.orgs?.find((listed: { slug: string }) => listed.slug === 'legacy')
+        ?.areNamesSealed === false,
+  );
+  check(
+    'its service account loads it before the dashboard is opened',
+    varlockLoads(legacyEnv, 'legacy/app/legacy', { LEGACY_TOKEN: 'legacy-value' }).isLoaded,
+  );
+  // Its only environment there is in the bin while the org is sealed.
+  d1(`UPDATE environment SET deleted_at = ${Date.now()}, purge_at = ${Date.now() + 30 * 24 * 60 * MINUTE_MS}
+      WHERE id = ${environment}`);
+  // The picker still shows the org made last.
+  await page.goto(`${WEB}/environments`);
+  await page.getByText('No environments in Legacy Ltd yet').waitFor();
+  let sealed = false;
+  for (let attempt = 0; attempt < 40 && !sealed; attempt++) {
+    sealed = isSealed();
+    if (!sealed) await page.waitForTimeout(250);
+  }
+  check('opening the dashboard seals the org’s names', sealed);
+  check(
+    'a service account whose environment there is in the bin gets the org’s names too',
+    d1(`SELECT count(*) AS wraps FROM names_key_wrap
+        WHERE org_id = ${org} AND reader_id = ${sqlText(legacyAsk.json.id)}`)[0]?.wraps === 1,
+  );
+  d1(`UPDATE environment SET deleted_at = NULL, purge_at = NULL WHERE id = ${environment}`);
+  check(
+    'the store no longer keeps the names as written',
+    d1(`SELECT name FROM environment WHERE id = ${environment}`)[0]?.name !== 'app/legacy' &&
+      d1(`SELECT name FROM secret WHERE environment_id = ${environment}`)[0]?.name !==
+        'LEGACY_TOKEN',
+  );
+  check(
+    'its service account still loads it after sealing',
+    varlockLoads(legacyEnv, 'legacy/app/legacy', { LEGACY_TOKEN: 'legacy-value' }).isLoaded,
+  );
+  check(
+    'the CLI login lists the sealed names',
+    laptop
+      .cli(['secret', 'list', 'legacy/app/legacy'])
+      .json?.secrets?.some((secret: { name: string }) => secret.name === 'LEGACY_TOKEN') === true,
+  );
+  await page.reload();
+  await page.getByRole('link', { name: /legacy\/app\/legacy/ }).click();
+  await page.getByText('LEGACY_TOKEN').waitFor();
+  await shoot(page, '13f-legacy-environment-sealed');
+  check('the dashboard shows the sealed names', true);
+
+  // --- a store that hides the names key of an org this browser has seen sealed -----------------
+  const keptWraps = d1(
+    `SELECT reader_id, wrap, created_at FROM names_key_wrap WHERE org_id = ${org}`,
+  );
+  const [keptName] = d1(`SELECT name, sealed_name FROM environment WHERE id = ${environment}`);
+  await page.goto('about:blank');
+  d1(`DELETE FROM names_key_wrap WHERE org_id = ${org};
+      UPDATE environment SET name = 'app/made-up', sealed_name = NULL WHERE id = ${environment};`);
+  await page.goto(`${WEB}/environments`);
+  await page.getByRole('link', { name: /legacy\/name does not open/ }).waitFor();
+  await page.getByLabel('New environment').fill('app/other');
+  await page.getByRole('button', { name: 'Create environment' }).click();
+  await page.getByText(/did not hand over this org’s names/).waitFor();
+  await shoot(page, '13g-names-withheld');
+  check(
+    'an org seen sealed shows no name the store made up, makes nothing, and is not sealed again',
+    !(await page.content()).includes('app/made-up') && !isSealed(),
+  );
+  await page.goto('about:blank');
+  d1(`UPDATE environment SET name = ${sqlText(String(keptName?.name))},
+        sealed_name = ${sqlText(String(keptName?.sealed_name))} WHERE id = ${environment};
+      ${keptWraps
+        .map(
+          ({ reader_id, wrap, created_at }) =>
+            `INSERT INTO names_key_wrap (org_id, reader_id, wrap, created_at) VALUES (${org}, ${sqlText(String(reader_id))}, ${sqlText(String(wrap))}, ${Number(created_at)});`,
+        )
+        .join('\n')}`);
+  await page.goto(`${WEB}/environments`);
+  await page.getByLabel('Org', { exact: true }).selectOption({ label: 'Acme' });
   await page.getByRole('link', { name: /acme\/app\/production/ }).waitFor();
 
   // The vault stays open across a reload, and a change still goes through.
@@ -612,28 +1088,20 @@ const main = async (browser: Browser) => {
   await page.getByRole('heading', { name: 'Passkeys' }).waitFor();
   check('a reload leaves the vault open', await keepsVaultOpen(page));
 
-  // Logging the laptop out takes the CI service account with it.
-  const loggedOut = laptop.cli(['logout']);
+  // Logging the laptop out takes the keys it asked for with it.
+  const loggedOut = laptop.cli(['auth', 'logout']);
   check(
-    '`baymutt logout` revokes the login and what it made',
-    loggedOut.json?.status === 'loggedOut' && loggedOut.json?.revoked.length === 2,
+    '`baymutt auth logout` revokes the login and the keys it asked for',
+    loggedOut.json?.status === 'loggedOut' &&
+      !varlockLoads(ciEnv, 'acme/app/production', { API_KEY: 'value-from-the-cli' }).isLoaded,
   );
-  check(
-    'a logged-out computer is not logged in',
-    laptop.cli(['environments', 'list']).status === 3,
-  );
+  check('a logged-out computer is not logged in', laptop.cli(['env', 'list']).status === 3);
   await page.goto(`${WEB}/service-accounts`);
-  await page.getByText('Build server').waitFor();
-  await page.getByRole('button', { name: 'Revoke' }).first().click();
-  await shoot(page, '14-revoke');
-  await page.getByRole('button', { name: 'Revoke service account' }).click();
-  await page.getByText('No service accounts yet').waitFor();
+  await page.getByText('No CLI logins yet').waitFor();
   await shoot(page, '14b-service-accounts-empty');
-  check('a revoked service account is refused', server.cli(['environments', 'list']).status === 3);
   await page.goto(`${WEB}/paste-links`);
   await page.getByText('Nothing is waiting on you').waitFor();
   await shoot(page, '14c-paste-links-empty');
-  await shootPhone(page, '14d-paste-links-empty-phone');
 
   // --- dark, and a phone ----------------------------------------------------------------------
   // The same page: the virtual authenticator belongs to its target.
@@ -646,7 +1114,7 @@ const main = async (browser: Browser) => {
   await shoot(page, '16-environment-dark-phone');
   await page.setViewportSize(DESKTOP);
   await page.goto(`${WEB}/service-accounts`);
-  await page.getByText('No service accounts yet').waitFor();
+  await page.getByText('No CLI logins yet').waitFor();
   await shoot(page, '16b-service-accounts-empty-dark');
   await context.close();
 
@@ -726,7 +1194,7 @@ const main = async (browser: Browser) => {
   check('the old recovery key no longer works', true);
   await spent.close();
 
-  for (const directory of [laptop.home, server.home, ci.home, schemaDir])
+  for (const directory of [laptop.home, ci.home])
     rmSync(directory, { recursive: true, force: true });
   console.log(`\nAll checks passed. Screens: ${shots}`);
 };

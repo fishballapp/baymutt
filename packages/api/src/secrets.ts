@@ -6,13 +6,20 @@ import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
 import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
-import { LimitReachedError, NoAccessError, NotFoundError, VersionConflictError } from './errors.ts';
+import {
+  LimitReachedError,
+  NamesNotSealedError,
+  NoAccessError,
+  NotFoundError,
+  VersionConflictError,
+} from './errors.ts';
 import {
   ActorSchema,
   CiphertextSchema,
-  EnvironmentNameSchema,
   PublicKeySchema,
-  SecretNameSchema,
+  SealedNameSchema,
+  StoredEnvironmentNameSchema,
+  StoredSecretNameSchema,
   TimestampSchema,
   VersionSchema,
   WrapSchema,
@@ -20,7 +27,10 @@ import {
 import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const SecretSchema = Schema.Struct({
-  name: SecretNameSchema,
+  /** Its index under the org's names key: what the store files it under, and what a route names it by. */
+  name: StoredSecretNameSchema,
+  /** The name, for whoever holds the names key. Null only in an org whose names are not sealed yet. */
+  sealedName: Schema.NullOr(SealedNameSchema),
   /** The version a load answers with; null once deleted, while it is in the bin. */
   currentVersion: Schema.NullOr(VersionSchema),
   /** The highest version ever written: the next write is one above it. */
@@ -44,11 +54,16 @@ export const SecretVersionSchema = Schema.Struct({
 }).annotate({ identifier: 'SecretVersion' });
 export type SecretVersion = typeof SecretVersionSchema.Type;
 
-/** Everything a reader needs to open an environment's current values, in one answer. */
+/**
+ * Everything a reader needs to open an environment's current values, in one answer. `sealedName`
+ * may be missing as well as null, for 0.8.0 only: a deploy loads its secrets with the new client
+ * from the store it is about to replace, which answers without it.
+ */
 export const BundleSchema = Schema.Struct({
   environment: Schema.Struct({
     id: Schema.String,
-    name: EnvironmentNameSchema,
+    name: StoredEnvironmentNameSchema,
+    sealedName: Schema.optionalKey(Schema.NullOr(SealedNameSchema)),
     publicKey: PublicKeySchema,
     keyVersion: Schema.Int,
   }),
@@ -57,7 +72,8 @@ export const BundleSchema = Schema.Struct({
   readerId: Schema.String,
   secrets: Schema.Array(
     Schema.Struct({
-      name: SecretNameSchema,
+      name: StoredSecretNameSchema,
+      sealedName: Schema.optionalKey(Schema.NullOr(SealedNameSchema)),
       version: VersionSchema,
       keyVersion: Schema.Int,
       ciphertext: CiphertextSchema,
@@ -75,13 +91,20 @@ export const SealedVersionSchema = Schema.Struct({
 export type SealedVersion = typeof SealedVersionSchema.Type;
 
 const environmentParam = { environmentId: Schema.String };
-const secretParams = { ...environmentParam, name: SecretNameSchema };
+const secretParams = { ...environmentParam, name: StoredSecretNameSchema };
 
-export const WriteSecretPayloadSchema = Schema.Struct({
+/** One sealed value and the slot it was sealed for. */
+export const SealedValuePayloadSchema = Schema.Struct({
   /** One above the secret's latest version (1 for a new name): the slot the ciphertext was sealed for. */
   version: VersionSchema,
   keyVersion: Schema.Int,
   ciphertext: CiphertextSchema,
+});
+
+export const WriteSecretPayloadSchema = Schema.Struct({
+  ...SealedValuePayloadSchema.fields,
+  /** The name, sealed with the org's names key. Needed when the name is new; ignored otherwise. */
+  sealedName: Schema.optionalKey(SealedNameSchema),
 });
 
 export class SecretsGroup extends HttpApiGroup.make('secrets')
@@ -93,7 +116,8 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'List an environment’s secrets',
-        description: 'Names, versions and sizes; never a value. Either grant is enough.',
+        description:
+          'Sealed names, versions and sizes; never a value. Either grant is enough, and so is being a CLI login of the environment’s org.',
       }),
     ),
     HttpApiEndpoint.get('bundle', '/environments/:environmentId/bundle', {
@@ -116,11 +140,13 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
         coded(NoAccessError),
         coded(VersionConflictError),
         coded(LimitReachedError),
+        coded(NamesNotSealedError),
       ],
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Write a secret',
-        description: 'Adds a version and makes it current. Needs a write grant, and no key.',
+        description:
+          'Adds a version and makes it current. Needs a write grant, and no key. A new name comes with `sealedName`, and is refused in an org whose names are not sealed yet.',
       }),
     ),
     HttpApiEndpoint.delete('remove', '/environments/:environmentId/secrets/:name', {

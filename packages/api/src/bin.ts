@@ -7,9 +7,10 @@ import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
 import {
   ActorSchema,
-  EnvironmentNameSchema,
   OrgSlugSchema,
-  SecretNameSchema,
+  SealedNameSchema,
+  StoredEnvironmentNameSchema,
+  StoredSecretNameSchema,
   TimestampSchema,
   VersionSchema,
 } from './fields.ts';
@@ -22,7 +23,8 @@ export const BinEnvironmentSchema = Schema.Struct({
   id: Schema.String,
   orgId: Schema.String,
   orgSlug: OrgSlugSchema,
-  name: EnvironmentNameSchema,
+  name: StoredEnvironmentNameSchema,
+  sealedName: Schema.NullOr(SealedNameSchema),
   deletedAt: TimestampSchema,
   /** When it is removed for good, with its secrets, versions and grants. */
   purgeAt: TimestampSchema,
@@ -33,8 +35,10 @@ export const BinSecretSchema = Schema.Struct({
   orgId: Schema.String,
   orgSlug: OrgSlugSchema,
   environmentId: Schema.String,
-  environmentName: EnvironmentNameSchema,
-  name: SecretNameSchema,
+  environmentName: StoredEnvironmentNameSchema,
+  environmentSealedName: Schema.NullOr(SealedNameSchema),
+  name: StoredSecretNameSchema,
+  sealedName: Schema.NullOr(SealedNameSchema),
   /** The newest version: what restoring it makes current, unless another is named. */
   latestVersion: VersionSchema,
   deletedAt: TimestampSchema,

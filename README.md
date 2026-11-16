@@ -1,22 +1,33 @@
 # baymutt
 
-A zero-knowledge secret store for people who run coding agents. Agents load, write and replace
-secrets with no approval prompt, through a CLI login the owner approves once. The store keeps every
-value sealed, so it cannot read them.
+A zero-knowledge secret store for people who run coding agents. An agent says which environments
+it needs and why, the owner approves on one screen, and the agent gets a key of its own that ends.
+The store keeps every value and every name sealed, so it cannot read them.
 
 Hosted at **[baymutt.fsh.ba](https://baymutt.fsh.ba)**, free while it is in beta. The name is 秘密
 (bei mat), "secret" in Cantonese.
 
 ## Use it
 
-Create an account at [baymutt.fsh.ba](https://baymutt.fsh.ba/signup) and an org in it (`acme`
-below), then, where an agent runs:
+Create an account at [baymutt.fsh.ba](https://baymutt.fsh.ba/signup), and an org (`acme` below)
+and an environment in it. Then, where agents run:
 
 ```sh
 npm install -g baymutt            # or run any command as `npx baymutt …`
-baymutt login                     # makes a key here and prints a link; the owner opens it and approves
-baymutt environments create acme/app/production
-baymutt generate acme/app/production SESSION_SECRET
+baymutt auth login                # once per computer: prints a link; the owner opens it and approves
+baymutt env list                  # a CLI login lists names, and opens no value
+baymutt ask access --read acme/app/production --reason "run the migration" --expires 1h
+baymutt ask wait <the id it printed>
+```
+
+`baymutt ask access` prints a link and an id, and returns. The agent gives the owner the link; the
+request waits an hour for them. The owner sees which CLI login asks, for which environments, why
+and until when, and approves or rejects; they can change only when it ends. `baymutt ask wait`
+returns when they have answered. Approved, it prints the path of a key file of the agent's own:
+
+```sh
+BAYMUTT_KEY_FILE=<that path> varlock run -- pnpm migrate
+BAYMUTT_KEY_FILE=<that path> baymutt secret generate acme/app/production SESSION_SECRET   # needs --write
 ```
 
 Every command prints JSON on stdout and one JSON error line on stderr, and no command prints a
@@ -24,20 +35,30 @@ value. `baymutt --help` lists them all.
 
 - **An environment belongs to an org** and is named with the org's slug first, `<org>/<name>`. Orgs
   are made in the dashboard; their creator owns them.
-- **A CLI login reads and writes every environment of its account's orgs**, including ones made
-  later: approving it is the owner's one decision. `--description` says what it is for,
-  `--expires 90d` when it stops, and `baymutt logout` revokes it and forgets its key.
-- **A value only the owner can fetch** (a vendor's API key) arrives through a paste link:
-  `baymutt paste-link <environment> <NAME>` prints a single-use link to a page where they paste it.
-- **A CLI login can make a service account.** It holds only the environments named, cannot widen
-  its own access, and its key goes to the command after `--` on stdin, never onto a screen:
+- **A CLI login lists names and holds no environment.** It shows orgs, environments and secret
+  names, and makes requests and paste links. `baymutt auth logout` revokes it and forgets its key.
+- **Each request is approved on its own**, for whole environments: `--read`, `--write` or both,
+  `--expires 15m`, `1h` or `90d`. Nothing carries over to the next agent, which asks for itself.
+  `--write` does not include `--read`: `--read-write` asks for both.
+- **A new environment is asked for on its own**: `baymutt ask create-environment acme/app/staging
+  --reason "…"` prints a link; the owner creates it, empty, or rejects. Access to it is then an
+  `ask access` like any other.
+- **Everything asked of the owner is under `baymutt ask`** and waits an hour: `ask wait <id>`
+  returns when they have answered, `ask cancel <id>` withdraws it.
+- **A key that stays, for CI,** is a request too. `baymutt ask wait` hands the key to the command
+  after `--` on stdin once the owner has approved, never onto a screen, and the approval shows
+  that command:
 
   ```sh
-  baymutt service-accounts create --name "CI: deploy" --read acme/app/production --expires 90d -- gh secret set BAYMUTT_KEY -R owner/repo
+  baymutt ask access --read acme/app/production --reason "CI: deploy" -- gh secret set BAYMUTT_KEY -R owner/repo
+  baymutt ask wait <the id it printed>
   ```
 
-  Its CLI login, or the owner in the dashboard, changes what it reaches later, and its key stays the
-  same: `baymutt service-accounts access <id> --read acme/app/staging --remove acme/app/production`.
+  It works until it is revoked. The owner changes what it reaches in the dashboard, and its key
+  stays the same. Inside a sandbox, a key file's content works as `BAYMUTT_KEY`.
+- **A value only the owner can fetch** (a vendor's API key) arrives through a paste link:
+  `baymutt ask paste-link <environment> <NAME>` prints a single-use link to a page where the owner,
+  signed in, pastes it. It waits an hour, and `baymutt ask wait <id>` returns once they have.
 
 ### Loading values with varlock
 
@@ -53,19 +74,21 @@ DATABASE_URL=
 SESSION_SECRET=
 ```
 
-Then `varlock run -- <command>`. Where you ran `baymutt login`, `BAYMUTT_KEY` stays unset and the
-plugin reads the key it stored; in CI it is the job's secret.
+Then `varlock run -- <command>`, with `BAYMUTT_KEY_FILE` naming the key file `baymutt ask access` gave
+(`BAYMUTT_KEY` stays unset), or with `BAYMUTT_KEY` set to a service account's key in CI.
 
 ## How it keeps values from the host
 
-- **Values are sealed and opened on the client**, with keys the host never holds: the owner's vault
-  is opened in the browser by a passkey or a password, and a CLI login's or service account's key
-  is made where it is used and never sent.
+- **Values and names are sealed and opened on the client**, with keys the host never holds: the
+  owner's vault is opened in the browser by a passkey or a password, and a CLI login's or service
+  account's key is made where it is used and never sent.
 - **Read access is cryptographic.** Reading an environment means holding its key, wrapped to yours
-  by someone who already holds it: the owner's browser wraps every environment to each CLI login it
-  approves, and a CLI login hands a service account only what it holds. The owner can hand one
-  more, to the key its CLI login vouched for when it made it. The Worker stores ciphertext, public
-  keys, wraps, grants and the activity log.
+  by someone who already holds it: the owner's browser wraps to a request's key exactly the
+  environments the request named, when the owner approves it. Nothing is wrapped to a CLI login.
+  The Worker stores ciphertext, sealed names, public keys, wraps, grants and the activity log.
+- **A name is stored as an index and a sealed name**, under one names key per org that the owner's
+  account wraps to whoever may list names. The store can tell that two names in one environment
+  are equal, and nothing else about them.
 - **A client does not trust a public key the store serves.** Which key belongs to an environment or
   a service account is vouched for by a party the reader already trusts, in a box only those two
   can make.
@@ -77,9 +100,12 @@ plugin reads the key it stored; in CI it is the job's secret.
   back, for 30 days; then it is removed for good. Only the owner, in the dashboard, removes
   something sooner.
 
-What it does not hide: org, environment and secret names, sizes, and who read or wrote what when. What it
-does not protect yet: a compromised host could swap a value for one of its own or answer with an
-older version; the audit log and the version history are what would show it.
+What it does not hide: org names, how many environments and secrets there are, sizes, who read
+or wrote what when, and what a person typed as a reason, a hint or a service account's name. What
+it does not protect yet: a compromised host could swap a value for one of its own or answer with
+an older version; the activity log and the version history are what would show it. What an
+approval cannot do: take back what a key already read, or stop agents under one operating-system
+user from reading each other's key files.
 
 ## What is here
 
@@ -107,9 +133,8 @@ pnpm -F @baymutt/cli cli -- --help   # builds, then runs the CLI
 pnpm check && pnpm typecheck && pnpm test
 ```
 
-Point the CLI at the local Worker with `BAYMUTT_URL=http://localhost:5183`, and keep its key out of
-your keychain with `BAYMUTT_KEY_FILE=<path>`. Local development sends no mail:
-`GET /api/dev/magic-link?email=…` answers the newest sign-in link's token.
+Point the CLI at the local Worker with `BAYMUTT_URL=http://localhost:5183`. Local development
+sends no mail: `GET /api/dev/magic-link?email=…` answers the newest sign-in link's token.
 
 This repository is cut from a private monorepo, and every commit on `main` is deployed to
 baymutt.fsh.ba by [`cd.yml`](.github/workflows/cd.yml). Issues are welcome. Please open one before

@@ -45,7 +45,7 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
       <div className="max-w-[34rem] space-y-4">
         <h1 className="text-xl">This is not a login link</h1>
         <p className="text-muted">
-          Run <Code>baymutt login</Code> on the computer and open the whole link it prints,
+          Run <Code>baymutt auth login</Code> on the computer and open the whole link it prints,
           including everything after the #.
         </p>
       </div>
@@ -57,8 +57,8 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
       <div className="max-w-[34rem] space-y-4">
         <h1 className="text-xl">{request.name} is approved</h1>
         <p className="text-muted">
-          The terminal picks this up by itself. It can read and write every environment of your orgs
-          now, and each one made from here on.
+          The terminal picks this up by itself. It lists the names in your orgs now; each request it
+          makes for an environment waits for you.
         </p>
         <Link to="/service-accounts" className={buttonStyles({ intent: 'primary' })}>
           See service accounts
@@ -72,7 +72,7 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
       <div>
         <h1 className="text-xl">Approve this login?</h1>
         <p className="mt-2 text-muted">
-          A terminal ran <Code>baymutt login</Code> and asks to join{' '}
+          A terminal ran <Code>baymutt auth login</Code> and asks to join{' '}
           <span className="text-foreground">{owner.accountName}</span>.
         </p>
       </div>
@@ -94,9 +94,11 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
       </div>
       <p>
         Approving lets it{' '}
-        <strong className="font-medium">read and write every environment of your orgs</strong>, now
-        and later, create environments, and make service accounts for any of them. What it reads
-        stays read, even after you revoke it.
+        <strong className="font-medium">
+          list the names of your orgs, environments and secrets
+        </strong>
+        , make paste links, and ask you for access to environments. It opens no value and writes
+        none.
       </p>
       <ExpiryField
         kept={request.expiresAt ?? null}
@@ -104,7 +106,7 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
         onChange={setExpiresAt}
       />
       <Notice tone="warn">
-        If the codes differ, or you did not run <Code>baymutt login</Code> yourself, this link
+        If the codes differ, or you did not run <Code>baymutt auth login</Code> yourself, this link
         carries someone else’s key. Do not approve it.
       </Notice>
       {failureMessage(pairing) && <Notice>{failureMessage(pairing)}</Notice>}

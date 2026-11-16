@@ -98,11 +98,13 @@ export class Bin extends Context.Service<
           orgId: Schema.String,
           orgSlug: Schema.String,
           name: Schema.String,
+          sealedName: Schema.NullOr(Schema.String),
           deletedAt: Schema.Finite,
           purgeAt: Schema.Finite,
         }),
         execute: ({ scope, grantee, id, dueBy }) =>
-          sql`SELECT e.id, e.org_id, o.slug AS org_slug, e.name, e.deleted_at, e.purge_at
+          sql`SELECT e.id, e.org_id, o.slug AS org_slug, e.name, e.sealed_name, e.deleted_at,
+                e.purge_at
               FROM environment e JOIN organization o ON o.id = e.org_id
               WHERE e.deleted_at IS NOT NULL
                 AND ${inScope(sql`e.org_id`, scope)}
@@ -125,7 +127,9 @@ export class Bin extends Context.Service<
           orgSlug: Schema.String,
           environmentId: Schema.String,
           environmentName: Schema.String,
+          environmentSealedName: Schema.NullOr(Schema.String),
           name: Schema.String,
+          sealedName: Schema.NullOr(Schema.String),
           latestVersion: Schema.Finite,
           deletedAt: Schema.Finite,
           deletedBy: ActorJsonSchema,
@@ -135,7 +139,7 @@ export class Bin extends Context.Service<
         // sweep (`dueBy`) takes every one that is due, its environment deleted or not.
         execute: ({ scope, grantee, slot, dueBy }) =>
           sql`SELECT e.org_id, o.slug AS org_slug, s.environment_id, e.name AS environment_name,
-                s.name, s.latest_version, s.updated_at AS deleted_at, s.updated_by AS deleted_by,
+                e.sealed_name AS environment_sealed_name, s.name, s.sealed_name, s.latest_version, s.updated_at AS deleted_at, s.updated_by AS deleted_by,
                 s.purge_at
               FROM secret s
               JOIN environment e ON e.id = s.environment_id
@@ -171,7 +175,7 @@ export class Bin extends Context.Service<
       ];
 
       const purgeEnvironmentNow = Effect.fnUntraced(function* (
-        environment: { readonly id: string; readonly orgId: string; readonly name: string },
+        environment: { readonly id: string; readonly orgId: string },
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
       ) {
         const stillBinned = sql`EXISTS (SELECT 1 FROM environment e
@@ -185,7 +189,6 @@ export class Bin extends Context.Service<
                 actor,
                 action: 'environment.purge',
                 environmentId: environment.id,
-                environmentName: environment.name,
                 detail: dueBy === null ? null : SWEEP_DETAIL,
               },
               stillBinned,
@@ -199,7 +202,6 @@ export class Bin extends Context.Service<
         secret: {
           readonly orgId: string;
           readonly environmentId: string;
-          readonly environmentName: string;
           readonly name: string;
         },
         { actor, dueBy }: { readonly actor: Actor; readonly dueBy: number | null },
@@ -216,7 +218,6 @@ export class Bin extends Context.Service<
                 actor,
                 action: 'secret.purge',
                 environmentId: secret.environmentId,
-                environmentName: secret.environmentName,
                 secretName: secret.name,
                 detail: dueBy === null ? null : SWEEP_DETAIL,
               },
@@ -270,7 +271,7 @@ export class Bin extends Context.Service<
           }).pipe(Effect.orDie);
           if (secret === undefined) {
             return yield* new NotFoundError({
-              message: `${name} is not in the bin. Delete it before removing it for good.`,
+              message: 'This secret is not in the bin. Delete it before removing it for good.',
             });
           }
           yield* purgeSecretNow(secret, { actor: actorOf(actor), dueBy: null });

@@ -5,11 +5,11 @@ import Mark from '../components/Mark.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import Terminal from '../components/Terminal.astro';
-import { PASTE_LINK, SCHEMA_FILE, SERVICE_ACCOUNT, START, WRITE } from '../example.ts';
+import { ASK, CI_KEY, LOAD, PASTE_LINK, SCHEMA_FILE, START } from '../example.ts';
 import Layout from '../layouts/Layout.astro';
 
 const DESCRIPTION =
-  'baymutt is a secret manager for coding agents. Approve a CLI login once; your agents then load, set and roll back secrets with no prompt, and no command prints a value. Free while in beta.';
+  'baymutt is a secret manager for coding agents. An agent asks for the environments it needs and says why; you approve on one screen, and its own key works until it ends. No command prints a value. Free while in beta.';
 
 const softwareApplication = {
   '@context': 'https://schema.org',
@@ -24,7 +24,7 @@ const softwareApplication = {
 ---
 
 <Layout
-  title="baymutt: approve the login once, and your agents handle secrets from there"
+  title="baymutt: your agents ask for secrets, and you answer on one screen"
   description={DESCRIPTION}
   structuredData={softwareApplication}
 >
@@ -36,11 +36,12 @@ const softwareApplication = {
     <section class="wrap hero" aria-labelledby="hero-title">
       <div>
         <h1 id="hero-title">
-          Approve the login once. <span>Your agents handle secrets from there.</span>
+          Your agents ask for secrets. <span>You answer on one screen.</span>
         </h1>
         <p class="lede">
-          baymutt is a secret manager for coding agents. From the terminal they load, set and roll
-          back secrets with no prompt, and <strong>no command prints a value</strong>.
+          baymutt is a secret manager for coding agents. An agent names the environments it needs
+          and why; you approve, and its own key works until it ends. <strong>No command prints a
+          value</strong>.
         </p>
         <div class="act">
           <a class="go" href="/signup">Create an account</a>
@@ -63,15 +64,25 @@ const softwareApplication = {
     <section class="sec bay" aria-labelledby="then-title">
       <div class="wrap">
         <h2 id="then-title">Then your agents get on with it.</h2>
-        <p class="say">None of this needs your approval.</p>
+        <p class="say">Each agent asks once per task. Until its key ends, nothing asks you again.</p>
 
         <ol class="rows">
+          <li class="row">
+            <div>
+              <h3>Ask for what the task needs</h3>
+              <p>
+                A CLI login lists names and opens nothing. The agent asks for whole environments,
+                read or write, and why. You see the request and choose when its key ends.
+              </p>
+            </div>
+            <Terminal label="A terminal" lines={[...START, ...ASK]} />
+          </li>
           <li class="row">
             <div>
               <h3>Load values into any command</h3>
               <p>
                 Three lines in <code>.env.schema</code> name the environment. <code>varlock run</code>{' '}
-                loads it into the process.
+                loads it into the process with the approved key.
               </p>
             </div>
             <div class="stack">
@@ -81,42 +92,29 @@ const softwareApplication = {
                   <span class:list={['line', { comment: line.startsWith('#') }]}>{line}</span>
                 ))}</pre>
               </figure>
-              <Terminal label="A terminal" lines={START} />
+              <Terminal label="A terminal" lines={LOAD} />
             </div>
           </li>
-
-          <li class="row">
-            <div>
-              <h3>Write without seeing the value</h3>
-              <p>
-                A confirmation is a name, a version and a length. Every write is a new version, so
-                a bad one rolls back.
-              </p>
-            </div>
-            <Terminal label="A terminal" lines={WRITE} />
-          </li>
-
           <li class="row">
             <div>
               <h3>Ask you for what only you can fetch</h3>
               <p>
-                The agent makes a paste link for one name. You paste the value, on your phone if
-                that is where you are, and your browser seals it before it is sent.
+                The agent makes a paste link for one name. You open it signed in, paste the value,
+                and your browser seals it before it is sent.
               </p>
             </div>
             <Terminal label="A terminal" lines={PASTE_LINK} />
           </li>
-
           <li class="row">
             <div>
-              <h3>Hand CI a narrower key</h3>
+              <h3>Give CI a key that stays</h3>
               <p>
-                A CLI login makes a service account that holds only the environments it names, and
-                cannot widen its own access. Its key goes to the command after <code>--</code>,
-                never to the screen.
+                A request with a command after <code>--</code>: once you approve, its key goes to
+                that command, never to the screen. It holds exactly what was asked for, and cannot
+                widen its own access.
               </p>
             </div>
-            <Terminal label="A terminal" lines={SERVICE_ACCOUNT} />
+            <Terminal label="A terminal" lines={CI_KEY} />
           </li>
         </ol>
       </div>
@@ -126,8 +124,9 @@ const softwareApplication = {
       <div class="wrap">
         <h2 id="read-title">Sealed on your side. Unreadable on ours.</h2>
         <p class="say">
-          Values are sealed on your computer or in your browser, to keys baymutt never holds, so
-          baymutt cannot read them. <strong>It still sees names, sizes, times and who did what.</strong>
+          Values, and the names of environments and secrets, are sealed on your computer or in your
+          browser, to keys baymutt never holds, so baymutt cannot read them. <strong>It still sees
+          org names, sizes, times, reasons and who did what.</strong>
         </p>
         <p class="more">
           <a href="https://github.com/fishballapp/baymutt#how-it-keeps-values-from-the-host">

@@ -1,5 +1,6 @@
-// Service accounts: what the CLI acts as. The owner approves one from the dashboard; a service
-// account may make another that holds no more than it does.
+// CLI logins and service accounts: what the CLI acts as. The owner approves a CLI login, which
+// lists names and holds no environment; a service account comes from a request the owner approved
+// (`requests.ts`) and holds the environments that request named.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -15,9 +16,12 @@ import {
   IdSchema,
   KeyProofSchema,
   LabelSchema,
+  OrgNamesKeyWrapSchema,
   OrgSlugSchema,
   PublicKeySchema,
+  SealedNameSchema,
   SealedSchema,
+  StoredEnvironmentNameSchema,
   TimestampSchema,
   VoucherSchema,
   WrapSchema,
@@ -26,8 +30,10 @@ import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
 export const CredentialGrantSchema = Schema.Struct({
   environmentId: Schema.String,
+  orgId: Schema.String,
   orgSlug: OrgSlugSchema,
-  environmentName: Schema.String,
+  environmentName: StoredEnvironmentNameSchema,
+  environmentSealedName: Schema.NullOr(SealedNameSchema),
   canRead: Schema.Boolean,
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
@@ -37,8 +43,8 @@ export const ServiceAccountSchema = Schema.Struct({
   name: LabelSchema,
   publicKey: PublicKeySchema,
   /**
-   * The CLI login that made this one. Null for a CLI login: one `baymutt login` made and the
-   * owner approved, which holds read and write on every environment of every org of the person.
+   * The CLI login that asked for this one. Null for a CLI login: one `baymutt auth login` made and the
+   * owner approved, which lists the names in every org of the person and holds no environment.
    */
   parentId: Schema.NullOr(Schema.String),
   description: Schema.NullOr(DescriptionSchema),
@@ -57,21 +63,21 @@ export const ServiceAccountSchema = Schema.Struct({
 }).annotate({ identifier: 'ServiceAccount' });
 export type ServiceAccount = typeof ServiceAccountSchema.Type;
 
-const newCredential = {
+export const newCredential = {
   id: IdSchema,
   name: LabelSchema,
   publicKey: PublicKeySchema,
   bearerHash: HashSchema,
 };
 
-/** What its maker may say about a new credential. */
+/** What `baymutt auth login` may say about a new CLI login. */
 const aboutNewCredential = {
   description: Schema.optionalKey(DescriptionSchema),
   /** When it stops working. Omitted: never. */
   expiresAt: Schema.optionalKey(ExpirySchema),
 };
 
-/** What a login writes when it makes a service account, so that its access can change later. */
+/** What a login writes when it asks for a service account, so that the owner's browser and the new key learn each other's keys from it and not from the store. */
 export const ServiceAccountVouchersSchema = Schema.Struct({
   /** Its public key, vouched for to the account's key: what the owner's browser trusts. */
   keyToOwner: VoucherSchema,
@@ -92,15 +98,6 @@ export const SetAccessPayloadSchema = Schema.Struct({
   keyProof: Schema.optionalKey(KeyProofSchema),
 }).annotate({ identifier: 'SetAccessPayload' });
 export type SetAccessPayload = typeof SetAccessPayloadSchema.Type;
-
-/** Read and write on one environment for a login, as the owner's vault wraps and vouches for it. */
-export const LoginGrantSchema = Schema.Struct({
-  environmentId: Schema.String,
-  readWrap: WrapSchema,
-  keyProof: KeyProofSchema,
-  keyVersion: Schema.Int,
-}).annotate({ identifier: 'LoginGrant' });
-export type LoginGrant = typeof LoginGrantSchema.Type;
 
 /** What the pairing link carries in its fragment, from the service account to the owner's browser. */
 export const PairingRequestSchema = Schema.Struct({
@@ -139,9 +136,9 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       success: Schema.Struct({ credentials: Schema.Array(ServiceAccountSchema) }),
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'List service accounts',
+        summary: 'List CLI logins and service accounts',
         description:
-          'The owner sees every service account; a service account sees itself and those it made.',
+          'The owner sees every one; a CLI login sees itself and the service accounts it asked for; a service account sees itself.',
       }),
     ),
     HttpApiEndpoint.post('pair', '/credentials/pair', {
@@ -150,47 +147,16 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
         ...aboutNewCredential,
         endorsement: SealedSchema,
         welcome: SealedSchema,
-        /** Read and write on every environment, written in the same batch as the approval. */
-        grants: Schema.Array(LoginGrantSchema),
+        /** The names key of every org of the person whose names are sealed, written in the same batch as the approval. */
+        namesKeyWraps: Schema.Array(OrgNamesKeyWrapSchema),
       }),
       success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
       error: [coded(OwnerRequiredError), coded(AlreadyExistsError), coded(LimitReachedError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Approve a service account',
+        summary: 'Approve a CLI login',
         description:
-          'The owner’s approval of the link `baymutt login` prints. A CLI login holds read and write on every environment of the person’s orgs: the owner’s browser wraps each environment key to it in the same request, and to every environment made later.',
-      }),
-    ),
-    HttpApiEndpoint.post('create', '/credentials', {
-      payload: Schema.Struct({
-        ...newCredential,
-        ...aboutNewCredential,
-        grants: Schema.Array(
-          Schema.Struct({
-            environmentId: Schema.String,
-            canWrite: Schema.Boolean,
-            /** The environment key wrapped to the new service account by its maker, or null for no read. */
-            readWrap: Schema.NullOr(WrapSchema),
-            /** Its maker's proof of the environment's public key. */
-            keyProof: KeyProofSchema,
-          }),
-        ),
-        vouchers: ServiceAccountVouchersSchema,
-      }),
-      success: ServiceAccountSchema.pipe(HttpApiSchema.status(201)),
-      error: [
-        coded(OwnerRequiredError),
-        coded(AlreadyExistsError),
-        coded(NoAccessError),
-        coded(NotFoundError),
-        coded(LimitReachedError),
-      ],
-    }).annotateMerge(
-      OpenApi.annotations({
-        summary: 'Make a narrower service account',
-        description:
-          'A service account hands part of its own access to a new one. It cannot grant what it does not hold, and a service account made this way can make no others.',
+          'The owner’s approval of the link `baymutt auth login` prints. A CLI login lists the orgs, environments and secret names of the person’s orgs, makes paste links and requests, and holds no environment: it opens no value and writes none.',
       }),
     ),
     HttpApiEndpoint.put('setAccess', '/credentials/:id/grants/:environmentId', {
@@ -202,7 +168,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Change a service account’s access to an environment',
         description:
-          'For a service account a login made, by that login or by the owner. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make; it cannot change its own access.',
+          'Owner only, for a service account. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make. An environment in an org it did not reach before also needs that org’s names key wrapped to it (`orgs.putNamesKeyWrap`).',
       }),
     ),
     HttpApiEndpoint.delete('removeAccess', '/credentials/:id/grants/:environmentId', {
@@ -212,8 +178,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
     }).annotateMerge(
       OpenApi.annotations({
         summary: 'Take an environment away from a service account',
-        description:
-          'For a service account a login made, by that login or by the owner. What it already read stays read.',
+        description: 'Owner only. What it already read stays read.',
       }),
     ),
     HttpApiEndpoint.put('setExpiry', '/credentials/:id/expiry', {
@@ -223,7 +188,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Set when a service account expires',
+        summary: 'Set when a CLI login or service account expires',
         description:
           'Owner only. Null for never; a later time revives one that has expired. Expiring, like revoking, does not take back what it already read.',
       }),
@@ -234,9 +199,9 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Revoke a service account',
+        summary: 'Revoke a CLI login or service account',
         description:
-          'Deletes its bearer and its wraps, and those of every service account it made. What it already read stays read: replace those values at their vendors.',
+          'The owner, or a CLI login for itself and the service accounts it asked for. Deletes its bearer and its wraps, and those of every service account it asked for. What it already read stays read: replace those values at their vendors.',
       }),
     ),
   )

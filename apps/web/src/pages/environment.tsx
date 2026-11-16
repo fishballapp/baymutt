@@ -1,4 +1,4 @@
-import { type Environment, type Grant, type Secret, SecretNameSchema } from '@baymutt/api';
+import { type Grant, SecretNameSchema } from '@baymutt/api';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { CaretLeftIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from '@tanstack/react-router';
@@ -31,7 +31,9 @@ import {
   deleteEnvironmentAtom,
   environmentAtom,
   grantsAtom,
-  isLogin,
+  NAME_NOT_OPENED,
+  type OpenedEnvironment,
+  type OpenedSecret,
   removeGrantAtom,
   removeSecretAtom,
   revealSecretAtom,
@@ -49,13 +51,17 @@ const SEALED_NOTE = 'Sealed in this browser to the environment’s key: baymutt 
 
 const OPEN_FAILED = 'Couldn’t open this value. Try again.';
 
+/** An environment as the page shows it: by its address, its name opened here. */
+const addressOfEnvironment = (environment: OpenedEnvironment) =>
+  addressOf({ orgSlug: environment.orgSlug, name: environment.openedName });
+
 /** Name and value in; a sealed version out. `name` fixed means replacing that secret. */
 const ValueForm = ({
   environment,
   name: fixedName,
   onDone,
 }: {
-  readonly environment: Environment;
+  readonly environment: OpenedEnvironment;
   readonly name?: string;
   readonly onDone?: () => void;
 }) => {
@@ -159,10 +165,13 @@ const History = ({
 const SecretValue = ({
   environment,
   name,
+  openedName,
   version,
 }: {
-  readonly environment: Environment;
+  readonly environment: OpenedEnvironment;
+  /** As the store keeps it. */
   readonly name: string;
+  readonly openedName: string;
   readonly version: number;
 }) => {
   const owner = useOwner();
@@ -181,7 +190,7 @@ const SecretValue = ({
     [reveal, forgetCopy],
   );
   const value = AsyncResult.isSuccess(shown) ? shown.value : null;
-  const request = { owner, environmentId: environment.id, name, version };
+  const request = { owner, environmentId: environment.id, name, openedName, version };
   const revealLabel = value === null ? 'Reveal' : 'Hide';
 
   const copy = async () => {
@@ -230,7 +239,7 @@ const SecretValue = ({
         </div>
       </div>
       <p aria-live="polite" className="sr-only">
-        {copied === 'copied' ? `${name} copied` : ''}
+        {copied === 'copied' ? `${openedName} copied` : ''}
       </p>
       {(failureMessage(shown, OPEN_FAILED) ?? failureMessage(copying, OPEN_FAILED)) && (
         <Notice className="mt-2">
@@ -250,8 +259,8 @@ const SecretRow = ({
   environment,
   secret,
 }: {
-  readonly environment: Environment;
-  readonly secret: Secret;
+  readonly environment: OpenedEnvironment;
+  readonly secret: OpenedSecret;
 }) => {
   const [panel, setPanel] = useState<'replace' | 'history' | null>(null);
   const [removing, remove] = useAtom(removeSecretAtom, { mode: 'promiseExit' });
@@ -262,21 +271,23 @@ const SecretRow = ({
     <Row className={Date.now() - secret.updatedAt < 3000 ? 'animate-written' : undefined}>
       <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
-          <Code className="text-base font-medium">{secret.name}</Code>
+          <Code className="text-base font-medium">{secret.openedName ?? NAME_NOT_OPENED}</Code>
           <p className="mt-0.5 text-sm text-muted">
             sealed · {bytes(secret.size ?? 0)} · v{secret.currentVersion} · {secret.updatedBy.name},{' '}
             <Time at={secret.updatedAt} />
           </p>
         </div>
         <RowActions>
-          <Button
-            size="sm"
-            intent="subtle"
-            aria-expanded={panel === 'replace'}
-            onClick={() => toggle('replace')}
-          >
-            Replace
-          </Button>
+          {secret.openedName !== null && (
+            <Button
+              size="sm"
+              intent="subtle"
+              aria-expanded={panel === 'replace'}
+              onClick={() => toggle('replace')}
+            >
+              Replace
+            </Button>
+          )}
           <Button
             size="sm"
             intent="subtle"
@@ -293,7 +304,7 @@ const SecretRow = ({
                 Delete
               </Button>
             }
-            title={`Delete ${secret.name}?`}
+            title={`Delete ${secret.openedName ?? 'this secret'}?`}
             keepLabel="Keep it"
             confirmLabel="Delete secret"
             pendingLabel="Deleting…"
@@ -312,13 +323,22 @@ const SecretRow = ({
           </Confirm>
         </RowActions>
       </div>
-      {secret.currentVersion !== null && (
-        <SecretValue environment={environment} name={secret.name} version={secret.currentVersion} />
+      {secret.currentVersion !== null && secret.openedName !== null && (
+        <SecretValue
+          environment={environment}
+          name={secret.name}
+          openedName={secret.openedName}
+          version={secret.currentVersion}
+        />
       )}
       {panel !== null && (
         <div className="mt-3 border-line border-t pt-3">
-          {panel === 'replace' ? (
-            <ValueForm environment={environment} name={secret.name} onDone={() => setPanel(null)} />
+          {panel === 'replace' && secret.openedName !== null ? (
+            <ValueForm
+              environment={environment}
+              name={secret.openedName}
+              onDone={() => setPanel(null)}
+            />
           ) : (
             <History environmentId={environment.id} name={secret.name} />
           )}
@@ -328,8 +348,8 @@ const SecretRow = ({
   );
 };
 
-const Secrets = ({ environment }: { readonly environment: Environment }) => {
-  const result = useAtomValue(secretsAtom(environment.id));
+const Secrets = ({ environment }: { readonly environment: OpenedEnvironment }) => {
+  const result = useAtomValue(secretsAtom(useOwner())(environment.id));
   // A deleted secret is in the Bin, not here.
   const secrets = latest(result)?.filter(secret => secret.currentVersion !== null) ?? null;
   const [isAdding, setIsAdding] = useState(false);
@@ -357,10 +377,10 @@ const Secrets = ({ environment }: { readonly environment: Environment }) => {
           <p>
             Add one here, or from a service account that can write here, with the value on stdin:
           </p>
-          <CommandLine>{`baymutt set ${addressOf(environment)} NAME < file`}</CommandLine>
+          <CommandLine>{`baymutt secret set ${addressOfEnvironment(environment)} NAME < file`}</CommandLine>
           <p>
-            For a value only you can fetch, <Code>baymutt paste-link</Code> prints a link where you
-            paste it; it waits under Paste links too.
+            For a value only you can fetch, a CLI login runs <Code>baymutt ask paste-link</Code>: it
+            waits under Paste links.
           </p>
         </Empty>
       )}
@@ -383,7 +403,7 @@ const GrantRow = ({
   environment,
   grant,
 }: {
-  readonly environment: Environment;
+  readonly environment: OpenedEnvironment;
   readonly grant: Grant;
 }) => {
   const [removing, remove] = useAtom(removeGrantAtom);
@@ -392,45 +412,37 @@ const GrantRow = ({
       <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <p className="font-medium">{grant.credentialName}</p>
-          <p className="mt-0.5 text-sm text-muted">
-            can {grantWords(grant)}
-            {isLogin(grant)
-              ? ' · a CLI login, which holds every environment'
-              : ' · made by a CLI login; its access changes under Service accounts'}
-          </p>
+          <p className="mt-0.5 text-sm text-muted">can {grantWords(grant)}</p>
         </div>
-        {/* A login holds every environment: revoking it, under Service accounts, is the way to end that. */}
-        {!isLogin(grant) && (
-          <RowActions>
-            <Button
-              size="sm"
-              intent="subtleDanger"
-              disabled={removing.waiting}
-              onClick={() => remove({ id: environment.id, credentialId: grant.credentialId })}
-            >
-              {removing.waiting ? 'Removing…' : 'Remove'}
-            </Button>
-          </RowActions>
-        )}
+        <RowActions>
+          <Button
+            size="sm"
+            intent="subtleDanger"
+            disabled={removing.waiting}
+            onClick={() => remove({ id: environment.id, credentialId: grant.credentialId })}
+          >
+            {removing.waiting ? 'Removing…' : 'Remove'}
+          </Button>
+        </RowActions>
       </div>
       {failureMessage(removing) && <Notice className="mt-2">{failureMessage(removing)}</Notice>}
     </Row>
   );
 };
 
-const Access = ({ environment }: { readonly environment: Environment }) => {
+const Access = ({ environment }: { readonly environment: OpenedEnvironment }) => {
   const grants = latest(useAtomValue(grantsAtom(environment.id)));
   return (
     <Section
       title="Who can reach it"
-      lede="You and every CLI login can read and write it. A service account reaches it only if it was handed it, by the CLI login that made it or by you. One that reads keeps what it read: taking access away stops the next load, not the last one."
+      lede="You can read and write it. A service account reaches it when a request you approved named it, or you gave it access. One that reads keeps what it read: taking access away stops the next load, not the last one."
     >
       {grants === null && <Skeleton rows={2} />}
       {grants?.length === 0 && (
         <Empty title="Only you, so far">
           <p>
-            Run <Code>baymutt login</Code> and approve it here: a CLI login reads and writes every
-            environment of your orgs.
+            A CLI login asks for it with <Code>baymutt ask access</Code>. Approving the request
+            gives its key what it asked for here.
           </p>
         </Empty>
       )}
@@ -445,7 +457,7 @@ const Access = ({ environment }: { readonly environment: Environment }) => {
   );
 };
 
-const DeleteEnvironment = ({ environment }: { readonly environment: Environment }) => {
+const DeleteEnvironment = ({ environment }: { readonly environment: OpenedEnvironment }) => {
   const navigate = useNavigate();
   const [deleting, remove] = useAtom(deleteEnvironmentAtom, { mode: 'promiseExit' });
   return (
@@ -456,7 +468,7 @@ const DeleteEnvironment = ({ environment }: { readonly environment: Environment 
       action={
         <Confirm
           trigger={<Button intent="danger">Delete environment</Button>}
-          title={`Delete ${addressOf(environment)}?`}
+          title={`Delete ${addressOfEnvironment(environment)}?`}
           keepLabel="Keep environment"
           confirmLabel="Delete environment"
           pendingLabel="Deleting…"
@@ -479,7 +491,7 @@ const DeleteEnvironment = ({ environment }: { readonly environment: Environment 
 };
 
 export const EnvironmentPage = ({ id }: { readonly id: string }) => {
-  const result = useAtomValue(environmentAtom(id));
+  const result = useAtomValue(environmentAtom(useOwner())(id));
   const environment = latest(result);
   if (environment === null) {
     return failureMessage(result) ? (
@@ -505,7 +517,11 @@ export const EnvironmentPage = ({ id }: { readonly id: string }) => {
         Environments
       </Link>
       <PageHeader
-        title={<Code className="text-xl font-[650] tracking-tight">{addressOf(environment)}</Code>}
+        title={
+          <Code className="text-xl font-[650] tracking-tight">
+            {addressOfEnvironment(environment)}
+          </Code>
+        }
         lede={`Made by ${environment.createdBy.name} on ${exactTime(environment.createdAt)}.`}
       />
       <Secrets environment={environment} />

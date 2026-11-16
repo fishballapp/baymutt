@@ -6,11 +6,9 @@ import {
   type Credential,
   Credentials,
   CurrentActor,
-  CurrentCaller,
   CurrentCredential,
   CurrentUser,
   InvalidRequestError,
-  MaybeAuthenticated,
   OwnerRequiredError,
   RequestValidation,
   SignedIn,
@@ -118,7 +116,7 @@ const AuthenticatedLive = Layer.effect(
         if (actor === null) {
           return yield* new UnauthorizedError({
             message:
-              'Send a service account bearer (`Authorization: Bearer …`, from `baymutt login`), or sign in to the dashboard.',
+              'Send a service account bearer (`Authorization: Bearer …`, from `baymutt auth login`), or sign in to the dashboard.',
           });
         }
         return yield* Effect.provideService(httpEffect, CurrentActor, actor);
@@ -156,30 +154,6 @@ const SignedInLive = Layer.effect(
   }),
 );
 
-const MaybeAuthenticatedLive = Layer.effect(
-  MaybeAuthenticated,
-  Effect.gen(function* () {
-    const verify = yield* verifier;
-    return MaybeAuthenticated.of(
-      Effect.fn(function* (httpEffect) {
-        // A paste link's holder may be signed in to nothing, to a session with no vault yet, to
-        // one whose vault is locked, or carry a cookie for a session that has ended: the link's
-        // token then answers for itself. A bearer that fails stays refused.
-        const credential = yield* CurrentCredential;
-        const actor = yield* actorOf(verify, credential).pipe(
-          Effect.catchTags({
-            AccountRequiredError: () => Effect.succeed(null),
-            VaultLockedError: () => Effect.succeed(null),
-            UnauthorizedError: error =>
-              credential._tag === 'Session' ? Effect.succeed(null) : Effect.fail(error),
-          }),
-        );
-        return yield* Effect.provideService(httpEffect, CurrentCaller, { actor });
-      }),
-    );
-  }),
-);
-
 // A request that fails its schema is `400 InvalidRequestError`; a response that fails ITS schema is
 // our bug, so it stays a defect (→ 500).
 const RequestValidationLive = HttpApiMiddleware.layerSchemaErrorTransform(
@@ -194,6 +168,5 @@ export const GuardsLive = Layer.mergeAll(
   CredentialsLive,
   AuthenticatedLive,
   SignedInLive,
-  MaybeAuthenticatedLive,
   RequestValidationLive,
 );

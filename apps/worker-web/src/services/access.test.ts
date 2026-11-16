@@ -1,61 +1,56 @@
-/** Who may do what: service accounts, environments and the grants between them. */
-import { tokenHash } from '@baymutt/keys/wire';
+/** Who may do what: CLI logins, service accounts, environments and the grants between them. */
 import { describe, expect, it } from 'vitest';
 import {
   call,
+  indexOf,
+  NAMES_KEY_WRAP,
   newAccount,
   ok,
   type StoreWorld,
+  sealedOf,
   storeWorld,
   VAULT_PROOF,
   VOUCHERS,
 } from '../test-store.ts';
 import { keyLike, sealedLike } from '../test-support.ts';
 
-const child = async (
-  { w }: StoreWorld,
-  parent: { readonly headers: Record<string, string> },
-  grants: ReadonlyArray<{
-    environmentId: string;
-    canWrite: boolean;
-    readWrap: string | null;
-    keyProof: string;
-  }>,
-  name = 'ci',
-  about: {
-    readonly description?: string;
-    readonly expiresAt?: number;
-    readonly vouchers?: { keyToOwner: string; keyToMaker: string; accountKey: string };
-  } = {},
-) => {
-  const id = crypto.randomUUID();
-  const secret = keyLike('c');
-  const answer = await call(w, 'POST', '/credentials', parent.headers, {
-    vouchers: VOUCHERS,
-    ...about,
-    id,
-    name,
-    publicKey: keyLike('k'),
-    bearerHash: await tokenHash(secret),
-    grants,
-  });
-  return { id, answer, headers: { authorization: `Bearer baymutt_${id}_${secret}` } };
-};
+const pairing = (id: string, namesKeyWraps: ReadonlyArray<{ orgId: string; wrap: string }>) => ({
+  id,
+  name: 'again',
+  publicKey: keyLike('m'),
+  bearerHash: keyLike('h'),
+  endorsement: sealedLike('e'),
+  welcome: sealedLike('w'),
+  namesKeyWraps,
+});
 
-describe('a service account', () => {
-  it('is recognised by its bearer once paired, and as a login sees every environment', async () => {
-    const { w, pair, environment, accountId } = await storeWorld();
+const newEnvironment = (orgId: string, name: string) => ({
+  id: crypto.randomUUID(),
+  orgId,
+  name: indexOf(orgId, name),
+  sealedName: sealedOf(name),
+  publicKey: keyLike('p'),
+  memberWrap: sealedLike('o'),
+  memberProof: sealedLike('o'),
+});
+
+const count = ({ w }: StoreWorld, table: string, where = '1 = 1') =>
+  (w.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).get() as { n: number }).n;
+
+describe('a CLI login', () => {
+  it('is recognised by its bearer once paired, lists every environment and holds none', async () => {
+    const { w, pair, environment, accountId, orgId } = await storeWorld();
     const environmentId = await environment('app/production');
-    const serviceAccount = await pair('laptop');
+    const login = await pair('laptop');
 
-    expect(await call(w, 'GET', '/me', serviceAccount.headers)).toEqual({
+    expect(await call(w, 'GET', '/me', login.headers)).toEqual({
       status: 200,
       body: {
         accountId,
         accountName: 'Test owner',
         accountPublicKey: keyLike('a'),
         credential: {
-          id: serviceAccount.id,
+          id: login.id,
           name: 'laptop',
           parentId: null,
           welcome: sealedLike('welcome'),
@@ -63,20 +58,34 @@ describe('a service account', () => {
         },
       },
     });
-    // Approved without the owner's wraps (as a pre-0.3.0 dashboard did): it sees the environment and
-    // holds nothing on it until the dashboard tops it up.
-    expect(await call(w, 'GET', '/environments', serviceAccount.headers)).toMatchObject({
+    expect(await call(w, 'GET', '/environments', login.headers)).toEqual({
       status: 200,
       body: {
-        environments: [{ id: environmentId, canRead: false, canWrite: false, keyProof: null }],
+        environments: [
+          expect.objectContaining({
+            id: environmentId,
+            name: indexOf(orgId, 'app/production'),
+            sealedName: sealedOf('app/production'),
+            canRead: false,
+            canWrite: false,
+            keyProof: null,
+          }),
+        ],
+        namesKeys: [{ orgId, wrap: NAMES_KEY_WRAP }],
       },
     });
+    expect(await call(w, 'GET', `/environments/${environmentId}`, login.headers)).toMatchObject({
+      status: 200,
+      body: { id: environmentId, canRead: false, canWrite: false },
+    });
+    // Pairing wrote its names key and no grant.
+    expect(count({ w } as StoreWorld, 'environment_grant')).toBe(0);
   });
 
   it('is refused with a wrong secret, an unknown id or a malformed bearer', async () => {
     const { w, pair } = await storeWorld();
-    const serviceAccount = await pair();
-    const [, id] = serviceAccount.headers.authorization.split('_');
+    const login = await pair();
+    const [, id] = login.headers.authorization?.split('_') ?? [];
 
     for (const authorization of [
       `Bearer baymutt_${id}_${keyLike('z')}`,
@@ -90,268 +99,308 @@ describe('a service account', () => {
     }
   });
 
-  it('cannot be paired by a service account, nor twice under one id', async () => {
-    const { w, owner, pair } = await storeWorld();
-    const serviceAccount = await pair();
-    const pairing = {
-      id: serviceAccount.id,
-      name: 'again',
-      publicKey: keyLike('m'),
-      bearerHash: keyLike('h'),
-      endorsement: sealedLike('e'),
-      welcome: sealedLike('w'),
-      grants: [],
-    };
-
-    expect(await call(w, 'POST', '/credentials/pair', owner, pairing)).toMatchObject({
-      status: 409,
-      body: { code: 'AlreadyExistsError' },
-    });
-    expect(
-      await call(w, 'POST', '/credentials/pair', serviceAccount.headers, {
-        ...pairing,
-        id: crypto.randomUUID(),
-      }),
-    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
-  });
-
-  it('holds an environment only once granted, and only the owner grants', async () => {
-    const world = await storeWorld();
-    const { w, pair, environment, grant } = world;
-    const environmentId = await environment('app/production');
-    const serviceAccount = await pair();
-    const other = await pair();
-
-    // A login is listed the environment, and holds nothing on it until the owner's browser grants it.
-    expect(
-      await call(w, 'GET', `/environments/${environmentId}`, serviceAccount.headers),
-    ).toMatchObject({
-      status: 403,
-      body: { code: 'NoAccessError' },
-    });
-    expect(
-      await call(
-        w,
-        'PUT',
-        `/environments/${environmentId}/grants/${serviceAccount.id}`,
-        serviceAccount.headers,
-        {
-          canWrite: true,
-          readWrap: sealedLike('self-made'),
-          keyProof: sealedLike('proof'),
-          keyVersion: 1,
-        },
-      ),
-    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
-
-    await grant(environmentId, serviceAccount.id, { write: true });
+  it('is paired by the owner alone, once under one id', async () => {
+    const { w, owner, orgId, pair, serviceAccount, environment } = await storeWorld();
+    const login = await pair();
+    const { headers: scoped } = await serviceAccount([
+      { environmentId: await environment('app'), read: true },
+    ]);
+    const wraps = [{ orgId, wrap: NAMES_KEY_WRAP }];
 
     expect(
-      await call(w, 'GET', `/environments/${environmentId}`, serviceAccount.headers),
-    ).toMatchObject({
-      status: 200,
-      body: { name: 'app/production', canRead: false, canWrite: true },
-    });
-    // A grant of its own does not let it grant another service account.
-    expect(
-      await call(
-        w,
-        'PUT',
-        `/environments/${environmentId}/grants/${other.id}`,
-        serviceAccount.headers,
-        {
-          canWrite: true,
-          readWrap: null,
-          keyProof: sealedLike('proof'),
-          keyVersion: 1,
-        },
-      ),
-    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
-    expect(await call(w, 'GET', `/environments/${environmentId}`, other.headers)).toMatchObject({
-      status: 403,
-    });
-  });
-
-  it('creates an environment and holds read and write on what it created', async () => {
-    const { w, owner, pair, environment, orgId } = await storeWorld();
-    const serviceAccount = await pair('laptop');
-
-    const environmentId = await environment('app/development', serviceAccount.headers);
-
-    expect(await call(w, 'GET', '/environments', serviceAccount.headers)).toMatchObject({
-      body: {
-        environments: [
-          {
-            id: environmentId,
-            name: 'app/development',
-            keyVersion: 1,
-            canRead: true,
-            canWrite: true,
-            createdBy: { kind: 'credential', id: serviceAccount.id, name: 'laptop' },
-          },
-        ],
-      },
-    });
-    // The owner reads every environment: the creator wrapped the key to the account too.
-    expect(await call(w, 'GET', `/environments/${environmentId}/member-wrap`, owner)).toEqual({
-      status: 200,
-      body: {
-        memberWrap: sealedLike('member-wrap'),
-        memberProof: sealedLike('member-proof'),
-        keyVersion: 1,
-        creator: {
-          id: serviceAccount.id,
-          publicKey: keyLike('m'),
-          endorsement: sealedLike('endorsement'),
-        },
-      },
-    });
-    expect(
-      await call(w, 'GET', `/environments/${environmentId}/member-wrap`, serviceAccount.headers),
-    ).toMatchObject({ status: 403 });
-    expect(
-      await call(w, 'POST', '/environments', owner, {
-        id: crypto.randomUUID(),
-        orgId,
-        name: 'app/development',
-        publicKey: keyLike('p'),
-        memberWrap: sealedLike('o'),
-        memberProof: sealedLike('o'),
-        creatorWrap: null,
-        creatorProof: null,
-      }),
+      await call(w, 'POST', '/credentials/pair', owner, pairing(login.id, wraps)),
     ).toMatchObject({ status: 409, body: { code: 'AlreadyExistsError' } });
+    for (const headers of [login.headers, scoped]) {
+      expect(
+        await call(w, 'POST', '/credentials/pair', headers, pairing(crypto.randomUUID(), wraps)),
+      ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    }
+  });
+
+  it('is paired with the names key of every sealed org of the person and of no other', async () => {
+    const { w, owner, orgId, org } = await storeWorld();
+    const second = await org('second');
+    const unsealed = await org('unsealed', { isSealed: false });
+    const wrap = (id: string) => ({ orgId: id, wrap: NAMES_KEY_WRAP });
+
+    for (const namesKeyWraps of [
+      [wrap(orgId)],
+      [wrap(orgId), wrap(second), wrap(unsealed)],
+      [wrap(orgId), wrap(second), wrap(second)],
+      [wrap(orgId), wrap(second), wrap(crypto.randomUUID())],
+    ]) {
+      expect(
+        await call(
+          w,
+          'POST',
+          '/credentials/pair',
+          owner,
+          pairing(crypto.randomUUID(), namesKeyWraps),
+        ),
+      ).toMatchObject({ status: 400, body: { code: 'InvalidRequestError' } });
+    }
+    const id = crypto.randomUUID();
+    await ok(w, 'POST', '/credentials/pair', owner, pairing(id, [wrap(second), wrap(orgId)]), 201);
+    expect(
+      w.sqlite
+        .prepare('SELECT org_id FROM names_key_wrap WHERE reader_id = ? ORDER BY org_id')
+        .all(id),
+    ).toEqual(
+      [{ org_id: orgId }, { org_id: second }].sort((a, b) => (a.org_id < b.org_id ? -1 : 1)),
+    );
+  });
+
+  it('lists names, the bin and its own activity, and is told to ask for everything that holds an environment', async () => {
+    const world = await storeWorld();
+    const { w, owner, orgId, pair, environment, write, secretName } = world;
+    const environmentId = await environment('app/production');
+    await write(environmentId, 'API_KEY', 1);
+    await write(environmentId, 'OLD_KEY', 1);
+    await ok(
+      w,
+      'DELETE',
+      `/environments/${environmentId}/secrets/${secretName(environmentId, 'OLD_KEY')}`,
+      owner,
+    );
+    const login = await pair('laptop');
+    const apiKey = secretName(environmentId, 'API_KEY');
+
+    expect(
+      await call(w, 'GET', `/environments/${environmentId}/secrets`, login.headers),
+    ).toMatchObject({
+      status: 200,
+      body: {
+        secrets: expect.arrayContaining([
+          expect.objectContaining({ name: apiKey, sealedName: sealedOf('API_KEY') }),
+        ]),
+      },
+    });
+    expect(
+      await call(
+        w,
+        'GET',
+        `/environments/${environmentId}/secrets/${apiKey}/versions`,
+        login.headers,
+      ),
+    ).toMatchObject({ status: 200, body: { versions: [{ version: 1 }] } });
+    expect(await call(w, 'GET', '/bin', login.headers)).toMatchObject({
+      status: 200,
+      body: {
+        secrets: [{ name: secretName(environmentId, 'OLD_KEY'), sealedName: sealedOf('OLD_KEY') }],
+      },
+    });
+    expect(await call(w, 'GET', '/activity', login.headers)).toEqual({
+      status: 200,
+      body: { events: [], nextBefore: null },
+    });
+
+    const askToRead = { status: 403, body: { code: 'NoAccessError', need: 'read' } };
+    const askToWrite = { status: 403, body: { code: 'NoAccessError', need: 'write' } };
+    const bundle = await call(w, 'GET', `/environments/${environmentId}/bundle`, login.headers);
+    expect(bundle).toMatchObject(askToRead);
+    expect(bundle.body).toMatchObject({
+      message: expect.stringContaining(
+        '`baymutt ask access --read org-user-1/<environment> --reason',
+      ),
+    });
+    const written = await write(environmentId, 'API_KEY', 2, login.headers);
+    expect(written).toMatchObject(askToWrite);
+    expect(written.body).toMatchObject({
+      message: expect.stringContaining('baymutt ask access --write'),
+    });
+    expect(
+      await call(w, 'DELETE', `/environments/${environmentId}/secrets/${apiKey}`, login.headers),
+    ).toMatchObject(askToWrite);
+    expect(
+      await call(
+        w,
+        'POST',
+        `/environments/${environmentId}/secrets/${apiKey}/rollback`,
+        login.headers,
+        {
+          version: 1,
+        },
+      ),
+    ).toMatchObject(askToWrite);
+    expect(
+      await call(w, 'POST', '/environments', login.headers, newEnvironment(orgId, 'mine')),
+    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    expect(
+      await call(w, 'POST', '/orgs', login.headers, { name: 'Mine', slug: 'mine' }),
+    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    expect(
+      await call(w, 'PUT', `/environments/${environmentId}/grants/${login.id}`, login.headers, {
+        canWrite: true,
+        readWrap: sealedLike('self-made'),
+        keyProof: sealedLike('proof'),
+        keyVersion: 1,
+      }),
+    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    expect(
+      await call(w, 'PUT', `/credentials/${login.id}/grants/${environmentId}`, login.headers, {
+        canRead: true,
+        canWrite: true,
+        readWrap: sealedLike('self-made'),
+        keyProof: sealedLike('proof'),
+      }),
+    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    expect(count(world, 'environment_grant')).toBe(0);
+  });
+
+  it('is told the address it asks for in an org whose names are not sealed yet', async () => {
+    const world = await storeWorld();
+    const { w, accountId, pair } = world;
+    const unsealed = await world.org('legacy', { isSealed: false });
+    w.sqlite
+      .prepare(
+        `INSERT INTO environment (id, org_id, name, public_key, key_version, created_by, created_at)
+         VALUES ('legacy-env', ?, 'app/production', ?, 1, ?, 0)`,
+      )
+      .run(unsealed, keyLike('p'), JSON.stringify({ kind: 'owner', id: accountId, name: 'Owner' }));
+    const login = await pair();
+
+    expect(await call(w, 'GET', '/environments/legacy-env/bundle', login.headers)).toMatchObject({
+      status: 403,
+      body: {
+        message: expect.stringContaining(
+          '`baymutt ask access --read legacy/app/production --reason',
+        ),
+      },
+    });
   });
 });
 
-describe('a narrower service account', () => {
-  it('holds what its maker handed on and nothing its maker lacks', async () => {
+describe('an environment', () => {
+  it('is created by the owner alone, in a sealed org, under a name its org does not hold', async () => {
     const world = await storeWorld();
-    const { w, pair, environment, grant } = world;
-    const readable = await environment('app/production');
-    const writable = await environment('app/staging');
-    const unseen = await environment('app/other');
-    const parent = await pair('laptop');
-    await grant(readable, parent.id, { read: true, write: true });
-    await grant(writable, parent.id, { write: true });
-
-    expect(
-      (
-        await child(world, parent, [
-          {
-            environmentId: writable,
-            canWrite: true,
-            readWrap: sealedLike('r'),
-            keyProof: sealedLike('proof'),
-          },
-        ])
-      ).answer,
-    ).toMatchObject({ status: 403, body: { code: 'NoAccessError', need: 'read' } });
-    expect(
-      (
-        await child(world, parent, [
-          { environmentId: unseen, canWrite: true, readWrap: null, keyProof: sealedLike('proof') },
-        ])
-      ).answer,
-    ).toMatchObject({ status: 403, body: { code: 'NoAccessError', need: 'write' } });
-
-    const ci = await child(world, parent, [
-      {
-        environmentId: readable,
-        canWrite: false,
-        readWrap: sealedLike('child-wrap'),
-        keyProof: sealedLike('proof'),
-      },
+    const { w, owner, orgId, pair, serviceAccount, environment } = world;
+    const login = await pair();
+    const { headers: scoped } = await serviceAccount([
+      { environmentId: await environment('app'), read: true, write: true },
     ]);
+    const unsealed = await world.org('legacy', { isSealed: false });
 
-    expect(ci.answer).toMatchObject({
+    for (const headers of [login.headers, scoped]) {
+      expect(
+        await call(w, 'POST', '/environments', headers, newEnvironment(orgId, 'app/development')),
+      ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    }
+    expect(
+      await call(w, 'POST', '/environments', owner, newEnvironment(unsealed, 'app')),
+    ).toMatchObject({ status: 409, body: { code: 'NamesNotSealedError' } });
+
+    const made = newEnvironment(orgId, 'app/development');
+    expect(await call(w, 'POST', '/environments', owner, made)).toMatchObject({
       status: 201,
       body: {
-        parentId: parent.id,
-        endorsement: null,
-        grants: [{ environmentId: readable, canRead: true, canWrite: false }],
-      },
-    });
-    expect(await call(w, 'GET', '/environments', ci.headers)).toMatchObject({
-      body: { environments: [{ id: readable, canRead: true, canWrite: false }] },
-    });
-  });
-
-  it('can make no service account of its own, and neither can the owner’s session through this route', async () => {
-    const world = await storeWorld();
-    const parent = await world.pair();
-    const ci = await child(world, parent, []);
-
-    expect((await child(world, ci, [])).answer).toMatchObject({
-      status: 403,
-      body: { code: 'OwnerRequiredError' },
-    });
-    expect((await child(world, { headers: world.owner }, [])).answer).toMatchObject({
-      status: 403,
-      body: { code: 'OwnerRequiredError' },
-    });
-  });
-
-  it('goes with its maker when the maker is revoked or loses the grant', async () => {
-    const world = await storeWorld();
-    const { w, owner, pair, environment, grant } = world;
-    const environmentId = await environment('app/production');
-    const parent = await pair();
-    const bystander = await pair();
-    await grant(environmentId, parent.id, { read: true, write: true });
-    await grant(environmentId, bystander.id, { write: true });
-    const ci = await child(world, parent, [
-      {
-        environmentId,
+        id: made.id,
+        name: made.name,
+        sealedName: made.sealedName,
+        createdBy: { kind: 'owner' },
+        canRead: true,
         canWrite: true,
-        readWrap: sealedLike('child-wrap'),
-        keyProof: sealedLike('proof'),
       },
-    ]);
-    const second = await child(world, parent, [
-      { environmentId, canWrite: true, readWrap: null, keyProof: sealedLike('proof') },
-    ]);
-
-    await ok(w, 'DELETE', `/environments/${environmentId}/grants/${parent.id}`, owner);
-
-    expect(await call(w, 'GET', '/environments', parent.headers)).toMatchObject({
-      body: { environments: [{ id: environmentId, canRead: false, canWrite: false }] },
     });
-    for (const serviceAccount of [ci, second]) {
-      expect(await call(w, 'GET', '/environments', serviceAccount.headers)).toMatchObject({
-        body: { environments: [] },
-      });
-    }
+    expect(await call(w, 'GET', `/environments/${made.id}/member-wrap`, owner)).toEqual({
+      status: 200,
+      body: {
+        memberWrap: sealedLike('o'),
+        memberProof: sealedLike('o'),
+        keyVersion: 1,
+        creator: null,
+      },
+    });
+    expect(
+      await call(w, 'POST', '/environments', owner, newEnvironment(orgId, 'app/development')),
+    ).toMatchObject({ status: 409, body: { code: 'AlreadyExistsError' } });
+    expect(
+      await call(w, 'POST', '/environments', owner, {
+        ...newEnvironment(orgId, 'other'),
+        id: made.id,
+      }),
+    ).toMatchObject({ status: 409, body: { code: 'AlreadyExistsError' } });
+  });
 
-    expect(await call(w, 'DELETE', `/credentials/${parent.id}`, bystander.headers)).toMatchObject({
+  it('made by a CLI login before 0.8 still names its creator to the owner', async () => {
+    const { w, owner, orgId, pair } = await storeWorld();
+    const login = await pair('laptop');
+    w.sqlite
+      .prepare(
+        `INSERT INTO environment (id, org_id, name, sealed_name, public_key, key_version, created_by, created_at)
+         VALUES ('old-env', ?, ?, ?, ?, 1, ?, 0)`,
+      )
+      .run(
+        orgId,
+        indexOf(orgId, 'old'),
+        sealedOf('old'),
+        keyLike('p'),
+        JSON.stringify({ kind: 'credential', id: login.id, name: 'laptop' }),
+      );
+    const accountId = (w.sqlite.prepare('SELECT id FROM store_account').get() as { id: string }).id;
+    w.sqlite
+      .prepare(
+        `INSERT INTO member_wrap (environment_id, account_id, wrap, proof, key_version, created_at)
+         VALUES ('old-env', ?, ?, ?, 1, 0)`,
+      )
+      .run(accountId, sealedLike('member-wrap'), sealedLike('creator-proof'));
+
+    expect(await call(w, 'GET', '/environments/old-env/member-wrap', owner)).toMatchObject({
+      status: 200,
+      body: {
+        creator: { id: login.id, publicKey: keyLike('m'), endorsement: sealedLike('endorsement') },
+      },
+    });
+    expect(await call(w, 'GET', '/environments/old-env/member-wrap', login.headers)).toMatchObject({
       status: 403,
-      body: { code: 'OwnerRequiredError' },
     });
-    expect(
-      new Set(
-        (await ok<{ revoked: string[] }>(w, 'DELETE', `/credentials/${parent.id}`, parent.headers))
-          .revoked,
-      ),
-    ).toEqual(new Set([parent.id, ci.id, second.id]));
+  });
 
-    for (const serviceAccount of [parent, ci, second]) {
-      expect(await call(w, 'GET', '/me', serviceAccount.headers)).toMatchObject({ status: 401 });
-    }
-    expect(await call(w, 'GET', '/me', bystander.headers)).toMatchObject({ status: 200 });
+  it('is granted by the owner to a service account, never to a CLI login', async () => {
+    const { w, owner, pair, environment, serviceAccount, grant } = await storeWorld();
+    const first = await environment('app/production');
+    const second = await environment('app/staging');
+    const login = await pair();
+    const made = await serviceAccount([{ environmentId: first, read: true }], { maker: login });
+
     expect(
-      w.sqlite.prepare("SELECT COUNT(*) AS kept FROM credential WHERE bearer_hash != ''").get(),
-    ).toEqual({ kept: 1 });
+      await call(w, 'PUT', `/environments/${second}/grants/${login.id}`, owner, {
+        canWrite: true,
+        readWrap: sealedLike('wrap'),
+        keyProof: sealedLike('proof'),
+        keyVersion: 1,
+      }),
+    ).toMatchObject({ status: 400, body: { code: 'InvalidRequestError' } });
+    expect(
+      await call(w, 'PUT', `/environments/${second}/grants/${made.id}`, made.headers, {
+        canWrite: true,
+        readWrap: null,
+        keyProof: sealedLike('proof'),
+        keyVersion: 1,
+      }),
+    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+
+    await grant(second, made.id, { write: true });
+    expect(await call(w, 'GET', `/environments/${second}`, made.headers)).toMatchObject({
+      status: 200,
+      body: { canRead: false, canWrite: true, keyProof: sealedLike('key-proof') },
+    });
+    expect(await call(w, 'GET', `/environments/${second}/grants`, owner)).toMatchObject({
+      body: { grants: [{ credentialId: made.id, canRead: false, canWrite: true }] },
+    });
   });
 });
 
 describe('what a caller is shown', () => {
-  it('lists every service account to the owner, and to a service account only itself and those it made', async () => {
+  it('lists every one to the owner; to a CLI login itself and what it asked for; to a service account itself', async () => {
     const world = await storeWorld();
-    const { w, owner, pair } = world;
+    const { w, owner, pair, environment, serviceAccount, ask } = world;
+    const environmentId = await environment('app');
     const laptop = await pair('laptop');
     const other = await pair('other');
-    const ci = await child(world, laptop, []);
-    const names = async (headers: Record<string, string>) =>
+    const ci = await serviceAccount([{ environmentId, read: true }], { maker: laptop });
+    // A request still waiting is listed as a request, not as a service account.
+    await ask(laptop, [{ environmentId, write: true }]);
+    const listed = async (headers: Record<string, string>) =>
       (
         await ok<{ credentials: { id: string; endorsement: string | null }[] }>(
           w,
@@ -361,19 +410,23 @@ describe('what a caller is shown', () => {
         )
       ).credentials;
 
-    expect((await names(owner)).map(({ id }) => id)).toEqual([laptop.id, other.id, ci.id]);
-    expect((await names(owner))[0]?.endorsement).toBe(sealedLike('endorsement'));
-    expect(await names(laptop.headers)).toMatchObject([
+    expect((await listed(owner)).map(({ id }) => id)).toEqual([laptop.id, other.id, ci.id]);
+    expect((await listed(owner))[0]?.endorsement).toBe(sealedLike('endorsement'));
+    expect(await listed(laptop.headers)).toMatchObject([
       { id: laptop.id, endorsement: null },
-      { id: ci.id, endorsement: null },
+      {
+        id: ci.id,
+        endorsement: null,
+        grants: [{ environmentId, orgId: world.orgId, environmentSealedName: sealedOf('app') }],
+      },
     ]);
-    expect((await names(ci.headers)).map(({ id }) => id)).toEqual([ci.id]);
+    expect((await listed(ci.headers)).map(({ id }) => id)).toEqual([ci.id]);
   });
 
   it('keeps one account’s environments and service accounts from another’s', async () => {
     const one = await storeWorld();
     const environmentId = await one.environment('app/production');
-    const serviceAccount = await one.pair();
+    const made = await one.serviceAccount([{ environmentId, read: true }]);
     const stranger = one.w.user('user-2');
     const strangerLocked = one.w.signIn(stranger.id);
     await ok(
@@ -391,16 +444,17 @@ describe('what a caller is shown', () => {
       ['GET', `/environments/${environmentId}`, undefined],
       ['GET', `/environments/${environmentId}/bundle`, undefined],
       ['DELETE', `/environments/${environmentId}`, undefined],
-      ['DELETE', `/credentials/${serviceAccount.id}`, undefined],
-      ['DELETE', `/credentials/${serviceAccount.id}/grants/${environmentId}`, undefined],
+      ['DELETE', `/credentials/${made.id}`, undefined],
+      ['DELETE', `/credentials/${made.id}/grants/${environmentId}`, undefined],
+      ['GET', `/requests/${made.id}`, undefined],
       [
         'PUT',
-        `/credentials/${serviceAccount.id}/grants/${environmentId}`,
+        `/credentials/${made.id}/grants/${environmentId}`,
         { canRead: false, canWrite: true, keyProof: sealedLike('proof') },
       ],
       [
         'PUT',
-        `/environments/${environmentId}/grants/${serviceAccount.id}`,
+        `/environments/${environmentId}/grants/${made.id}`,
         { canWrite: true, readWrap: null, keyProof: sealedLike('proof'), keyVersion: 1 },
       ],
     ] as const) {
@@ -411,32 +465,22 @@ describe('what a caller is shown', () => {
     }
     expect(await call(one.w, 'GET', '/environments', strangerSession)).toEqual({
       status: 200,
-      body: { environments: [] },
+      body: { environments: [], namesKeys: [] },
     });
   });
 });
 
-describe('a scoped service account’s access', () => {
-  /** A login holding two environments, and a service account it made with read on the first. */
+describe('a service account’s access', () => {
+  /** A login, and a service account it asked for with read on the first of two environments. */
   const setup = async () => {
     const world = await storeWorld();
     const first = await world.environment('app/production');
     const second = await world.environment('app/staging');
-    const login = await world.pair('laptop', { environments: [first, second] });
-    const made = await child(
-      world,
-      login,
-      [
-        {
-          environmentId: first,
-          canWrite: false,
-          readWrap: sealedLike('first-wrap'),
-          keyProof: sealedLike('first-proof'),
-        },
-      ],
-      'ci',
-      { vouchers: VOUCHERS },
-    );
+    const login = await world.pair('laptop');
+    const made = await world.serviceAccount([{ environmentId: first, read: true }], {
+      name: 'ci',
+      maker: login,
+    });
     return { ...world, first, second, login, made };
   };
 
@@ -466,20 +510,21 @@ describe('a scoped service account’s access', () => {
     expect(await keyVoucherSeenBy(made.headers)).toBeNull();
     expect(await keyVoucherSeenBy(other.headers)).toBeUndefined();
     expect(await call(w, 'GET', '/me', made.headers)).toMatchObject({
-      body: { credential: { id: made.id, accountVoucher: VOUCHERS.accountKey } },
+      body: {
+        credential: { id: made.id, parentId: login.id, accountVoucher: VOUCHERS.accountKey },
+      },
     });
     expect(await call(w, 'GET', '/me', login.headers)).toMatchObject({
       body: { credential: { id: login.id, accountVoucher: null } },
     });
   });
 
-  it('changes by its maker and by the owner, and it reads the new environment with the key it had', async () => {
+  it('changes by the owner alone, and it reads a new environment with the key it had', async () => {
     const world = await setup();
-    const { w, owner, first, second, login, made } = world;
+    const { w, owner, first, second, made } = world;
 
-    // Its maker hands it the second environment to read and write.
     expect(
-      await access(world, login.headers, made.id, second, {
+      await access(world, owner, made.id, second, {
         canRead: true,
         canWrite: true,
         readWrap: sealedLike('second-wrap'),
@@ -489,10 +534,11 @@ describe('a scoped service account’s access', () => {
       status: 200,
       body: {
         id: made.id,
-        grants: [
-          { environmentId: first, canRead: true, canWrite: false },
-          { environmentId: second, canRead: true, canWrite: true },
-        ],
+        // Ordered by index: a name's order is the store's to know no longer.
+        grants: expect.arrayContaining([
+          expect.objectContaining({ environmentId: first, canRead: true, canWrite: false }),
+          expect.objectContaining({ environmentId: second, canRead: true, canWrite: true }),
+        ]),
       },
     });
     expect(await call(w, 'GET', `/environments/${second}/bundle`, made.headers)).toMatchObject({
@@ -509,20 +555,19 @@ describe('a scoped service account’s access', () => {
       body: { canRead: false, canWrite: true, keyProof: sealedLike('second-proof') },
     });
     // Write added on the first keeps the wrap it reads with.
-    await ok(w, 'PUT', `/credentials/${made.id}/grants/${first}`, login.headers, {
+    await ok(w, 'PUT', `/credentials/${made.id}/grants/${first}`, owner, {
       canRead: true,
       canWrite: true,
     });
     expect(await call(w, 'GET', `/environments/${first}/bundle`, made.headers)).toMatchObject({
-      body: { wrap: sealedLike('first-wrap') },
+      body: { wrap: sealedLike('read-wrap') },
     });
 
-    // Its maker takes the first away; the owner the second.
-    await ok(w, 'DELETE', `/credentials/${made.id}/grants/${first}`, login.headers);
+    await ok(w, 'DELETE', `/credentials/${made.id}/grants/${first}`, owner);
     await ok(w, 'DELETE', `/credentials/${made.id}/grants/${second}`, owner);
     expect(await call(w, 'GET', '/environments', made.headers)).toEqual({
       status: 200,
-      body: { environments: [] },
+      body: { environments: [], namesKeys: [{ orgId: world.orgId, wrap: NAMES_KEY_WRAP }] },
     });
 
     const audit = await ok<{ events: { action: string; detail: string | null }[] }>(
@@ -541,11 +586,10 @@ describe('a scoped service account’s access', () => {
     ]);
   });
 
-  it('cannot be changed by itself, a sibling or another login', async () => {
+  it('cannot be changed by itself, its maker or another login, and a CLI login’s never changes', async () => {
     const world = await setup();
-    const { w, pair, second, login, made } = world;
-    const sibling = await child(world, login, [], 'sibling');
-    const otherLogin = await pair('desktop', { environments: [second] });
+    const { w, owner, pair, second, login, made } = world;
+    const otherLogin = await pair('desktop');
     const widen = {
       canRead: true,
       canWrite: true,
@@ -553,7 +597,7 @@ describe('a scoped service account’s access', () => {
       keyProof: sealedLike('forged-proof'),
     };
 
-    for (const headers of [made.headers, sibling.headers, otherLogin.headers]) {
+    for (const headers of [made.headers, login.headers, otherLogin.headers]) {
       expect(await access(world, headers, made.id, second, widen)).toMatchObject({
         status: 403,
         body: { code: 'OwnerRequiredError' },
@@ -562,10 +606,9 @@ describe('a scoped service account’s access', () => {
         await call(w, 'DELETE', `/credentials/${made.id}/grants/${second}`, headers),
       ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
     }
-    // A login's own access is every environment, and does not change this way.
-    expect(await access(world, world.owner, login.id, second, widen)).toMatchObject({
-      status: 403,
-      body: { code: 'OwnerRequiredError' },
+    expect(await access(world, owner, login.id, second, widen)).toMatchObject({
+      status: 400,
+      body: { code: 'InvalidRequestError' },
     });
     expect(await call(w, 'GET', `/environments/${second}`, made.headers)).toMatchObject({
       status: 404,
@@ -574,7 +617,7 @@ describe('a scoped service account’s access', () => {
 
   it('needs a wrap for a read it gains and a proof for an environment it gains', async () => {
     const world = await setup();
-    const { first, second, login, made } = world;
+    const { owner, first, second, made } = world;
 
     for (const [environmentId, body] of [
       [second, { canRead: false, canWrite: true }],
@@ -582,64 +625,86 @@ describe('a scoped service account’s access', () => {
       [first, { canRead: false, canWrite: false }],
       [first, { canRead: false, canWrite: true, readWrap: sealedLike('stray') }],
     ] as const) {
-      expect(await access(world, login.headers, made.id, environmentId, body)).toMatchObject({
+      expect(await access(world, owner, made.id, environmentId, body)).toMatchObject({
         status: 400,
         body: { code: 'InvalidRequestError' },
       });
     }
   });
+});
 
-  it('is handed on by a login only as far as it holds the environment itself', async () => {
-    const world = await setup();
-    const { environment, login, made } = world;
-    // Made by the owner after the login's approval: the login holds nothing on it yet.
-    const later = await environment('app/later');
+describe('revoking', () => {
+  it('stops a CLI login and every service account it asked for, and takes their names keys and grants', async () => {
+    const world = await storeWorld();
+    const { w, owner, pair, environment, serviceAccount } = world;
+    const environmentId = await environment('app');
+    const login = await pair('laptop');
+    const other = await pair('desktop');
+    const made = await serviceAccount([{ environmentId, read: true }], { maker: login });
+    const kept = await serviceAccount([{ environmentId, read: true }], { maker: other });
 
-    expect(
-      await access(world, login.headers, made.id, later, {
-        canRead: false,
-        canWrite: true,
-        keyProof: sealedLike('proof'),
-      }),
-    ).toMatchObject({ status: 403, body: { code: 'NoAccessError' } });
+    // Another login's, or its own maker's sibling: not this login's to revoke.
+    expect(await call(w, 'DELETE', `/credentials/${kept.id}`, login.headers)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    expect(await call(w, 'DELETE', `/credentials/${login.id}`, login.headers)).toEqual({
+      status: 200,
+      body: { revoked: expect.arrayContaining([login.id, made.id]) },
+    });
+    for (const headers of [login.headers, made.headers]) {
+      expect(await call(w, 'GET', '/me', headers)).toMatchObject({ status: 401 });
+    }
+    expect(count(world, 'names_key_wrap', `reader_id IN ('${login.id}', '${made.id}')`)).toBe(0);
+    expect(count(world, 'environment_grant', `credential_id = '${made.id}'`)).toBe(0);
+    expect(count(world, 'names_key_wrap', `reader_id IN ('${other.id}', '${kept.id}')`)).toBe(2);
+
+    expect(await call(w, 'DELETE', `/credentials/${kept.id}`, owner)).toEqual({
+      status: 200,
+      body: { revoked: [kept.id] },
+    });
+    expect(count(world, 'names_key_wrap', `reader_id = '${kept.id}'`)).toBe(0);
   });
 });
 
 describe('the audit log', () => {
   it('records who did what, newest first, and shows a service account only its own entries', async () => {
     const world = await storeWorld();
-    const { w, owner, pair, environment, grant, write } = world;
+    const { w, owner, orgId, environment, serviceAccount, write, secretName } = world;
     const environmentId = await environment('app/production');
-    const serviceAccount = await pair('laptop');
-    await grant(environmentId, serviceAccount.id, { read: true, write: true });
-    await write(environmentId, 'API_KEY', 1, serviceAccount.headers);
-    await ok(w, 'GET', `/environments/${environmentId}/bundle`, serviceAccount.headers);
+    const made = await serviceAccount([{ environmentId, read: true, write: true }], {
+      name: 'ci',
+    });
+    await write(environmentId, 'API_KEY', 1, made.headers);
+    await ok(w, 'GET', `/environments/${environmentId}/bundle`, made.headers);
 
     const all = await ok<{ events: { action: string }[] }>(w, 'GET', '/activity', owner);
 
     expect(all.events.map(({ action }) => action)).toEqual([
       'environment.load',
       'secret.write',
+      'request.approve',
       'grant.set',
+      'request.create',
       'credential.pair',
       'environment.create',
+      'names.seal',
       'org.create',
       'account.create',
     ]);
     expect(all.events[1]).toMatchObject({
-      actor: { kind: 'credential', id: serviceAccount.id, name: 'laptop' },
-      environmentName: 'app/production',
-      secretName: 'API_KEY',
+      actor: { kind: 'credential', id: made.id, name: 'ci' },
+      environmentName: indexOf(orgId, 'app/production'),
+      environmentSealedName: sealedOf('app/production'),
+      secretName: secretName(environmentId, 'API_KEY'),
+      secretSealedName: sealedOf('API_KEY'),
       version: 1,
     });
-    expect(all.events[2]).toMatchObject({
-      actor: { kind: 'owner' },
-      detail: 'laptop: read + write',
-    });
+    expect(all.events[3]).toMatchObject({ actor: { kind: 'owner' }, detail: 'ci: read + write' });
     expect(
-      (
-        await ok<{ events: { action: string }[] }>(w, 'GET', '/activity', serviceAccount.headers)
-      ).events.map(({ action }) => action),
+      (await ok<{ events: { action: string }[] }>(w, 'GET', '/activity', made.headers)).events.map(
+        ({ action }) => action,
+      ),
     ).toEqual(['environment.load', 'secret.write']);
   });
 
@@ -657,13 +722,17 @@ describe('the audit log', () => {
     const rest = await ok<{ events: { action: string }[]; nextBefore: string | null }>(
       w,
       'GET',
-      `/activity?limit=2&before=${first.nextBefore}`,
+      `/activity?limit=3&before=${first.nextBefore}`,
       owner,
     );
 
     expect(first.events).toHaveLength(2);
     expect(first.nextBefore).toBe(first.events[1]?.id);
-    expect(rest.events.map(({ action }) => action)).toEqual(['org.create', 'account.create']);
+    expect(rest.events.map(({ action }) => action)).toEqual([
+      'names.seal',
+      'org.create',
+      'account.create',
+    ]);
     expect(rest.nextBefore).toBeNull();
   });
 });
@@ -680,16 +749,7 @@ describe('the beta limits', () => {
        SELECT 'filler-' || i, '${other}', 'p/' || i, 'k', 1, '{}', 0 FROM n`,
     );
     const another = () =>
-      call(w, 'POST', '/environments', owner, {
-        id: crypto.randomUUID(),
-        orgId,
-        name: 'p/one-more',
-        publicKey: keyLike('p'),
-        memberWrap: sealedLike('o'),
-        memberProof: sealedLike('o'),
-        creatorWrap: null,
-        creatorProof: null,
-      });
+      call(w, 'POST', '/environments', owner, newEnvironment(orgId, 'one-more'));
 
     expect(await another()).toMatchObject({
       status: 403,
@@ -697,5 +757,30 @@ describe('the beta limits', () => {
     });
     await ok(w, 'DELETE', `/environments/${first}`, owner);
     expect(await another()).toMatchObject({ status: 201 });
+  });
+
+  it('counts only the CLI logins and service accounts that still work', async () => {
+    const { w, owner, accountId, orgId, pair } = await storeWorld();
+    const fill = (count: number, extra: string) =>
+      w.sqlite.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${count})
+         INSERT INTO credential (id, account_id, name, public_key, bearer_hash, created_at${extra === '' ? '' : `, ${extra}`})
+         SELECT '${extra || 'live'}-' || i, '${accountId}', 'filler', 'k', 'h', 0${extra === '' ? '' : ', 1'} FROM n`,
+      );
+    fill(199, '');
+    // Revoked and expired ones do not count.
+    fill(10, 'revoked_at');
+    fill(10, 'expires_at');
+    const login = await pair();
+    expect(
+      await call(
+        w,
+        'POST',
+        '/credentials/pair',
+        owner,
+        pairing(crypto.randomUUID(), [{ orgId, wrap: NAMES_KEY_WRAP }]),
+      ),
+    ).toMatchObject({ status: 403, body: { code: 'LimitReachedError', limit: 200 } });
+    await ok(w, 'DELETE', `/credentials/${login.id}`, owner);
   });
 });

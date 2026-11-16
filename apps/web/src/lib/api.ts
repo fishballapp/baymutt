@@ -20,8 +20,7 @@ Atom.runtime.addGlobalLayer(Layer.succeed(HttpClient.TracerPropagationEnabled, f
 const isPublicPage = () =>
   window.location.pathname === '/signin' ||
   window.location.pathname === '/signup' ||
-  window.location.pathname === '/recover' ||
-  window.location.pathname.startsWith('/paste/');
+  window.location.pathname === '/recover';
 
 let vaultProofNow: () => string | null = () => null;
 

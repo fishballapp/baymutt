@@ -103,12 +103,6 @@ export class CurrentUser extends Context.Service<
   }
 >()('@baymutt/api/CurrentUser') {}
 
-/** The caller when there is one. A paste link names its own target, so its holder needs no account. */
-export class CurrentCaller extends Context.Service<
-  CurrentCaller,
-  { readonly actor: ActorIdentity | null }
->()('@baymutt/api/CurrentCaller') {}
-
 /**
  * The bearer or the session cookie the request sends, or neither. It only picks: a credential that
  * doesn't verify must fail in the guard after it, never fall back to the next scheme. Every group
@@ -136,12 +130,6 @@ export class SignedIn extends HttpApiMiddleware.Service<
   SignedIn,
   { requires: CurrentCredential; provides: CurrentUser }
 >()('@baymutt/api/SignedIn', { error: [coded(UnauthorizedError), coded(OwnerRequiredError)] }) {}
-
-/** No credential is an anonymous caller; one that doesn't verify is 401, never anonymous. */
-export class MaybeAuthenticated extends HttpApiMiddleware.Service<
-  MaybeAuthenticated,
-  { requires: CurrentCredential; provides: CurrentCaller }
->()('@baymutt/api/MaybeAuthenticated', { error: coded(UnauthorizedError) }) {}
 
 export class RequestValidation extends HttpApiMiddleware.Service<RequestValidation>()(
   '@baymutt/api/RequestValidation',
