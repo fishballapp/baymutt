@@ -2,7 +2,7 @@ import { MIN_PASSWORD_LENGTH } from '@baymutt/keys';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { KeyRows, useEndedShown } from '../components/keys.tsx';
+import { EndedKeys, KeyRows } from '../components/keys.tsx';
 import { OrgList } from '../components/orgs.tsx';
 import {
   Code,
@@ -20,9 +20,10 @@ import {
 import { RecoveryKey } from '../components/recovery-key.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
-import { TextField } from '../components/ui/field.tsx';
+import { Form, TextField } from '../components/ui/field.tsx';
 import {
   addPasskeyAtom,
+  hasEnded,
   isLogin,
   removePasskeyAtom,
   removePasswordAtom,
@@ -43,7 +44,7 @@ const CliLogins = () => {
   const result = useAtomValue(serviceAccountsAtom(useOwner()));
   const all = latest(result);
   const logins = all?.filter(isLogin) ?? null;
-  const { shown, toggle } = useEndedShown(logins);
+  const active = logins?.filter(login => !hasEnded(login, Date.now())) ?? [];
   return (
     <Section
       title="CLI logins"
@@ -68,8 +69,8 @@ const CliLogins = () => {
           </p>
         </Empty>
       )}
-      {shown.length > 0 && <KeyRows keys={shown} all={all ?? []} />}
-      {toggle}
+      {active.length > 0 && <KeyRows keys={active} all={all ?? []} />}
+      {logins !== null && <EndedKeys keys={logins} all={all ?? []} />}
     </Section>
   );
 };
@@ -161,7 +162,7 @@ const Password = () => {
       }
     >
       {isEditing ? (
-        <form
+        <Form
           className="max-w-[26rem] space-y-3"
           onSubmit={async event => {
             event.preventDefault();
@@ -178,7 +179,7 @@ const Password = () => {
             autoComplete="new-password"
             hint={`At least ${MIN_PASSWORD_LENGTH} characters. It opens your vault and baymutt never receives it, so it cannot be reset. Every other signed-in browser is signed out.`}
             value={password}
-            onChange={event => setValue(event.target.value)}
+            onValueChange={setValue}
           />
           <TextField
             label="New password again"
@@ -186,7 +187,7 @@ const Password = () => {
             autoComplete="new-password"
             error={mismatch ? 'The two do not match.' : failureMessage(setting)}
             value={again}
-            onChange={event => setAgain(event.target.value)}
+            onValueChange={setAgain}
           />
           <div className="flex gap-2">
             <Button
@@ -200,7 +201,7 @@ const Password = () => {
             </Button>
             <Button onClick={() => setIsEditing(false)}>Cancel</Button>
           </div>
-        </form>
+        </Form>
       ) : (
         failureMessage(removing) && <Notice>{failureMessage(removing)}</Notice>
       )}

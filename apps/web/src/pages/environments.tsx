@@ -18,7 +18,7 @@ import {
   Time,
 } from '../components/parts.tsx';
 import { Button, buttonStyles } from '../components/ui/button.tsx';
-import { TextField } from '../components/ui/field.tsx';
+import { Form, TextField } from '../components/ui/field.tsx';
 import {
   addressOf,
   createEnvironmentAtom,
@@ -36,7 +36,7 @@ const NewEnvironment = ({ org }: { readonly org: Org }) => {
   const [name, setName] = useState('');
   const isValid = isEnvironmentName(name);
   return (
-    <form
+    <Form
       className="mb-8"
       onSubmit={async event => {
         event.preventDefault();
@@ -63,14 +63,14 @@ const NewEnvironment = ({ org }: { readonly org: Org }) => {
             : failureMessage(creation)
         }
         value={name}
-        onChange={event => setName(event.target.value)}
+        onValueChange={setName}
         action={
           <Button type="submit" intent="primary" disabled={!isValid || creation.waiting}>
             {creation.waiting ? 'Creating…' : 'Create environment'}
           </Button>
         }
       />
-    </form>
+    </Form>
   );
 };
 

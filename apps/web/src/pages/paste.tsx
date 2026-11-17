@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
 import { Code, Notice } from '../components/parts.tsx';
 import { Button } from '../components/ui/button.tsx';
-import { TextArea } from '../components/ui/field.tsx';
+import { Form, TextArea } from '../components/ui/field.tsx';
 import { addressOf, fulfilPasteAtom, NAME_NOT_OPENED, pasteTargetAtom } from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
@@ -49,7 +49,7 @@ export const PastePage = ({ id }: { readonly id: string }) => {
   const { link } = target;
   const isUnopened = link.openedName === null || link.openedEnvironmentName === null;
   return (
-    <form
+    <Form
       className="space-y-6"
       onSubmit={event => {
         event.preventDefault();
@@ -110,7 +110,7 @@ export const PastePage = ({ id }: { readonly id: string }) => {
         hint="Sealed in this browser to the environment’s key before it is sent. baymutt cannot read it, and this page will not show it again. Several lines are fine."
         error={failureMessage(saving)}
         value={value}
-        onChange={event => setValue(event.target.value)}
+        onValueChange={setValue}
       />
       <Button
         type="submit"
@@ -120,6 +120,6 @@ export const PastePage = ({ id }: { readonly id: string }) => {
       >
         {saving.waiting ? 'Sealing…' : 'Seal and save'}
       </Button>
-    </form>
+    </Form>
   );
 };

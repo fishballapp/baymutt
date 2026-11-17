@@ -9,7 +9,7 @@ import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { type ReactNode, useState } from 'react';
 import { Notice, Wordmark } from '../components/parts.tsx';
 import { Button } from '../components/ui/button.tsx';
-import { TextField } from '../components/ui/field.tsx';
+import { Form, TextField } from '../components/ui/field.tsx';
 import {
   sendLinkAtom,
   sessionAtom,
@@ -112,7 +112,7 @@ export const LinkByEmail = ({
     );
   }
   return (
-    <form
+    <Form
       className="space-y-3"
       onSubmit={event => {
         event.preventDefault();
@@ -126,7 +126,7 @@ export const LinkByEmail = ({
         autoFocus
         error={failureMessage(link)}
         value={email}
-        onChange={event => setEmail(event.target.value)}
+        onValueChange={setEmail}
       />
       <Button
         type="submit"
@@ -136,7 +136,7 @@ export const LinkByEmail = ({
       >
         {link.waiting ? 'Sending…' : action}
       </Button>
-    </form>
+    </Form>
   );
 };
 
@@ -155,7 +155,7 @@ const SignedOut = () => {
         {failureMessage(passkey) && <Notice>{failureMessage(passkey)}</Notice>}
       </div>
       <Or>or</Or>
-      <form
+      <Form
         className="space-y-3"
         onSubmit={event => {
           event.preventDefault();
@@ -167,14 +167,14 @@ const SignedOut = () => {
           type="email"
           autoComplete="username"
           value={email}
-          onChange={event => setEmail(event.target.value)}
+          onValueChange={setEmail}
         />
         <TextField
           label="Password"
           type="password"
           autoComplete="current-password"
           value={secret}
-          onChange={event => setSecret(event.target.value)}
+          onValueChange={setSecret}
         />
         <Button
           type="submit"
@@ -184,7 +184,7 @@ const SignedOut = () => {
           {password.waiting ? 'Signing in…' : 'Sign in'}
         </Button>
         {failureMessage(password) && <Notice>{failureMessage(password)}</Notice>}
-      </form>
+      </Form>
       <Elsewhere>
         <p>
           New here?{' '}
@@ -239,7 +239,7 @@ const SetUp = ({
         label="Your name"
         hint="What the dashboard and your agents call this account."
         value={name}
-        onChange={event => setName(event.target.value)}
+        onValueChange={setName}
         maxLength={60}
         autoFocus
       />
@@ -258,7 +258,7 @@ const SetUp = ({
         </p>
       </div>
       <Or>or</Or>
-      <form
+      <Form
         className="space-y-3"
         onSubmit={event => {
           event.preventDefault();
@@ -271,7 +271,7 @@ const SetUp = ({
           autoComplete="new-password"
           hint={PASSWORD_HINT}
           value={password}
-          onChange={event => setPassword(event.target.value)}
+          onValueChange={setPassword}
         />
         <TextField
           label="Password again"
@@ -279,7 +279,7 @@ const SetUp = ({
           autoComplete="new-password"
           error={mismatch ? 'The two do not match.' : null}
           value={again}
-          onChange={event => setAgain(event.target.value)}
+          onValueChange={setAgain}
         />
         <Button
           type="submit"
@@ -290,7 +290,7 @@ const SetUp = ({
             ? 'Setting up your vault…'
             : 'Use this password'}
         </Button>
-      </form>
+      </Form>
       {failureMessage(setting) && <Notice>{failureMessage(setting)}</Notice>}
     </Frame>
   );
@@ -323,7 +323,7 @@ const Unlock = ({ account }: { readonly account: Account }) => {
         </div>
       )}
       {account.hasPassword && (
-        <form
+        <Form
           className="space-y-3"
           onSubmit={event => {
             event.preventDefault();
@@ -336,7 +336,7 @@ const Unlock = ({ account }: { readonly account: Account }) => {
             autoComplete="current-password"
             error={failureMessage(unlocking)}
             value={password}
-            onChange={event => setPassword(event.target.value)}
+            onValueChange={setPassword}
           />
           <Button
             type="submit"
@@ -346,7 +346,7 @@ const Unlock = ({ account }: { readonly account: Account }) => {
           >
             {unlocking.waiting ? 'Unlocking…' : 'Unlock with your password'}
           </Button>
-        </form>
+        </Form>
       )}
       <p className="border-line border-t pt-5 text-muted">
         Lost them?{' '}

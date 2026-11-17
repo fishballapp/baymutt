@@ -23,6 +23,8 @@ import { ExpiryField, expiryLabel } from './expiry.tsx';
 import { useOwner } from './gate.tsx';
 import { Code, grantWords, Row, RowActions, Rows, Tag, Time } from './parts.tsx';
 import { Button } from './ui/button.tsx';
+import { Checkbox } from './ui/checkbox.tsx';
+import { Collapsible } from './ui/collapsible.tsx';
 import { Confirm } from './ui/confirm.tsx';
 
 const KINDS = {
@@ -91,29 +93,6 @@ const heldOn = (serviceAccount: OpenedServiceAccount, environmentId: string): He
   const grant = serviceAccount.grants.find(held => held.environmentId === environmentId);
   return { canRead: grant?.canRead ?? false, canWrite: grant?.canWrite ?? false };
 };
-
-const AccessBox = ({
-  label,
-  checked,
-  disabled,
-  onChange,
-}: {
-  readonly label: string;
-  readonly checked: boolean;
-  readonly disabled: boolean;
-  readonly onChange: (checked: boolean) => void;
-}) => (
-  <label className="flex items-center gap-1.5 text-sm text-foreground has-disabled:text-muted">
-    <input
-      type="checkbox"
-      className="size-4 shrink-0 accent-accent"
-      checked={checked}
-      disabled={disabled}
-      onChange={event => onChange(event.target.checked)}
-    />
-    {label}
-  </label>
-);
 
 /**
  * What a service account can reach, changed here under the key it already has. A read or an
@@ -187,17 +166,17 @@ const ChangeAccess = ({
               <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                 {addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })}
               </Code>
-              <AccessBox
+              <Checkbox
                 label="read"
                 checked={after.canRead}
                 disabled={!vouched && !before.canRead}
-                onChange={canRead => set({ ...after, canRead })}
+                onCheckedChange={canRead => set({ ...after, canRead })}
               />
-              <AccessBox
+              <Checkbox
                 label="write"
                 checked={after.canWrite}
                 disabled={!vouched && !before.canRead && !before.canWrite}
-                onChange={canWrite => set({ ...after, canWrite })}
+                onCheckedChange={canWrite => set({ ...after, canWrite })}
               />
             </li>
           );
@@ -345,19 +324,24 @@ export const KeyRows = ({
 );
 
 /** Keys that have ended stay out of sight until asked for: they are listed until the nightly sweep revokes them. */
-export const useEndedShown = (keys: ReadonlyArray<OpenedServiceAccount> | null) => {
-  const [isShowingEnded, setIsShowingEnded] = useState(false);
-  const now = Date.now();
-  const ended = keys?.filter(key => hasEnded(key, now)) ?? [];
-  return {
-    shown: keys?.filter(key => isShowingEnded || !hasEnded(key, now)) ?? [],
-    toggle:
-      ended.length === 0 ? null : (
-        <div className="mt-8">
-          <Button size="sm" intent="quiet" onClick={() => setIsShowingEnded(current => !current)}>
-            {isShowingEnded ? 'Hide ended keys' : `Show ${counted(ended.length, 'ended key')}`}
-          </Button>
-        </div>
-      ),
-  };
+export const EndedKeys = ({
+  keys,
+  all,
+}: {
+  readonly keys: ReadonlyArray<OpenedServiceAccount>;
+  readonly all: ReadonlyArray<OpenedServiceAccount>;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const ended = keys.filter(key => hasEnded(key, Date.now()));
+  if (ended.length === 0) return null;
+  return (
+    <Collapsible.Root open={isOpen} onOpenChange={setIsOpen} className="mt-8">
+      <Collapsible.Trigger>
+        {isOpen ? 'Hide ended keys' : `Show ${counted(ended.length, 'ended key')}`}
+      </Collapsible.Trigger>
+      <Collapsible.Panel className="mt-3">
+        <KeyRows keys={ended} all={all} />
+      </Collapsible.Panel>
+    </Collapsible.Root>
+  );
 };

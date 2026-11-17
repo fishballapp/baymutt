@@ -1,7 +1,7 @@
 import { useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
 import { useOwner } from '../components/gate.tsx';
-import { KeyRows, useEndedShown } from '../components/keys.tsx';
+import { EndedKeys, KeyRows } from '../components/keys.tsx';
 import { useOrg } from '../components/orgs.tsx';
 import {
   Code,
@@ -19,6 +19,7 @@ import {
 import { buttonStyles } from '../components/ui/button.tsx';
 import {
   addressOf,
+  hasEnded,
   keyChangesAtom,
   kindOf,
   type OpenedKeyChange,
@@ -162,7 +163,7 @@ export const KeysPage = () => {
   const result = useAtomValue(serviceAccountsAtom(useOwner()));
   const all = latest(result);
   const ofOrg = all?.filter(key => key.org?.id === org.id) ?? null;
-  const { shown, toggle } = useEndedShown(ofOrg);
+  const shown = ofOrg?.filter(key => !hasEnded(key, Date.now())) ?? [];
   const sections = [
     {
       title: 'Service accounts',
@@ -199,7 +200,7 @@ export const KeysPage = () => {
             </Section>
           ),
       )}
-      {toggle}
+      {ofOrg !== null && <EndedKeys keys={ofOrg} all={all ?? []} />}
     </>
   );
 };

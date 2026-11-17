@@ -3,7 +3,6 @@
 // the Account page.
 import { LabelSchema, type Org, OrgSlugSchema } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
-import { CaretDownIcon } from '@phosphor-icons/react';
 import { Link, Navigate, useNavigate } from '@tanstack/react-router';
 import * as Schema from 'effect/Schema';
 import { createContext, type ReactNode, use, useEffect, useState } from 'react';
@@ -14,7 +13,8 @@ import { useOwner } from './gate.tsx';
 import { Code, Notice, PageHeader, Row, RowActions, Rows, Skeleton, Time } from './parts.tsx';
 import { Button, buttonStyles } from './ui/button.tsx';
 import { Confirm } from './ui/confirm.tsx';
-import { TextField } from './ui/field.tsx';
+import { Form, TextField } from './ui/field.tsx';
+import { Select } from './ui/select.tsx';
 
 /** Holds a slug. A new name: `baymutt.org` held an org's id before 0.10.0. */
 const LAST_ORG = 'baymutt.lastOrgSlug';
@@ -106,32 +106,23 @@ export const OrgPicker = ({
   readonly orgs: ReadonlyArray<Org>;
   readonly current: Org;
   readonly onPick: (org: Org) => void;
-}) => (
-  <div className="relative">
-    <label htmlFor="org-picker" className="sr-only">
-      Org
-    </label>
-    <select
-      id="org-picker"
+}) => {
+  const options = orgs.map(org => ({ value: org.id, label: org.name }));
+  return (
+    <Select.Root
+      items={options}
       value={current.id}
-      onChange={event => {
-        const picked = orgs.find(org => org.id === event.target.value);
+      onValueChange={id => {
+        const picked = orgs.find(org => org.id === id);
         if (picked !== undefined) onPick(picked);
       }}
-      className="h-9 w-full cursor-pointer appearance-none truncate rounded-control border border-line bg-background pr-9 pl-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-muted focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none"
     >
-      {orgs.map(org => (
-        <option key={org.id} value={org.id}>
-          {org.name}
-        </option>
-      ))}
-    </select>
-    <CaretDownIcon
-      aria-hidden="true"
-      className="pointer-events-none absolute top-1/2 right-3 size-3.5 -translate-y-1/2 text-muted"
-    />
-  </div>
-);
+      <Select.Label className="sr-only">Org</Select.Label>
+      <Select.Trigger className="bg-background text-sm font-medium" />
+      <Select.Popup options={options} />
+    </Select.Root>
+  );
+};
 
 const isName = Schema.is(LabelSchema);
 const isSlug = Schema.is(OrgSlugSchema);
@@ -155,7 +146,7 @@ export const NewOrg = ({ className }: { readonly className?: string }) => {
   const shownSlug = slug ?? slugOf(name);
   const isValid = isName(name) && isSlug(shownSlug);
   return (
-    <form
+    <Form
       className={className}
       onSubmit={async event => {
         event.preventDefault();
@@ -168,12 +159,7 @@ export const NewOrg = ({ className }: { readonly className?: string }) => {
       }}
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          label="Org name"
-          placeholder="Acme Ltd"
-          value={name}
-          onChange={event => setName(event.target.value)}
-        />
+        <TextField label="Org name" placeholder="Acme Ltd" value={name} onValueChange={setName} />
         <TextField
           label="Slug"
           isCode
@@ -185,7 +171,7 @@ export const NewOrg = ({ className }: { readonly className?: string }) => {
               : failureMessage(creation)
           }
           value={shownSlug}
-          onChange={event => setSlug(event.target.value)}
+          onValueChange={setSlug}
         />
       </div>
       <Button
@@ -196,7 +182,7 @@ export const NewOrg = ({ className }: { readonly className?: string }) => {
       >
         {creation.waiting ? 'Creating…' : 'Create org'}
       </Button>
-    </form>
+    </Form>
   );
 };
 

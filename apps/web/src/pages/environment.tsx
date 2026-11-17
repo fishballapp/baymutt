@@ -25,7 +25,8 @@ import {
 } from '../components/parts.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Confirm } from '../components/ui/confirm.tsx';
-import { TextArea, TextField } from '../components/ui/field.tsx';
+import { Form, TextArea, TextField } from '../components/ui/field.tsx';
+import { ToggleButton, ToggleGroup } from '../components/ui/toggle.tsx';
 import { copyWhenReady } from '../lib/clipboard.ts';
 import {
   addressOf,
@@ -72,7 +73,7 @@ const ValueForm = ({
   const [value, setValue] = useState('');
   const isValid = isSecretName(name) && value !== '';
   return (
-    <form
+    <Form
       className="space-y-3"
       onSubmit={async event => {
         event.preventDefault();
@@ -94,7 +95,7 @@ const ValueForm = ({
               : null
           }
           value={name}
-          onChange={event => setName(event.target.value)}
+          onValueChange={setName}
         />
       )}
       <TextArea
@@ -103,7 +104,7 @@ const ValueForm = ({
         hint={SEALED_NOTE}
         error={failureMessage(writing)}
         value={value}
-        onChange={event => setValue(event.target.value)}
+        onValueChange={setValue}
       />
       <div className="flex gap-2">
         <Button type="submit" intent="primary" disabled={!isValid || writing.waiting}>
@@ -111,7 +112,7 @@ const ValueForm = ({
         </Button>
         {onDone && <Button onClick={onDone}>Cancel</Button>}
       </div>
-    </form>
+    </Form>
   );
 };
 
@@ -228,7 +229,6 @@ const SecretValue = ({
           <Button
             size="sm"
             intent="subtle"
-            aria-pressed={value !== null}
             disabled={shown.waiting}
             onClick={() => (value === null ? reveal(request) : reveal(Atom.Reset))}
           >
@@ -256,6 +256,9 @@ const SecretValue = ({
   );
 };
 
+/** What a secret's row shows under it: a new value, or its versions. */
+type Panel = 'replace' | 'history';
+
 const SecretRow = ({
   environment,
   secret,
@@ -263,10 +266,9 @@ const SecretRow = ({
   readonly environment: OpenedEnvironment;
   readonly secret: OpenedSecret;
 }) => {
-  const [panel, setPanel] = useState<'replace' | 'history' | null>(null);
+  const [panel, setPanel] = useState<Panel | null>(null);
   const [removing, remove] = useAtom(removeSecretAtom, { mode: 'promiseExit' });
   const [isConfirming, setIsConfirming] = useState(false);
-  const toggle = (next: 'replace' | 'history') => setPanel(panel === next ? null : next);
   return (
     // A row written in the last few seconds says so once: it is the only motion on the page.
     <Row className={Date.now() - secret.updatedAt < 3000 ? 'animate-written' : undefined}>
@@ -279,24 +281,14 @@ const SecretRow = ({
           </p>
         </div>
         <RowActions>
-          {secret.openedName !== null && (
-            <Button
-              size="sm"
-              intent="subtle"
-              aria-expanded={panel === 'replace'}
-              onClick={() => toggle('replace')}
-            >
-              Replace
-            </Button>
-          )}
-          <Button
-            size="sm"
-            intent="subtle"
-            aria-expanded={panel === 'history'}
-            onClick={() => toggle('history')}
+          <ToggleGroup
+            value={panel === null ? [] : [panel]}
+            onValueChange={([next]) => setPanel(next === undefined ? null : (next as Panel))}
+            className="flex gap-0.5"
           >
-            History
-          </Button>
+            {secret.openedName !== null && <ToggleButton value="replace">Replace</ToggleButton>}
+            <ToggleButton value="history">History</ToggleButton>
+          </ToggleGroup>
           <Confirm
             open={isConfirming}
             onOpenChange={setIsConfirming}

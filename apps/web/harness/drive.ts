@@ -202,6 +202,16 @@ const sqlText = (text: string) => `'${text.replaceAll("'", "''")}'`;
 
 const MINUTE_MS = 60_000;
 
+/** What the select labelled `label` shows now. */
+const shownIn = (page: Page, label: string) =>
+  page.getByRole('combobox', { name: label, exact: true }).innerText();
+
+/** Opens the select labelled `label` and picks the option that reads `option`. */
+const pick = async (page: Page, label: string, option: string | RegExp) => {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  await page.getByRole('option', { name: option }).click();
+};
+
 const main = async (browser: Browser) => {
   rmSync(shots, { recursive: true, force: true });
   mkdirSync(shots, { recursive: true });
@@ -232,6 +242,20 @@ const main = async (browser: Browser) => {
   check(
     'a new org’s slug follows its name',
     (await page.getByLabel('Slug').inputValue()) === 'acme',
+  );
+  await page.getByLabel('Slug').fill('Not A Slug');
+  const slugError = 'Use lower-case letters, digits and hyphens, up to 40.';
+  check(
+    'a refused slug is marked invalid and its error is the field’s description',
+    (await page.getByLabel('Slug').getAttribute('aria-invalid')) === 'true' &&
+      (await page.getByLabel('Slug').getAttribute('aria-describedby')) ===
+        (await page.getByText(slugError).getAttribute('id')),
+  );
+  await shoot(page, '04a-new-org-slug-refused');
+  await page.getByLabel('Slug').fill('acme');
+  check(
+    'a slug that is accepted is no longer marked invalid',
+    (await page.getByLabel('Slug').getAttribute('aria-invalid')) !== 'true',
   );
   await shoot(page, '04-new-org');
   await page.getByRole('button', { name: 'Create org' }).click();
@@ -335,7 +359,7 @@ const main = async (browser: Browser) => {
   check(
     'the approval page shows the terminal’s description and the expiry it asked for',
     (await page.getByText('Coding agents on the work laptop').count()) === 1 &&
-      (await page.getByLabel('Expires').inputValue()) === 'kept',
+      /^As the terminal asked: /.test(await shownIn(page, 'Expires')),
   );
   check(
     'the approval page says a login lists names and opens no value',
@@ -414,9 +438,9 @@ const main = async (browser: Browser) => {
       (await page.getByText('“run the migration”').count()) === 1 &&
       (await page.getByText('acme/app/production').count()) === 1 &&
       (await page.getByText('read + write').count()) === 1 &&
-      (await page.getByLabel('Ends').inputValue()) === `${60 * MINUTE_MS}`,
+      /^1 hour after approval/.test(await shownIn(page, 'Ends')),
   );
-  await page.getByLabel('Ends').selectOption(`${15 * MINUTE_MS}`);
+  await pick(page, 'Ends', /^15 minutes after approval/);
   check(
     'the request page says approving a key kept in a file makes an agent key',
     (await page.getByText(/approving makes an agent key/).count()) === 1,
@@ -652,7 +676,7 @@ const main = async (browser: Browser) => {
       (await page.getByRole('heading', { name: 'What it gives back' }).count()) === 1 &&
       (await page.getByText('acme/app/staging').count()) === 1 &&
       (await page.getByText('acme/app/production').count()) === 2 &&
-      (await page.getByLabel('Ends').inputValue()) === `${24 * 60 * MINUTE_MS}`,
+      /^1 day after approval/.test(await shownIn(page, 'Ends')),
   );
   await shoot(page, '08h1-key-change-new-end');
   await shootPhone(page, '08h2-key-change-new-end-phone');
@@ -678,7 +702,7 @@ const main = async (browser: Browser) => {
   await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
   check(
     'a change that asks for no new end keeps the key’s own by default',
-    (await page.getByLabel('Ends').inputValue()) === 'keep',
+    /^As it is: /.test(await shownIn(page, 'Ends')),
   );
   await shoot(page, '08h3-key-change');
   await shootPhone(page, '08h4-key-change-phone');
@@ -734,7 +758,7 @@ const main = async (browser: Browser) => {
   check(
     'a new end alone waits for the owner, and offers what was asked',
     extending.json?.status === 'pending' &&
-      (await page.getByLabel('Ends').inputValue()) === `${120 * MINUTE_MS}` &&
+      /^2 hours after approval/.test(await shownIn(page, 'Ends')) &&
       (await page.getByText('It gains nothing.').count()) === 1,
   );
   await page.getByRole('button', { name: 'Approve', exact: true }).click();
@@ -914,7 +938,7 @@ const main = async (browser: Browser) => {
   await page.getByText(`sh -c 'cat > ${ciKey}'`).waitFor();
   check(
     'the request page shows the command the key goes to, and no end as asked',
-    (await page.getByLabel('Ends').inputValue()) === 'never' &&
+    /^Never/.test(await shownIn(page, 'Ends')) &&
       (await page.getByText(/With no end, it works until you revoke it/).count()) === 1,
   );
   check(
@@ -1002,7 +1026,7 @@ const main = async (browser: Browser) => {
   await accessDialog
     .getByRole('listitem')
     .filter({ hasText: 'acme/app/staging' })
-    .getByLabel('read')
+    .getByRole('checkbox', { name: 'read' })
     .check();
   await page.waitForTimeout(300);
   await page.screenshot({ path: join(shots, '11e-access.png') });
@@ -1014,7 +1038,7 @@ const main = async (browser: Browser) => {
     varlockLoads(ciEnv, 'acme/app/staging', { API_KEY: 'staging-value' }).isLoaded,
   );
   await ciRow.getByRole('button', { name: 'Expiry' }).click();
-  await page.getByLabel('Expires').selectOption('30');
+  await pick(page, 'Expires', 'In 30 days');
   await page.getByRole('button', { name: 'Save expiry' }).click();
   await page.getByRole('alertdialog').waitFor({ state: 'hidden' });
   await ciRow.getByText(/expires in 30 days/).waitFor();
@@ -1058,6 +1082,11 @@ const main = async (browser: Browser) => {
   );
   await page.getByRole('button', { name: 'Show 1 ended key' }).click();
   await page.getByText('Migration agent').waitFor();
+  check(
+    'Show N ended keys says it is open to assistive tech, and the same button hides them again',
+    (await page.getByRole('button', { name: 'Hide ended keys' }).getAttribute('aria-expanded')) ===
+      'true',
+  );
   check('the ended key is listed as expired', (await page.getByText('expired').count()) === 1);
   await shoot(page, '11h-keys-ended-shown');
   d1(
@@ -1351,7 +1380,7 @@ const main = async (browser: Browser) => {
         .join('\n')}`);
   await page.goto(`${WEB}/orgs/legacy/bin`);
   await page.getByRole('heading', { name: 'Bin' }).waitFor();
-  await page.getByLabel('Org', { exact: true }).selectOption({ label: 'Acme' });
+  await pick(page, 'Org', 'Acme');
   await page.waitForURL(`${WEB}/orgs/acme/bin`);
   check('the picker opens the same section of the org picked', true);
   await page.goto(`${WEB}/orgs/nobody/keys`);

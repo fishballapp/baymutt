@@ -1,9 +1,10 @@
-import { CaretDownIcon } from '@phosphor-icons/react';
+import { Field } from '@base-ui/react/field';
 import { cn } from 'cn';
-import { type ComponentProps, type ReactNode, useId } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
+import { controlStyles } from './control.ts';
+import { Select, type SelectOption } from './select.tsx';
 
-const control =
-  'w-full rounded-control border border-line bg-surface px-3 text-base text-foreground placeholder:text-muted transition-colors duration-150 hover:border-muted focus:border-accent focus:outline-none focus-visible:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50';
+export { Form } from '@base-ui/react/form';
 
 type FieldProps = {
   readonly label: string;
@@ -14,30 +15,29 @@ type FieldProps = {
   readonly isCode?: boolean;
 };
 
+/** A field's hint, or its error in the hint's place: Base UI links each to its control. */
+const Note = ({ hint, error }: Pick<FieldProps, 'hint' | 'error'>) => {
+  if (error) {
+    return (
+      <Field.Error match role="alert" className="text-sm text-danger">
+        {error}
+      </Field.Error>
+    );
+  }
+  return hint && <Field.Description className="text-sm text-muted">{hint}</Field.Description>;
+};
+
 const Frame = ({
-  id,
-  label,
-  hint,
   error,
   children,
-}: FieldProps & { readonly id: string; readonly children: ReactNode }) => (
-  <div className="flex flex-col gap-1.5">
-    <label htmlFor={id} className="text-sm font-medium">
-      {label}
-    </label>
+}: Pick<FieldProps, 'error'> & { readonly children: ReactNode }) => (
+  <Field.Root invalid={Boolean(error)} className="flex flex-col gap-1.5">
     {children}
-    {error ? (
-      <p id={`${id}-note`} role="alert" className="text-sm text-danger">
-        {error}
-      </p>
-    ) : (
-      hint && (
-        <p id={`${id}-note`} className="text-sm text-muted">
-          {hint}
-        </p>
-      )
-    )}
-  </div>
+  </Field.Root>
+);
+
+const Label = ({ children }: { readonly children: string }) => (
+  <Field.Label className="text-sm font-medium">{children}</Field.Label>
 );
 
 export const TextField = ({
@@ -51,21 +51,18 @@ export const TextField = ({
 }: FieldProps & {
   /** A button that acts on this one field, beside it, so the hint below never moves it. */
   readonly action?: ReactNode;
-} & ComponentProps<'input'>) => {
-  const id = useId();
+} & ComponentProps<typeof Field.Control>) => {
   const input = (
-    <input
-      id={id}
-      aria-describedby={hint || error ? `${id}-note` : undefined}
-      aria-invalid={error ? true : undefined}
+    <Field.Control
       autoComplete="off"
       spellCheck={false}
-      className={cn(control, 'h-9', isCode && 'font-mono text-sm', className)}
+      className={cn(controlStyles, 'h-9', isCode && 'font-mono text-sm', className)}
       {...props}
     />
   );
   return (
-    <Frame id={id} label={label} hint={hint} error={error}>
+    <Frame error={error}>
+      <Label>{label}</Label>
       {action ? (
         <div className="flex gap-2">
           <div className="min-w-0 flex-1">{input}</div>
@@ -74,37 +71,41 @@ export const TextField = ({
       ) : (
         input
       )}
+      <Note hint={hint} error={error} />
     </Frame>
   );
 };
 
-/** The platform's own select, drawn like every other control. */
-export const SelectField = ({
+/** A select in a field: `options` are what it offers, `value` the one chosen. */
+export const SelectField = <Value extends string>({
   label,
   hint,
   error,
+  options,
+  value,
+  onValueChange,
   className,
-  ...props
-}: FieldProps & ComponentProps<'select'>) => {
-  const id = useId();
-  return (
-    <Frame id={id} label={label} hint={hint} error={error}>
-      <div className="relative">
-        <select
-          id={id}
-          aria-describedby={hint || error ? `${id}-note` : undefined}
-          aria-invalid={error ? true : undefined}
-          className={cn(control, 'h-9 cursor-pointer appearance-none pr-9', className)}
-          {...props}
-        />
-        <CaretDownIcon
-          aria-hidden="true"
-          className="pointer-events-none absolute top-1/2 right-3 size-3.5 -translate-y-1/2 text-muted"
-        />
-      </div>
-    </Frame>
-  );
-};
+}: Omit<FieldProps, 'isCode'> & {
+  readonly options: ReadonlyArray<SelectOption<Value>>;
+  readonly value: Value;
+  readonly onValueChange: (value: Value) => void;
+  readonly className?: string;
+}) => (
+  <Frame error={error}>
+    <Select.Root
+      items={options}
+      value={value}
+      onValueChange={chosen => {
+        if (chosen !== null) onValueChange(chosen);
+      }}
+    >
+      <Select.Label className="text-sm font-medium">{label}</Select.Label>
+      <Select.Trigger className={className} />
+      <Select.Popup options={options} />
+    </Select.Root>
+    <Note hint={hint} error={error} />
+  </Frame>
+);
 
 export const TextArea = ({
   label,
@@ -112,22 +113,35 @@ export const TextArea = ({
   error,
   isCode,
   className,
+  value,
+  onValueChange,
   ...props
-}: FieldProps & ComponentProps<'textarea'>) => {
-  const id = useId();
-  return (
-    <Frame id={id} label={label} hint={hint} error={error}>
-      <textarea
-        id={id}
-        aria-describedby={hint || error ? `${id}-note` : undefined}
-        aria-invalid={error ? true : undefined}
-        autoComplete="off"
-        autoCorrect="off"
-        autoCapitalize="off"
-        spellCheck={false}
-        className={cn(control, 'min-h-24 resize-y py-2', isCode && 'font-mono text-sm', className)}
-        {...props}
-      />
-    </Frame>
-  );
-};
+}: FieldProps &
+  Omit<ComponentProps<'textarea'>, 'value' | 'onChange'> & {
+    readonly value: string;
+    readonly onValueChange: (value: string) => void;
+  }) => (
+  <Frame error={error}>
+    <Label>{label}</Label>
+    <Field.Control
+      value={value}
+      onValueChange={onValueChange}
+      render={
+        <textarea
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          className={cn(
+            controlStyles,
+            'min-h-24 resize-y py-2',
+            isCode && 'font-mono text-sm',
+            className,
+          )}
+          {...props}
+        />
+      }
+    />
+    <Note hint={hint} error={error} />
+  </Frame>
+);

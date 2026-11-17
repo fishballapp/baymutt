@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { exactDay, exactTime } from '../lib/format.ts';
 import { SelectField, TextField } from './ui/field.tsx';
+import type { SelectOption } from './ui/select.tsx';
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -46,27 +47,24 @@ export const ExpiryField = ({
     const preset = PRESETS.find(({ choice }) => choice === next);
     onChange(preset === undefined ? undefined : Date.now() + preset.days * DAY_MS);
   };
+  const options: ReadonlyArray<SelectOption<Choice>> = [
+    ...(kept === null ? [] : [{ value: 'kept' as const, label: keptLabel(kept) }]),
+    { value: 'never', label: 'Never' },
+    ...PRESETS.map(({ choice, label }) => ({ value: choice, label })),
+    { value: 'date', label: 'On a date…' },
+  ];
   return (
     <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
       <div className="w-full sm:w-72">
         <SelectField
           label="Expires"
+          options={options}
           value={choice}
-          onChange={event => {
-            const next = event.target.value as Choice;
+          onValueChange={next => {
             setChoice(next);
             report(next, day);
           }}
-        >
-          {kept !== null && <option value="kept">{keptLabel(kept)}</option>}
-          <option value="never">Never</option>
-          {PRESETS.map(({ choice, label }) => (
-            <option key={choice} value={choice}>
-              {label}
-            </option>
-          ))}
-          <option value="date">On a date…</option>
-        </SelectField>
+        />
       </div>
       {choice === 'date' && (
         <div className="w-full sm:w-48">
@@ -76,9 +74,9 @@ export const ExpiryField = ({
             value={day}
             min={tomorrow()}
             max="9999-12-31"
-            onChange={event => {
-              setDay(event.target.value);
-              report('date', event.target.value);
+            onValueChange={nextDay => {
+              setDay(nextDay);
+              report('date', nextDay);
             }}
           />
         </div>

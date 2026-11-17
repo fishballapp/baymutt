@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Notice } from '../components/parts.tsx';
 import { RecoveryKey } from '../components/recovery-key.tsx';
 import { Button } from '../components/ui/button.tsx';
-import { TextArea } from '../components/ui/field.tsx';
+import { Form, TextArea } from '../components/ui/field.tsx';
 import { recoverAtom, sessionAtom } from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 import { Elsewhere, Frame, LinkByEmail } from './entry.tsx';
@@ -55,7 +55,7 @@ export const RecoverPage = () => {
         </>
       }
     >
-      <form
+      <Form
         className="space-y-4"
         onSubmit={async event => {
           event.preventDefault();
@@ -71,7 +71,7 @@ export const RecoverPage = () => {
           hint="Thirteen groups of four. Dashes, spaces and case do not matter."
           error={failureMessage(recovering)}
           value={recoveryKey}
-          onChange={event => setRecoveryKey(event.target.value)}
+          onValueChange={setRecoveryKey}
         />
         <Button
           type="submit"
@@ -81,7 +81,7 @@ export const RecoverPage = () => {
         >
           {recovering.waiting ? 'Opening your vault…' : 'Open my vault'}
         </Button>
-      </form>
+      </Form>
       <Notice tone="plain">
         Without a passkey, your password or this key, nobody can open the vault, baymutt included.
       </Notice>

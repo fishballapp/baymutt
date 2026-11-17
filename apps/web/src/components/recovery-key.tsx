@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useCopy } from '../lib/clipboard.ts';
 import { Code, Notice } from './parts.tsx';
 import { Button } from './ui/button.tsx';
+import { Checkbox } from './ui/checkbox.tsx';
 
 const COPIED_NOTE = {
   idle: '',
@@ -49,15 +50,12 @@ export const RecoveryKey = ({
       <Notice tone="warn" className="mt-4">
         It is shown once. Leaving this page without it cannot be undone.
       </Notice>
-      <label className="mt-6 flex items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={isKept}
-          onChange={event => setIsKept(event.target.checked)}
-          className="mt-0.5 size-4 shrink-0 accent-accent"
-        />
-        <span>I have kept the recovery key somewhere I can find it without this browser.</span>
-      </label>
+      <Checkbox
+        label="I have kept the recovery key somewhere I can find it without this browser."
+        className="mt-6 items-start gap-2.5 text-base [&>button]:mt-0.5"
+        checked={isKept}
+        onCheckedChange={setIsKept}
+      />
       <Button
         intent="primary"
         className="mt-5 w-full sm:w-auto"

@@ -205,15 +205,17 @@ const Decision = ({ change }: { readonly change: OpenedKeyChange }) => {
         <SelectField
           label="Ends"
           value={choice}
-          onChange={event => setChoice(event.target.value as Choice)}
-        >
-          {choices.map(option => (
-            <option key={option} value={option}>
-              {choiceWords(option, change.key.expiresAt)}
-              {option === choiceOf(change.lifetime) && option !== 'keep' && ' (your agent’s pick)'}
-            </option>
-          ))}
-        </SelectField>
+          onValueChange={setChoice}
+          options={choices.map(option => ({
+            value: option,
+            label: [
+              choiceWords(option, change.key.expiresAt),
+              option === choiceOf(change.lifetime) && option !== 'keep' && '(your agent’s pick)',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          }))}
+        />
       </div>
       <p>
         {change.add.length > 0

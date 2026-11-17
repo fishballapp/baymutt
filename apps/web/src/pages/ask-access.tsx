@@ -141,15 +141,17 @@ const Decision = ({ request }: { readonly request: OpenedRequest }) => {
         <SelectField
           label="Ends"
           value={choice}
-          onChange={event => setChoice(event.target.value as Choice)}
-        >
-          {choices.map(option => (
-            <option key={option} value={option}>
-              {option === 'never' ? 'Never' : `${durationWords(Number(option))} after approval`}
-              {option === choiceOf(request.lifetime) && ' (your agent’s pick)'}
-            </option>
-          ))}
-        </SelectField>
+          onValueChange={setChoice}
+          options={choices.map(option => ({
+            value: option,
+            label: [
+              option === 'never' ? 'Never' : `${durationWords(Number(option))} after approval`,
+              option === choiceOf(request.lifetime) && '(your agent’s pick)',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          }))}
+        />
       </div>
       <p>
         What its key reads stays read after it ends or you revoke it.
