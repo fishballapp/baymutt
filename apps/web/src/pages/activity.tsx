@@ -29,6 +29,9 @@ const grantDetail = ({ detail }: Entry) => {
   return `${detail.slice(split + 2)} for ${detail.slice(0, split)}`;
 };
 
+/** How a key change's detail names the end it left the key with; any other is `until <day>`. */
+const CHANGED_ENDS: Record<string, string> = { 'same end': '', 'no end': ', with no end' };
+
 /** What happened, as the rest of a sentence that starts with who did it. */
 const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   'account.create': () => 'created the account',
@@ -53,6 +56,21 @@ const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   },
   'request.reject': ({ detail }) => <>rejected the request {detail}</>,
   'request.expire': ({ detail }) => <>expired the request {detail}, unanswered for an hour</>,
+  'key-change.create': ({ detail }) => <>asked to change the key {detail}</>,
+  'key-change.approve': ({ detail }) => {
+    // "<key>: <until …, no end, or same end>".
+    const split = detail?.lastIndexOf(': ') ?? -1;
+    if (detail === null || split === -1) return <>approved a change to {detail}</>;
+    const end = detail.slice(split + 2);
+    return (
+      <>
+        approved a change to {detail.slice(0, split)}
+        {CHANGED_ENDS[end] ?? `, ${end}`}
+      </>
+    );
+  },
+  'key-change.reject': ({ detail }) => <>rejected a change to {detail}</>,
+  'key-change.expire': ({ detail }) => <>expired a change to {detail}, unanswered for an hour</>,
   'credential.revoke': ({ detail }) => <>revoked {detail}</>,
   'credential.expiry': ({ detail }) => {
     const split = detail?.lastIndexOf(': ') ?? -1;

@@ -155,7 +155,7 @@ export const environments = ({
         return yield* new OwnerRequiredError({
           message: isLogin(actor)
             ? 'A CLI login does not create an environment: it asks for one, and the owner creates it. `baymutt ask create-environment <org>/<name> --reason "<why>"`.'
-            : 'A service account cannot create an environment. A CLI login asks for one with `baymutt ask create-environment`.',
+            : 'A key cannot create an environment. A CLI login asks for one with `baymutt ask create-environment`.',
         });
       }
       const org = yield* ownedOrg(actor, environment.orgId, 'creates an environment in it');
@@ -354,7 +354,7 @@ export const environments = ({
       if (serviceAccount.parentId === null) {
         return yield* new InvalidRequestError({
           message:
-            'A CLI login holds no environment. It asks for one with `baymutt ask access`, and approving the request makes a service account that holds it.',
+            'A CLI login holds no environment. It asks for one with `baymutt ask access`, and approving the request makes a key that holds it.',
         });
       }
       if (!canWrite && readWrap === null) {

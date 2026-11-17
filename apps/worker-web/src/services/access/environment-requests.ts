@@ -195,7 +195,7 @@ export const environmentRequests = ({
           message:
             actor._tag === 'Owner'
               ? 'An environment request is a CLI login’s. The owner creates an environment in the dashboard.'
-              : 'A service account cannot ask for an environment. Ask from a CLI login: `baymutt ask create-environment`.',
+              : 'A key cannot ask for an environment. Ask from a CLI login: `baymutt ask create-environment`.',
         });
       }
       const org = yield* memberOrg(actor, request.orgId);

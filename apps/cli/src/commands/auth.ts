@@ -19,7 +19,7 @@ import { print, say } from '../output.ts';
 import { forgetAllRequestKeys } from '../requests.ts';
 import { ServiceAccount, serviceAccountFromToken } from '../service-account.ts';
 import { readState, removeState, Settings, updateState } from '../settings.ts';
-import { namedCredential } from './access.ts';
+import { namedKey } from './access.ts';
 
 const PairingFragmentSchema = Schema.fromJsonString(PairingRequestSchema);
 
@@ -126,7 +126,7 @@ export const loginCommand = Command.make(
     const welcome = me.value.credential?.welcome;
     if (welcome === null || welcome === undefined) {
       return yield* usage(
-        'The store knows this service account key but has no answer from a browser that approved its login. Use a service account key made by `baymutt auth login`.',
+        'The store knows this key but has no answer from a browser that approved it as a CLI login. Use a key made by `baymutt auth login`.',
         'integrity',
       );
     }
@@ -185,10 +185,10 @@ export const logoutCommand = Command.make(
       : yield* Effect.gen(function* () {
           const { key, api } = yield* serviceAccountFromToken(kept.value);
           // Logging out undoes `baymutt auth login`: this computer's state and every request key
-          // here go with it. A service account's key (one in BAYMUTT_KEY_FILE) is not that.
+          // here go with it. A key from a request (one in BAYMUTT_KEY_FILE) is not that.
           if (key.issuerPublicKey !== null) {
             return yield* usage(
-              `This key is service account ${key.credentialId}, not this computer's CLI login. Nothing was revoked or removed. To stop it, run \`baymutt service-account revoke ${key.credentialId}\`.`,
+              `This key is ${key.credentialId}, from a request, not this computer's CLI login. Nothing was revoked or removed. To stop it, run \`baymutt key revoke ${key.credentialId}\`.`,
             );
           }
           // Another CLI login's key, brought here in BAYMUTT_KEY_FILE: this computer's state and
@@ -196,7 +196,7 @@ export const logoutCommand = Command.make(
           const { loginId } = yield* readState;
           if (store.source === 'keyFile' && loginId !== undefined && loginId !== key.credentialId) {
             return yield* usage(
-              `BAYMUTT_KEY_FILE names CLI login ${key.credentialId}, not the one this computer logged in with. Nothing was revoked or removed. Log it out where it logged in, or run \`baymutt service-account revoke ${key.credentialId}\` with it.`,
+              `BAYMUTT_KEY_FILE names CLI login ${key.credentialId}, not the one this computer logged in with. Nothing was revoked or removed. Log it out where it logged in, or run \`baymutt key revoke ${key.credentialId}\` with it.`,
             );
           }
           return yield* api.credentials.revoke({ params: { id: key.credentialId } }).pipe(
@@ -221,7 +221,7 @@ export const logoutCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke this computer’s CLI login, with every service account its requests made, and forget its key and theirs here. What they already read stays read. Refused when the key comes from BAYMUTT_KEY',
+    'Revoke this computer’s CLI login, with every key its requests made, and forget its key and theirs here. What they already read stays read. Refused when the key comes from BAYMUTT_KEY',
   ),
 );
 
@@ -237,11 +237,13 @@ const whoamiCommand = Command.make(
     const credential = credentials.find(({ id }) => id === key.credentialId);
     yield* print({
       account: { id: me.accountId, name: me.accountName },
-      credential: credential === undefined ? null : yield* namedCredential(namesKeys, credential),
+      key: credential === undefined ? null : yield* namedKey(namesKeys, credential),
     });
   }, report),
 ).pipe(
-  Command.withDescription('This CLI login or service account, its account and the access it holds'),
+  Command.withDescription(
+    'This key (a CLI login, an agent key or a service account), its account and the access it holds',
+  ),
   Command.provide(ServiceAccount.layer),
 );
 

@@ -43,6 +43,15 @@ value. `baymutt --help` lists them all.
   `--expires 15m`, `1h` or `90d`. Nothing carries over to the next agent, which asks for itself.
   `--write` does not include `--read`: `--read-write` asks for both in one approval, where two
   separate asks cost the owner two.
+- **Within a task, change the key you hold rather than ask for another.** `baymutt ask change <id>
+  --read acme/app/staging --give-back acme/app/production --reason "…"` asks the owner to add to the
+  key the agent already holds and take back what it no longer needs, as one approval; `--expires`
+  asks for a new end, counted from the approval. The page shows what the key holds now, what is
+  added and what is given back. The same key file keeps working, and holds the new set once
+  approved; rejected or expired, it holds what it held. Giving back alone needs no approval and
+  takes effect at once. A new key (`ask access`) is for a different job. A key piped into CI is
+  changed the same way; its key is not on the asking computer, so `ask wait` says what it could
+  not check, and the key's next load proves the rest.
 - **A new environment is asked for on its own**: `baymutt ask create-environment acme/app/staging
   --reason "…"` prints a link; the owner creates it, empty, or rejects. Access to it is then an
   `ask access` like any other.
@@ -85,17 +94,18 @@ Then `varlock run -- <command>`, with `BAYMUTT_KEY_FILE` naming the key file `ba
 ## How it keeps values from the host
 
 - **Values and names are sealed and opened on the client**, with keys the host never holds: the
-  owner's vault is opened in the browser by a passkey or a password, and a CLI login's or service
-  account's key is made where it is used and never sent.
+  owner's vault is opened in the browser by a passkey or a password, and a CLI login's or any other
+  key is made where it is used and never sent.
 - **Read access is cryptographic.** Reading an environment means holding its key, wrapped to yours
   by someone who already holds it: the owner's browser wraps to a request's key exactly the
-  environments the request named, when the owner approves it. Nothing is wrapped to a CLI login.
+  environments the request named, when the owner approves it, and later exactly what a key change
+  adds. Nothing is wrapped to a CLI login.
   The Worker stores ciphertext, sealed names, public keys, wraps, grants and the activity log.
 - **A name is stored as an index and a sealed name**, under one names key per org that the owner's
   account wraps to whoever may list names. The store can tell that two names in one environment
   are equal, and nothing else about them.
 - **A client does not trust a public key the store serves.** Which key belongs to an environment or
-  a service account is vouched for by a party the reader already trusts, in a box only those two
+  to a key is vouched for by a party the reader already trusts, in a box only those two
   can make.
 - **The dashboard reveals a value only with the vault open.** The owner's browser fetches one
   version's ciphertext and opens it with the vault; the store logs the request and never sees the
@@ -106,7 +116,7 @@ Then `varlock run -- <command>`, with `BAYMUTT_KEY_FILE` naming the key file `ba
   something sooner.
 
 What it does not hide: org names, how many environments and secrets there are, sizes, who read
-or wrote what when, and what a person typed as a reason, a hint or a service account's name. What
+or wrote what when, and what a person typed as a reason, a hint or a key's name. What
 it does not protect yet: a compromised host could swap a value for one of its own or answer with
 an older version; the activity log and the version history are what would show it. What an
 approval cannot do: take back what a key already read, or stop agents under one operating-system

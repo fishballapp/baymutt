@@ -5,6 +5,7 @@ import * as FileSystem from 'effect/FileSystem';
 import * as Option from 'effect/Option';
 import { settleEnvironmentRequest } from './environment-requests.ts';
 import { answerFor, describeFailure, EXIT_CODES, type UsageError, usage } from './errors.ts';
+import { settleKeyChange } from './key-changes.ts';
 import type { Outcome } from './outcome.ts';
 import { print, printLine } from './output.ts';
 import { settlePasteLink } from './paste-links.ts';
@@ -45,6 +46,12 @@ const settleOne = Effect.fn('asks.settleOne')(function* (id: string, timeout: nu
     Effect.catchTag('NotFoundError', () => Effect.succeedNone),
   );
   if (Option.isSome(request)) return yield* settleRequest(request.value, timeout);
+  const keyChange = yield* api.keyChanges.get({ params: { id } }).pipe(
+    answerFor(id),
+    Effect.asSome,
+    Effect.catchTag('NotFoundError', () => Effect.succeedNone),
+  );
+  if (Option.isSome(keyChange)) return yield* settleKeyChange(id, keyChange.value, timeout);
   const environmentRequest = yield* api.environmentRequests.get({ params: { id } }).pipe(
     answerFor(id),
     Effect.asSome,

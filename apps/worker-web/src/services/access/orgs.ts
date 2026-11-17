@@ -314,18 +314,14 @@ export const orgs = ({
       }
       const readers = new Set(wraps.map(({ readerId }) => readerId));
       if (readers.size !== wraps.length || !readers.has(actor.accountId)) {
-        return yield* mismatch(
-          'covers your account and each of its CLI logins and service accounts once',
-        );
+        return yield* mismatch('covers your account and each of its CLI logins and keys once');
       }
       for (const readerId of readers) {
         if (readerId === actor.accountId) continue;
         yield* serviceAccountIn(actor.accountId, readerId).pipe(
           Effect.catchTag('NotFoundError', () =>
             Effect.fail(
-              mismatch(
-                'covers only your account and the CLI logins and service accounts that still work',
-              ),
+              mismatch('covers only your account and the CLI logins and keys that still work'),
             ),
           ),
         );

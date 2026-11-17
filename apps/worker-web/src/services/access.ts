@@ -1,5 +1,5 @@
 // Who may do what. Owns `credential`, `environment`, `member_wrap`, `environment_grant`,
-// `names_key_wrap`, the requests and the environment requests: a person's CLI logins and service accounts, their orgs'
+// `names_key_wrap`, the requests, the key changes and the environment requests: a person's CLI logins and service accounts, their orgs'
 // environments and names keys, and the grants between them; and reads the organization plugin's
 // orgs. Its sub-domains are in ./access; they share one set of lookups.
 import * as D1Client from '@effect/sql-d1/D1Client';
@@ -9,6 +9,7 @@ import * as Layer from 'effect/Layer';
 import { Auth } from '../platform/auth.ts';
 import { environmentRequests } from './access/environment-requests.ts';
 import { environments } from './access/environments.ts';
+import { keyChanges } from './access/key-changes.ts';
 import { orgs } from './access/orgs.ts';
 import { requests } from './access/requests.ts';
 import { lookups as makeLookups } from './access/rows.ts';
@@ -19,6 +20,7 @@ type Methods = ReturnType<typeof serviceAccounts> &
   ReturnType<typeof orgs> &
   ReturnType<typeof environments> &
   ReturnType<typeof requests> &
+  ReturnType<typeof keyChanges> &
   ReturnType<typeof environmentRequests> &
   Pick<ReturnType<typeof makeLookups>, 'needing' | 'ownersEnvironment'>;
 
@@ -37,6 +39,7 @@ export class Access extends Context.Service<Access, Methods>()(
         ...orgs({ sql, audit, auth, lookups }),
         ...environments({ sql, audit, lookups }),
         ...requests({ sql, audit, lookups }),
+        ...keyChanges({ sql, audit, lookups }),
         ...environmentRequests({ sql, audit, lookups }),
         needing: lookups.needing,
         ownersEnvironment: lookups.ownersEnvironment,

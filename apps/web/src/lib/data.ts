@@ -9,6 +9,7 @@ import {
   type Environment,
   EnvironmentNameSchema,
   type EnvironmentRequest,
+  type KeyChange,
   type Org,
   type OrgNamesKeyWrap,
   type PairingRequest,
@@ -39,6 +40,7 @@ import * as Atom from 'effect/reactivity/Atom';
 import * as Reactivity from 'effect/reactivity/Reactivity';
 import * as Schema from 'effect/Schema';
 import { ApiClient, faultsAsDefects } from './api.ts';
+import { isApprovable } from './key-changes.ts';
 import {
   addPasskey,
   keys,
@@ -593,6 +595,7 @@ export const deleteEnvironmentAtom = ApiClient.runtime.fn(
       'pasteLinks',
       'serviceAccounts',
       'grants',
+      'keyChanges',
       'bin',
       'orgs',
       'audit',
@@ -644,7 +647,17 @@ export const restoreEnvironmentAtom = Atom.family((_id: string) =>
       ApiClient.use(client => client.environments.restore({ params: { id } })).pipe(
         faultsAsDefects,
       ),
-    { reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'bin', 'orgs', 'audit'] },
+    {
+      reactivityKeys: [
+        'environments',
+        'serviceAccounts',
+        'grants',
+        'keyChanges',
+        'bin',
+        'orgs',
+        'audit',
+      ],
+    },
   ),
 );
 
@@ -653,7 +666,7 @@ export const purgeEnvironmentAtom = Atom.family((_id: string) =>
   ApiClient.runtime.fn(
     (id: string) =>
       ApiClient.use(client => client.environments.purge({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['serviceAccounts', 'grants', 'bin', 'audit'] },
+    { reactivityKeys: ['serviceAccounts', 'grants', 'keyChanges', 'bin', 'audit'] },
   ),
 );
 
@@ -935,13 +948,15 @@ export const setExpiryAtom = ApiClient.runtime.fn(
     ApiClient.use(client =>
       client.credentials.setExpiry({ params: { id }, payload: { expiresAt } }),
     ).pipe(faultsAsDefects),
-  { reactivityKeys: ['serviceAccounts', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'keyChanges', 'audit'] },
 );
 
 export const revokeServiceAccountAtom = ApiClient.runtime.fn(
   (id: string) =>
     ApiClient.use(client => client.credentials.revoke({ params: { id } })).pipe(faultsAsDefects),
-  { reactivityKeys: ['serviceAccounts', 'grants', 'pasteLinks', 'requests', 'audit'] },
+  {
+    reactivityKeys: ['serviceAccounts', 'grants', 'pasteLinks', 'requests', 'keyChanges', 'audit'],
+  },
 );
 
 /** What a service account is to hold on one environment; neither read nor write takes it away. */
@@ -1055,16 +1070,18 @@ export const changeAccessAtom = ApiClient.runtime.fn(
       }
     }).pipe(
       // Changes are sent one by one, so a failure part-way leaves the earlier ones made: show them.
-      Effect.onError(() => Reactivity.invalidate(['serviceAccounts', 'grants', 'audit'])),
+      Effect.onError(() =>
+        Reactivity.invalidate(['serviceAccounts', 'grants', 'keyChanges', 'audit']),
+      ),
       faultsAsDefects,
     ),
-  { reactivityKeys: ['serviceAccounts', 'grants', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'grants', 'keyChanges', 'audit'] },
 );
 
 export const removeGrantAtom = ApiClient.runtime.fn(
   (params: { readonly id: string; readonly credentialId: string }) =>
     ApiClient.use(client => client.environments.removeGrant({ params })).pipe(faultsAsDefects),
-  { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
+  { reactivityKeys: ['grants', 'serviceAccounts', 'keyChanges', 'audit'] },
 );
 
 // --- requests ----------------------------------------------------------------------------------
@@ -1217,6 +1234,171 @@ export const rejectRequestAtom = Atom.family((_id: string) =>
     (id: string) =>
       ApiClient.use(client => client.requests.reject({ params: { id } })).pipe(faultsAsDefects),
     { reactivityKeys: ['requests', 'serviceAccounts', 'audit'] },
+  ),
+);
+
+// --- key changes -------------------------------------------------------------------------------
+
+export type OpenedKeyChange = Omit<KeyChange, 'holds' | 'add' | 'giveBack'> & {
+  readonly holds: ReadonlyArray<OpenedRequestItem>;
+  readonly add: ReadonlyArray<OpenedRequestItem>;
+  readonly giveBack: ReadonlyArray<OpenedRequestItem>;
+};
+
+const openItems = (items: ReadonlyArray<RequestItem>, namesKeys: NamesKeys) =>
+  Promise.all(
+    items.map(async item => ({
+      ...item,
+      openedEnvironmentName: await openStored(namesKeys, {
+        orgId: item.orgId,
+        scopeId: item.orgId,
+        name: item.environmentName,
+        sealedName: item.environmentSealedName,
+      }),
+    })),
+  );
+
+const openKeyChange = async (
+  change: KeyChange,
+  namesKeys: NamesKeys,
+): Promise<OpenedKeyChange> => ({
+  ...change,
+  holds: await openItems(change.holds, namesKeys),
+  add: await openItems(change.add, namesKeys),
+  giveBack: await openItems(change.giveBack, namesKeys),
+});
+
+const keyChangeListAtom = ApiClient.query('keyChanges', 'list', {
+  reactivityKeys: ['keyChanges'],
+});
+
+/**
+ * Key changes waiting for the owner, as the nav counts them: only those that can be approved. One
+ * whose key has ended, or that names an environment removed for good, waits on nobody.
+ */
+export const pendingKeyChangesAtom = keyChangeListAtom.pipe(
+  Atom.mapResult(({ changes }) => changes.filter(change => isApprovable(change, Date.now()))),
+);
+
+/** What waits for the owner under Keys: requests for a new key, and changes to one. */
+export const pendingKeyAsksAtom = Atom.make(get =>
+  Effect.all([get.result(pendingRequestsAtom), get.result(pendingKeyChangesAtom)]).pipe(
+    Effect.map(([requests, changes]) => [...requests, ...changes]),
+  ),
+);
+
+/** Key changes waiting for the owner, newest first. */
+export const keyChangesAtom = Atom.family((owner: Owner) =>
+  opening(
+    owner,
+    get => get.result(pendingKeyChangesAtom),
+    (changes, namesKeys) =>
+      Promise.all(
+        changes
+          .toSorted((a, b) => b.createdAt - a.createdAt)
+          .map(change => openKeyChange(change, namesKeys)),
+      ),
+  ),
+);
+
+const keyChangeQuery = Atom.family((id: string) =>
+  ApiClient.query('keyChanges', 'get', { params: { id }, reactivityKeys: ['keyChanges'] }),
+);
+
+export const keyChangeAtom = Atom.family((owner: Owner) =>
+  Atom.family((id: string) => opening(owner, get => get.result(keyChangeQuery(id)), openKeyChange)),
+);
+
+/**
+ * Approves a key change: its key is learned from what its CLI login vouched for (never the store's
+ * word), as approving a request learns it, each environment it adds gets the owner's proof of its
+ * key, read is wrapped where the change adds read, and each org it adds to gets its names key. What it gives back needs
+ * no key. Only the environments the page showed: each name is opened again first. One write, so
+ * the store has all of it or none. `expiresAt` absent keeps the key's end.
+ */
+export const approveKeyChangeAtom = Atom.family((_id: string) =>
+  ApiClient.runtime.fn(
+    ({
+      owner,
+      change,
+      expiresAt,
+    }: {
+      readonly owner: Owner;
+      readonly change: OpenedKeyChange;
+      /** The owner's choice: a time, null for no end, undefined to keep the key's end. */
+      readonly expiresAt: number | null | undefined;
+    }) =>
+      Effect.gen(function* () {
+        const orgIds = new Set(change.add.map(({ orgId }) => orgId));
+        const { wraps, namesKeys } = yield* currentNamesKeys(owner);
+        for (const orgId of orgIds) {
+          if ((yield* namesKeyFor(namesKeys, orgId)) === null) {
+            return yield* NOT_SEALED_YET('this key change');
+          }
+        }
+        for (const item of [...change.add, ...change.giveBack, ...change.holds]) {
+          yield* reopenShown(namesKeys, {
+            orgId: item.orgId,
+            scopeId: item.orgId,
+            name: item.environmentName,
+            sealedName: item.environmentSealedName,
+            shown: item.openedEnvironmentName,
+            what: 'This key change',
+          });
+        }
+        const reader =
+          change.add.length === 0
+            ? null
+            : yield* keys(
+                () =>
+                  vouchedScopedReader(owner, { serviceAccount: change.key, maker: change.maker }),
+                'Nothing your vault approved vouches for this key, so nothing can be added to it. Nothing was changed.',
+              );
+        const grants =
+          reader === null
+            ? []
+            : yield* Effect.forEach(change.add, item =>
+                Effect.gen(function* () {
+                  const { owned, keyVersion } = yield* ownedEnvironment(owner, item.environmentId);
+                  // Read is wrapped only where the change adds it, as the page showed: never
+                  // because the store says the key reads there already.
+                  const { keyProof, readWrap } = yield* keys(() =>
+                    grantToTrustedReader(owner, owned, reader, { canRead: item.canRead }),
+                  );
+                  return { environmentId: item.environmentId, readWrap, keyProof, keyVersion };
+                }),
+              );
+        const namesKeyWraps =
+          reader === null
+            ? []
+            : yield* keys(() =>
+                rewrapAll(
+                  owner,
+                  wraps.filter(({ orgId }) => orgIds.has(orgId)),
+                  reader,
+                ),
+              );
+        return yield* ApiClient.use(client =>
+          client.keyChanges.approve({
+            params: { id: change.id },
+            payload: {
+              ...(expiresAt === undefined ? {} : { expiresAt }),
+              grants,
+              namesKeyWraps,
+            },
+          }),
+        );
+      }).pipe(faultsAsDefects),
+    { reactivityKeys: ['keyChanges', 'serviceAccounts', 'grants', 'audit'] },
+  ),
+);
+
+/** One per key change, as approving is. */
+export const rejectKeyChangeAtom = Atom.family((_id: string) =>
+  ApiClient.runtime.fn(
+    (id: string) =>
+      ApiClient.use(client => client.keyChanges.reject({ params: { id } })).pipe(faultsAsDefects),
+    { reactivityKeys: ['keyChanges', 'audit'] },
   ),
 );
 

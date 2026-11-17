@@ -7,8 +7,8 @@ import { createContext, type ReactNode, use, useEffect, useState } from 'react';
 import {
   orgsAtom,
   pendingEnvironmentRequestsAtom,
+  pendingKeyAsksAtom,
   pendingPasteLinksAtom,
-  pendingRequestsAtom,
   resumeAtom,
   sealOrgsAtom,
   signOutAtom,
@@ -62,8 +62,8 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
 const NAV = [
   // Environment requests wait under Environments: approving one creates it.
   { to: '/environments', label: 'Environments', pending: pendingEnvironmentRequestsAtom },
-  // Requests wait under Keys: approving one makes its key.
-  { to: '/keys', label: 'Keys', pending: pendingRequestsAtom },
+  // Requests and key changes wait under Keys: approving one makes or changes a key.
+  { to: '/keys', label: 'Keys', pending: pendingKeyAsksAtom },
   { to: '/paste-links', label: 'Paste links', pending: pendingPasteLinksAtom },
   { to: '/activity', label: 'Activity', pending: null },
   { to: '/bin', label: 'Bin', pending: null },
@@ -73,11 +73,17 @@ const NAV = [
 type NavPath = (typeof NAV)[number]['to'];
 
 /**
- * The nav item a page belongs to: a pairing link and an ask for access are about keys, an ask for
- * an environment is about environments.
+ * The nav item a page belongs to: a pairing link, an ask for access and a key change are about
+ * keys, an ask for an environment is about environments.
  */
 const sectionOf = (path: string): NavPath | undefined => {
-  if (path.startsWith('/pair') || path.startsWith('/ask/access')) return '/keys';
+  if (
+    path.startsWith('/pair') ||
+    path.startsWith('/ask/access') ||
+    path.startsWith('/ask/change')
+  ) {
+    return '/keys';
+  }
   if (path.startsWith('/ask/create-environment')) return '/environments';
   return NAV.find(({ to }) => path.startsWith(to))?.to;
 };

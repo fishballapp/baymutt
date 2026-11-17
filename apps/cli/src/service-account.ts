@@ -75,7 +75,7 @@ const make = Effect.gen(function* () {
           usage(
             isLogin
               ? 'This login is not finished. Run `baymutt auth login` again once the owner has approved it.'
-              : 'This is a service account: it has no account key pinned at login. Run this from a computer where `baymutt auth login` ran.',
+              : 'This key comes from a request, so it has no account key pinned at login. Run this from a computer where `baymutt auth login` ran, without BAYMUTT_KEY or BAYMUTT_KEY_FILE.',
             'notLoggedIn',
           ),
         )

@@ -350,8 +350,8 @@ export const requests = ({
         return yield* new OwnerRequiredError({
           message:
             actor._tag === 'Owner'
-              ? 'A request is a CLI login’s. The owner gives a service account access from the dashboard.'
-              : 'A service account cannot ask for access. Ask from a CLI login: `baymutt ask access`.',
+              ? 'A request is a CLI login’s. The owner changes a key’s access from the dashboard.'
+              : 'A key cannot ask for access. Ask from a CLI login: `baymutt ask access`, or `baymutt ask change` to change a key it asked for.',
         });
       }
       const ids = items.map(item => item.environmentId);

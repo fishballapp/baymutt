@@ -43,9 +43,7 @@ const CredentialsLive = Layer.succeed(
     credential: (httpEffect, { credential }) =>
       isPresent(credential)
         ? withCredential(httpEffect, { _tag: 'Bearer', bearer: credential })
-        : Effect.fail(
-            new UnauthorizedError({ message: 'This request sends no service account bearer.' }),
-          ),
+        : Effect.fail(new UnauthorizedError({ message: 'This request sends no key’s bearer.' })),
     session: (httpEffect, { credential }) =>
       withCredential(httpEffect, isPresent(credential) ? { _tag: 'Session' } : { _tag: 'None' }),
   }),
@@ -116,7 +114,7 @@ const AuthenticatedLive = Layer.effect(
         if (actor === null) {
           return yield* new UnauthorizedError({
             message:
-              'Send a service account bearer (`Authorization: Bearer …`, from `baymutt auth login`), or sign in to the dashboard.',
+              'Send a key’s bearer (`Authorization: Bearer …`, from `baymutt auth login` or `baymutt ask access`), or sign in to the dashboard.',
           });
         }
         return yield* Effect.provideService(httpEffect, CurrentActor, actor);

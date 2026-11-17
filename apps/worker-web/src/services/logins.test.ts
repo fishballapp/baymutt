@@ -25,7 +25,7 @@ describe('expiry', () => {
       message: expect.stringContaining('expired'),
     });
     expect((await call(w, 'GET', '/me', ci.headers)).body).toMatchObject({
-      message: expect.stringContaining('The CLI login that made this service account expired'),
+      message: expect.stringContaining('The CLI login that asked for this key expired'),
     });
     // Still listed, so the owner can see it and extend it.
     expect(await call(w, 'GET', '/credentials', owner)).toMatchObject({

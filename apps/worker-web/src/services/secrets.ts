@@ -524,7 +524,7 @@ export class Secrets extends Context.Service<
           // a time, through `reveal`.
           if (actor._tag !== 'Credential') {
             return yield* new NoAccessError({
-              message: 'Only a service account loads an environment’s values.',
+              message: 'Only a key from an approved request loads an environment’s values.',
               need: 'read',
             });
           }
@@ -607,7 +607,7 @@ export class Secrets extends Context.Service<
           if (actor._tag !== 'Owner') {
             return yield* new OwnerRequiredError({
               message:
-                'Only an owner reveals a value, in the dashboard. A CLI login or service account loads values through varlock.',
+                'Only an owner reveals a value, in the dashboard. A key loads values through varlock.',
             });
           }
           const { environment } = yield* access.ownersEnvironment(

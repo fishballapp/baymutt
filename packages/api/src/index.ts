@@ -8,6 +8,7 @@ export * from './environments.ts';
 export * from './errors.ts';
 export * from './fields.ts';
 export * from './guards.ts';
+export * from './key-changes.ts';
 export * from './orgs.ts';
 export * from './paste-links.ts';
 export * from './requests.ts';

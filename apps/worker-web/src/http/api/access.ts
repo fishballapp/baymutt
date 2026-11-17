@@ -1,4 +1,4 @@
-/** Credentials, requests, environment requests, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
+/** Credentials, requests, key changes, environment requests, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
 import { Api, CurrentActor } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
@@ -165,6 +165,35 @@ const RequestsHandlers = HttpApiBuilder.group(
   }),
 );
 
+const KeyChangesHandlers = HttpApiBuilder.group(
+  Api,
+  'keyChanges',
+  Effect.fn(function* (handlers) {
+    const access = yield* Access;
+    return handlers.handleAll({
+      list: Effect.fn(function* () {
+        return { changes: yield* access.listKeyChanges(yield* CurrentActor) };
+      }),
+      get: Effect.fn(function* ({ params }) {
+        return yield* access.getKeyChange({ actor: yield* CurrentActor, id: params.id });
+      }),
+      create: Effect.fn(function* ({ payload }) {
+        return yield* access.createKeyChange({ actor: yield* CurrentActor, change: payload });
+      }),
+      approve: Effect.fn(function* ({ params, payload }) {
+        return yield* access.approveKeyChange({
+          actor: yield* CurrentActor,
+          id: params.id,
+          approval: payload,
+        });
+      }),
+      reject: Effect.fn(function* ({ params }) {
+        return yield* access.rejectKeyChange({ actor: yield* CurrentActor, id: params.id });
+      }),
+    });
+  }),
+);
+
 const EnvironmentRequestsHandlers = HttpApiBuilder.group(
   Api,
   'environmentRequests',
@@ -222,6 +251,7 @@ const BinHandlers = HttpApiBuilder.group(
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
   RequestsHandlers,
+  KeyChangesHandlers,
   EnvironmentRequestsHandlers,
   OrgsHandlers,
   EnvironmentsHandlers,

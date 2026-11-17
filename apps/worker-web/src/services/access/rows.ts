@@ -102,7 +102,7 @@ export const loginHoldsNothing = (
   environment: Parameters<typeof addressOf>[0],
   need: 'read' | 'write',
 ) =>
-  `A CLI login holds no environment. Ask for it: \`baymutt ask access --${need} ${addressOf(environment)} --reason "<why>"\`; the owner approves, and the key it makes holds what was asked for.`;
+  `A CLI login holds no environment. Ask for it: \`baymutt ask access --${need} ${addressOf(environment)} --reason "<why>"\`; the owner approves, and the key it makes holds what was asked for. If this task already holds a key, ask to add it to that one instead: \`baymutt ask change <its id> --${need} ${addressOf(environment)} --reason "<why>"\`.`;
 
 /**
  * The orgs a person belongs to, by their account: a subquery for `IN (…)`. A credential reaches only
@@ -202,7 +202,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         message:
           actor._tag === 'Owner' || isLogin(actor)
             ? 'No environment of your orgs has this id. List them with `baymutt env list`.'
-            : 'No environment with this id is granted to this service account. List what it holds with `baymutt env list`; a CLI login asks for more with `baymutt ask access`.',
+            : 'No environment with this id is granted to this key. List what it holds with `baymutt env list`; the CLI login that asked for it asks to add more with `baymutt ask change <its id>`.',
       });
     }
     return access;
@@ -239,7 +239,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         need,
         message: access.readerIsLogin
           ? loginHoldsNothing(access.environment, need)
-          : `This service account has no ${need} access to ${addressOf(access.environment)}. The owner can change its access in the dashboard, or a CLI login asks for a key that has it: \`baymutt ask access --${need} ${addressOf(access.environment)} --reason "<why>"\`.`,
+          : `This key has no ${need} access to ${addressOf(access.environment)}. The CLI login that asked for it asks to add it, on the same key: \`baymutt ask change ${access.readerId} --${need} ${addressOf(access.environment)} --reason "<why>"\`.`,
       }),
     );
   };
@@ -261,8 +261,7 @@ export const lookups = (sql: D1Client.D1Client) => {
               WHERE credential_id = credential.id AND status <> 'approved'))`,
   });
 
-  const notFound = () =>
-    new NotFoundError({ message: 'No CLI login or service account has this id.' });
+  const notFound = () => new NotFoundError({ message: 'No CLI login or key has this id.' });
 
   /** A working CLI login or service account of the account, or a request's key still waiting. */
   const serviceAccountIn = Effect.fnUntraced(function* (accountId: string, id: string) {
@@ -288,10 +287,7 @@ export const lookups = (sql: D1Client.D1Client) => {
   const LIMIT_WORDS = {
     orgs: ['orgs', 'Delete an empty one in the dashboard'],
     environments: ['environments across their orgs', 'Delete one in the dashboard'],
-    serviceAccounts: [
-      'CLI logins and service accounts',
-      'Revoke one with `baymutt service-account revoke`',
-    ],
+    serviceAccounts: ['CLI logins and keys', 'Revoke one with `baymutt key revoke <id>`'],
   } as const;
 
   /**

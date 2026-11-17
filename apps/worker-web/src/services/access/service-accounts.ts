@@ -102,12 +102,13 @@ export const madeBy = (sql: D1Client.D1Client, credential: NewServiceAccount, no
 
 export const credentialTaken = () =>
   new AlreadyExistsError({
-    message: 'A CLI login or service account with this id exists. Make a new key and try again.',
+    message: 'A CLI login or key with this id exists. Make a new key and try again.',
   });
 
 /**
  * Revoking the credentials `ids` selects: their bearers stop working, their grants and names key
- * copies go, and a request still waiting for one of them is closed as `request`. The first
+ * copies go, a request still waiting for one of them is closed as `request`, and a key change
+ * still waiting for one is rejected. The first
  * statement answers the ids it revoked. `onlyIf` conditions all of it inside a batch.
  */
 export const revokeStatements = (
@@ -132,6 +133,11 @@ export const revokeStatements = (
     // A request past its hour had already expired, whatever closes it now.
     sql`UPDATE access_request
       SET status = CASE WHEN created_at > ${now - REQUEST_WAIT_MS} THEN ${request} ELSE 'expired' END,
+        resolved_at = ${now}
+      WHERE credential_id IN (${ids}) AND status = 'pending' AND ${onlyIf}`,
+    // A change still waiting for a revoked key has nothing left to change.
+    sql`UPDATE key_change
+      SET status = CASE WHEN created_at > ${now - REQUEST_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
         resolved_at = ${now}
       WHERE credential_id IN (${ids}) AND status = 'pending' AND ${onlyIf}`,
   ] as const;
@@ -281,7 +287,7 @@ export const serviceAccounts = ({
     if (actor._tag !== 'Owner') {
       return yield* new OwnerRequiredError({
         message:
-          'Only the owner changes a service account’s access, from the dashboard. A CLI login asks for a key with the access it needs: `baymutt ask access`.',
+          'Only the owner changes a key’s access, from the dashboard. The CLI login that asked for it asks to change it: `baymutt ask change`.',
       });
     }
     const target = yield* approvedServiceAccountIn(actor.accountId, id);
@@ -315,7 +321,7 @@ export const serviceAccounts = ({
       }
       if (parentExpiresAt !== null && parentExpiresAt <= now) {
         return yield* new UnauthorizedError({
-          message: `The CLI login that made this service account expired on ${dayOf(parentExpiresAt)}, so this one stopped with it. The owner can extend that login in the dashboard.`,
+          message: `The CLI login that asked for this key expired on ${dayOf(parentExpiresAt)}, so this one stopped with it. The owner can extend that login in the dashboard.`,
         });
       }
       // Coarse on purpose: one write a minute per service account, not one a request.
@@ -540,7 +546,7 @@ export const serviceAccounts = ({
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'Only the owner changes when a CLI login or service account expires, from the dashboard.',
+            'Only the owner changes when a CLI login or key expires, from the dashboard. The CLI login that asked for a key may ask for a new end: `baymutt ask change <id> --expires …`.',
         });
       }
       const target = yield* approvedServiceAccountIn(actor.accountId, id);
@@ -574,7 +580,7 @@ export const serviceAccounts = ({
       if (!isOwn) {
         return yield* new OwnerRequiredError({
           message:
-            'A CLI login revokes itself and the service accounts it asked for. The owner revokes any, from the dashboard.',
+            'A CLI login revokes itself and the keys it asked for. The owner revokes any, from the dashboard.',
         });
       }
       const now = yield* Clock.currentTimeMillis;

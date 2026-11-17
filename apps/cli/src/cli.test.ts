@@ -182,6 +182,17 @@ type StoredRequest = {
   items: RequestItem[];
 };
 
+type StoredKeyChange = {
+  id: string;
+  status: string;
+  lifetime: number | null;
+  key: { id: string; publicKey: string; keyVoucher: string | null; expiresAt: number | null };
+  maker: { id: string; publicKey: string; endorsement: string | null };
+  holds: RequestItem[];
+  add: RequestItem[];
+  giveBack: RequestItem[];
+};
+
 /** The owner: a real vault and account key, and the dashboard's side of each ceremony. */
 const makeOwner = async (world: TestWorld) => {
   const user = world.user();
@@ -396,6 +407,38 @@ const makeOwner = async (world: TestWorld) => {
       });
     },
     rejectRequest: (id: string) => api('POST', `/requests/${id}/reject`),
+    keyChange: (id: string) => api<StoredKeyChange>('GET', `/key-changes/${id}`),
+    /**
+     * What the change page does on Approve: the key learned from what its CLI login vouched for,
+     * each environment it adds wrapped to it as it reads after the change. `end`: absent keeps the
+     * key's end, as the page's "keep" does.
+     */
+    approveKeyChange: async (id: string, end: { readonly expiresAt?: number | null } = {}) => {
+      const change = await api<StoredKeyChange>('GET', `/key-changes/${id}`);
+      const reader = await vouchedScopedReader(keys, {
+        serviceAccount: change.key,
+        maker: change.maker,
+      });
+      const grants = await Promise.all(
+        change.add.map(async item => {
+          const environment = await owned(item.environmentId);
+          return {
+            environmentId: item.environmentId,
+            keyVersion: environment.keyVersion,
+            ...(await grantToTrustedReader(keys, environment, reader, item)),
+          };
+        }),
+      );
+      return api<StoredKeyChange>('POST', `/key-changes/${id}/approve`, {
+        ...end,
+        grants,
+        namesKeyWraps: await namesKeyWrapsFor(
+          reader,
+          new Set(change.add.map(({ orgId }) => orgId)),
+        ),
+      });
+    },
+    rejectKeyChange: (id: string) => api('POST', `/key-changes/${id}/reject`),
     environmentRequest: (id: string) =>
       api<StoredEnvironmentRequest>('GET', `/environment-requests/${id}`),
     /** What the environment request page does on Create environment: the key pair made here, the request answered in the same write. */
@@ -678,10 +721,13 @@ layer(NodeServices.layer)(it => {
           ['secrets', 'acme/app/production'],
           ['set', 'acme/app/production', 'API_KEY'],
           ['service-accounts', 'list'],
+          // `service-account` became `key`, with no alias.
+          ['service-account', 'list'],
+          ['service-account', 'revoke', 'some-id'],
           // `list` is explicit, with no `ls` for it.
           ['env', 'ls'],
           ['bin', 'ls'],
-          ['service-account', 'ls'],
+          ['key', 'ls'],
         ]) {
           expect((yield* run(world, laptop, args)).exitCode, args.join(' ')).not.toBe(0);
         }
@@ -690,15 +736,7 @@ layer(NodeServices.layer)(it => {
           environments: [],
         });
         // A bare group prints its help, as `ask` does.
-        for (const group of [
-          'auth',
-          'org',
-          'env',
-          'secret',
-          'bin',
-          'service-account',
-          'activity',
-        ]) {
+        for (const group of ['auth', 'org', 'env', 'secret', 'bin', 'key', 'activity']) {
           const bare = yield* run(world, laptop, [group]);
           expect(bare.json, group).toBeUndefined();
           expect(bare.stdout + bare.stderr, group).toContain('SUBCOMMANDS');
@@ -1107,9 +1145,7 @@ layer(NodeServices.layer)(it => {
 
         expect(failed.exitCode).toBe(2);
         expect(failed.error.message).toContain('revoked');
-        expect(
-          (yield* run(world, laptop, ['service-account', 'list'])).json.credentials,
-        ).toHaveLength(1);
+        expect((yield* run(world, laptop, ['key', 'list'])).json.keys).toHaveLength(1);
       }),
     );
 
@@ -1154,7 +1190,7 @@ layer(NodeServices.layer)(it => {
         const keys = `${laptop.configHome}/baymutt/localhost-5183/keys`;
         const waiting = yield* ask(world, laptop, ['--read', 'acme/app/production']);
         const revoked = yield* ask(world, laptop, ['--read', 'acme/app/production']);
-        yield* run(world, laptop, ['service-account', 'revoke', revoked]);
+        yield* run(world, laptop, ['key', 'revoke', revoked]);
         const stray = crypto.randomUUID();
         yield* fs.writeFileString(`${keys}/${stray}`, 'baymutt_key_stray\n');
         // A file this young may be an ask in another terminal that has not sent its request yet.
@@ -1385,6 +1421,452 @@ layer(NodeServices.layer)(it => {
     );
   });
 
+  describe('ask change', () => {
+    /** A key file that reads acme/app/production, and the environments a change can add. */
+    const holding = Effect.gen(function* () {
+      const context = yield* paired;
+      const { world, owner, laptop } = context;
+      yield* Effect.promise(async () => {
+        for (const address of ['acme/app/production', 'acme/app/staging']) {
+          await owner.createEnvironment(address);
+          await owner.set(address, 'API_KEY', `for ${address}`);
+        }
+      });
+      const { id, agent } = yield* askApproved(world, owner, laptop, [
+        '--read',
+        'acme/app/production',
+      ]);
+      return { ...context, keyId: id, agent };
+    });
+
+    const change = Effect.fnUntraced(function* (
+      world: TestWorld,
+      login: Seat,
+      keyId: string,
+      args: ReadonlyArray<string>,
+    ) {
+      return yield* run(world, login, ['ask', 'change', keyId, '--reason', 'one more', ...args]);
+    });
+
+    it.effect(
+      'adds to the key this task holds: the same key file holds the new set once approved',
+      () =>
+        Effect.gen(function* () {
+          const { world, owner, laptop, keyId, agent } = yield* holding;
+          const before = yield* Effect.promise(() => owner.keyChange(keyId).catch(() => null));
+          expect(before).toBeNull();
+
+          const asked = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+          expect(asked).toMatchObject({
+            exitCode: 0,
+            json: {
+              status: 'pending',
+              key: keyId,
+              url: `${ORIGIN}/ask/change/${asked.json.id}`,
+              next: expect.stringMatching(/last line.*in the background.*keeps working/s),
+            },
+          });
+          // Until the owner answers, the key holds what it held.
+          expect(yield* isRefused(load(world, agent, 'acme/app/staging'))).toBe(true);
+          expect(yield* load(world, agent, 'acme/app/production')).toEqual({
+            API_KEY: 'for acme/app/production',
+          });
+          const asOwner = yield* Effect.promise(() => owner.keyChange(asked.json.id));
+          const end = asOwner.key.expiresAt;
+
+          yield* Effect.promise(() => owner.approveKeyChange(asked.json.id));
+          const done = yield* run(world, laptop, ['ask', 'wait', asked.json.id]);
+          expect(done).toMatchObject({
+            exitCode: 0,
+            json: {
+              id: asked.json.id,
+              status: 'approved',
+              key: keyId,
+              keyFile: agent.env?.BAYMUTT_KEY_FILE,
+              // Its end is kept unless a new one was asked for.
+              expiresAt: end,
+              environments: expect.arrayContaining([
+                { environment: 'acme/app/production', canRead: true, canWrite: false },
+                { environment: 'acme/app/staging', canRead: true, canWrite: false },
+              ]),
+            },
+          });
+          expect(yield* load(world, agent, 'acme/app/staging')).toEqual({
+            API_KEY: 'for acme/app/staging',
+          });
+          expect(yield* load(world, agent, 'acme/app/production')).toEqual({
+            API_KEY: 'for acme/app/production',
+          });
+          // One key for the task, not two.
+          const { keys } = (yield* run(world, laptop, ['key', 'list'])).json;
+          expect(keys.filter((key: { kind: string }) => key.kind === 'agent-key')).toHaveLength(1);
+        }),
+    );
+
+    it.effect('gives back at once, with no approval', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop, keyId, agent } = yield* holding;
+        const added = yield* change(world, laptop, keyId, ['--read-write', 'acme/app/staging']);
+        yield* Effect.promise(() => owner.approveKeyChange(added.json.id));
+        expect((yield* run(world, laptop, ['ask', 'wait', added.json.id])).exitCode).toBe(0);
+
+        const given = yield* change(world, laptop, keyId, ['--give-back', 'acme/app/production']);
+        expect(given).toMatchObject({
+          exitCode: 0,
+          json: {
+            status: 'applied',
+            key: keyId,
+            environments: [{ environment: 'acme/app/staging', canRead: true, canWrite: true }],
+          },
+        });
+        expect(yield* isRefused(load(world, agent, 'acme/app/production'))).toBe(true);
+        expect(yield* load(world, agent, 'acme/app/staging')).toEqual({
+          API_KEY: 'for acme/app/staging',
+        });
+      }),
+    );
+
+    it.effect('adds and gives back as one approval', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop, keyId, agent } = yield* holding;
+        const asked = yield* change(world, laptop, keyId, [
+          '--read',
+          'acme/app/staging',
+          '--give-back',
+          'acme/app/production',
+        ]);
+        expect(asked.json.status).toBe('pending');
+        // Nothing is given back before the owner answers.
+        expect(yield* load(world, agent, 'acme/app/production')).toMatchObject({});
+        yield* Effect.promise(() => owner.approveKeyChange(asked.json.id));
+        expect((yield* run(world, laptop, ['ask', 'wait', asked.json.id])).json).toMatchObject({
+          status: 'approved',
+          environments: [{ environment: 'acme/app/staging', canRead: true, canWrite: false }],
+        });
+        expect(yield* isRefused(load(world, agent, 'acme/app/production'))).toBe(true);
+      }),
+    );
+
+    it.effect('rejected, or withdrawn, leaves the key and its file as they were', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, owner, laptop, keyId, agent } = yield* holding;
+        const keyFile = agent.env?.BAYMUTT_KEY_FILE ?? '';
+        const rejected = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+        yield* Effect.promise(() => owner.rejectKeyChange(rejected.json.id));
+        const answer = yield* run(world, laptop, ['ask', 'wait', rejected.json.id]);
+        expect(answer.exitCode).toBe(4);
+        expect(answer.error.message).toContain('holds what it held before');
+
+        const withdrawn = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+        expect(
+          (yield* run(world, laptop, ['ask', 'cancel', withdrawn.json.id])).json,
+        ).toMatchObject({ status: 'cancelled', key: keyId });
+
+        expect(yield* fs.exists(keyFile)).toBe(true);
+        expect(yield* load(world, agent, 'acme/app/production')).toEqual({
+          API_KEY: 'for acme/app/production',
+        });
+        expect(yield* isRefused(load(world, agent, 'acme/app/staging'))).toBe(true);
+      }),
+    );
+
+    it.effect('asks for a new end, counted from the approval', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop, keyId } = yield* holding;
+        const asked = yield* change(world, laptop, keyId, ['--expires', '1d']);
+        expect(asked.json.status).toBe('pending');
+        expect((yield* Effect.promise(() => owner.keyChange(asked.json.id))).lifetime).toBe(
+          24 * 3600 * 1000,
+        );
+        const until = Date.now() + 24 * 3600 * 1000;
+        yield* Effect.promise(() => owner.approveKeyChange(asked.json.id, { expiresAt: until }));
+        expect((yield* run(world, laptop, ['ask', 'wait', asked.json.id])).json).toMatchObject({
+          status: 'approved',
+          expiresAt: until,
+        });
+      }),
+    );
+
+    it.effect('checks what the key holds, not what the store says was approved', () =>
+      Effect.gen(function* () {
+        const { world, laptop, keyId } = yield* holding;
+        const asked = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+        world.sqlite
+          .prepare("UPDATE key_change SET status = 'approved' WHERE id = ?")
+          .run(asked.json.id);
+        const answer = yield* run(world, laptop, ['ask', 'wait', asked.json.id]);
+        expect(answer.exitCode).toBe(8);
+        expect(answer.error.message).toContain('does not hold what it added');
+      }),
+    );
+
+    describe('checks the key against what was asked here, not what the store says', () => {
+      const lied = Effect.fnUntraced(function* (
+        world: TestWorld,
+        laptop: Seat,
+        changeId: string,
+        lie: string,
+        ...params: ReadonlyArray<string>
+      ) {
+        world.sqlite.prepare(lie).run(...params);
+        world.sqlite
+          .prepare("UPDATE key_change SET status = 'approved' WHERE id = ?")
+          .run(changeId);
+        return yield* run(world, laptop, ['ask', 'wait', changeId]);
+      });
+
+      it.effect('what it added: none, or one the key already held', () =>
+        Effect.gen(function* () {
+          const { world, laptop, keyId, owner } = yield* holding;
+          const production = owner.environmentAt('acme/app/production').id;
+          const none = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+          const emptied = yield* lied(
+            world,
+            laptop,
+            none.json.id,
+            'DELETE FROM key_change_item WHERE change_id = ?',
+            none.json.id,
+          );
+          expect(emptied.exitCode).toBe(8);
+
+          const swapped = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+          const held = yield* lied(
+            world,
+            laptop,
+            swapped.json.id,
+            'UPDATE key_change_item SET environment_id = ? WHERE change_id = ?',
+            production,
+            swapped.json.id,
+          );
+          expect(held.exitCode).toBe(8);
+        }),
+      );
+
+      it.effect('which key it changed', () =>
+        Effect.gen(function* () {
+          const { world, owner, laptop, keyId } = yield* holding;
+          const other = yield* askApproved(world, owner, laptop, ['--read', 'acme/app/staging']);
+          const asked = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+          const answer = yield* lied(
+            world,
+            laptop,
+            asked.json.id,
+            'UPDATE key_change SET credential_id = ? WHERE id = ?',
+            other.id,
+            asked.json.id,
+          );
+          expect(answer.exitCode).toBe(8);
+          expect(answer.error.message).toContain(other.id);
+        }),
+      );
+
+      it.effect('a read it added: opened with the key, not taken from a proof', () =>
+        Effect.gen(function* () {
+          const { world, owner, laptop } = yield* paired;
+          yield* Effect.promise(() => owner.createEnvironment('acme/app/production'));
+          const writer = yield* askApproved(world, owner, laptop, [
+            '--write',
+            'acme/app/production',
+          ]);
+          const reader = yield* askApproved(world, owner, laptop, [
+            '--read',
+            'acme/app/production',
+          ]);
+          const asked = yield* change(world, laptop, writer.id, ['--read', 'acme/app/production']);
+          // Another key's wrap: it does not open with this key.
+          const answer = yield* lied(
+            world,
+            laptop,
+            asked.json.id,
+            `UPDATE environment_grant SET read_wrap =
+               (SELECT read_wrap FROM environment_grant WHERE credential_id = ?)
+             WHERE credential_id = ?`,
+            reader.id,
+            writer.id,
+          );
+          expect(answer.exitCode).toBe(8);
+        }),
+      );
+
+      it.effect('an answer about another change is refused, and its record is kept', () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { world, owner, laptop, keyId } = yield* holding;
+          // X is approved and not yet picked up; Y waits.
+          const x = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+          yield* Effect.promise(() => owner.approveKeyChange(x.json.id));
+          const y = yield* change(world, laptop, keyId, ['--expires', '1d']);
+          // The store answers for Y with X's change.
+          const realFetch = world.fetch;
+          const swapped = {
+            ...world,
+            fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+              const url = new URL(input instanceof Request ? input.url : String(input));
+              return url.pathname === `/api/v1/key-changes/${y.json.id}`
+                ? realFetch(new URL(`/api/v1/key-changes/${x.json.id}`, url).href, init)
+                : realFetch(input, init);
+            },
+          } as TestWorld;
+          const answer = yield* run(swapped, laptop, ['ask', 'wait', y.json.id]);
+          expect(answer.exitCode).toBe(8);
+          // X's record is still here, so X is still checked when it is waited for.
+          const keys = `${laptop.configHome}/baymutt/localhost-5183/keys`;
+          expect(yield* fs.exists(`${keys}/${x.json.id}.change`)).toBe(true);
+          expect((yield* run(world, laptop, ['ask', 'wait', x.json.id])).exitCode).toBe(0);
+        }),
+      );
+
+      it.effect('a change asked on another computer, or whose record is gone, is not checked', () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { world, owner, laptop, keyId } = yield* holding;
+          const asked = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+          yield* fs.remove(
+            `${laptop.configHome}/baymutt/localhost-5183/keys/${asked.json.id}.change`,
+          );
+          yield* Effect.promise(() => owner.approveKeyChange(asked.json.id));
+          const answer = yield* run(world, laptop, ['ask', 'wait', asked.json.id]);
+          expect(answer.exitCode).toBe(5);
+          expect(answer.error.message).toContain('not asked on this computer');
+        }),
+      );
+    });
+
+    describe('a service account', () => {
+      /** A service account this login asked for, its key piped into a command that keeps it in `file`. */
+      const serviceAccount = Effect.gen(function* () {
+        const context = yield* holding;
+        const { world, owner, laptop } = context;
+        const directory = yield* tempDirectory;
+        const file = `${directory}/ci-key`;
+        const id = yield* ask(world, laptop, [
+          '--read',
+          'acme/app/production',
+          '--',
+          'sh',
+          '-c',
+          `cat > ${file}`,
+        ]);
+        yield* Effect.promise(() => owner.approveRequest(id));
+        expect((yield* run(world, laptop, ['ask', 'wait', id])).exitCode).toBe(0);
+        return { ...context, ciId: id, ci: withKeyFile(laptop, file) };
+      });
+
+      it.effect('is changed the same way, and the result says what it could not check', () =>
+        Effect.gen(function* () {
+          const { world, owner, laptop, ciId, ci } = yield* serviceAccount;
+          const asked = yield* change(world, laptop, ciId, ['--read', 'acme/app/staging']);
+          expect(asked.json).toMatchObject({ status: 'pending', key: ciId });
+          yield* Effect.promise(() => owner.approveKeyChange(asked.json.id));
+          const done = yield* run(world, laptop, ['ask', 'wait', asked.json.id]);
+          expect(done).toMatchObject({
+            exitCode: 0,
+            json: {
+              status: 'approved',
+              key: ciId,
+              unchecked: expect.stringContaining('were not checked'),
+              next: expect.stringContaining('next load'),
+              environments: expect.arrayContaining([
+                { environment: 'acme/app/staging', canRead: true, canWrite: false },
+              ]),
+            },
+          });
+          expect(done.json.keyFile).toBeUndefined();
+          // What could not be checked here, its own key proves.
+          expect(yield* load(world, ci, 'acme/app/staging')).toEqual({
+            API_KEY: 'for acme/app/staging',
+          });
+        }),
+      );
+
+      it.effect(
+        'an agent key the store calls a service account is still checked with its key',
+        () =>
+          Effect.gen(function* () {
+            const { world, owner, laptop, keyId } = yield* holding;
+            // The store calls the agent key a service account before the change is asked.
+            world.sqlite
+              .prepare("UPDATE credential SET intent = 'service-account' WHERE id = ?")
+              .run(keyId);
+            const asked = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+            // Then lists it holding staging, under production's wrap and proof, and says approved.
+            world.sqlite
+              .prepare(
+                `INSERT INTO environment_grant
+                 (environment_id, credential_id, can_write, read_wrap, key_proof, key_version, created_at)
+               SELECT ?, credential_id, 0, read_wrap, key_proof, key_version, created_at
+               FROM environment_grant WHERE credential_id = ?`,
+              )
+              .run(owner.environmentAt('acme/app/staging').id, keyId);
+            world.sqlite
+              .prepare("UPDATE key_change SET status = 'approved' WHERE id = ?")
+              .run(asked.json.id);
+            const answer = yield* run(world, laptop, ['ask', 'wait', asked.json.id]);
+            expect(answer.exitCode).toBe(8);
+          }),
+      );
+
+      it.effect('a forged approval the store’s own account gives away is caught', () =>
+        Effect.gen(function* () {
+          const { world, laptop, ciId } = yield* serviceAccount;
+          const asked = yield* change(world, laptop, ciId, ['--read', 'acme/app/staging']);
+          world.sqlite
+            .prepare("UPDATE key_change SET status = 'approved' WHERE id = ?")
+            .run(asked.json.id);
+          const answer = yield* run(world, laptop, ['ask', 'wait', asked.json.id]);
+          expect(answer.exitCode).toBe(8);
+          expect(answer.error.message).toContain('does not list');
+        }),
+      );
+    });
+
+    it.effect('is refused what would not change anything, and from the key itself', () =>
+      Effect.gen(function* () {
+        const { world, laptop, keyId, agent } = yield* holding;
+        const refused = function* (args: ReadonlyArray<string>, exitCode: number, seat = laptop) {
+          const answer = yield* change(world, seat, keyId, args);
+          expect(answer.exitCode, args.join(' ')).toBe(exitCode);
+          return answer;
+        };
+        yield* refused([], 2);
+        yield* refused(['--read', 'acme/app/production'], 6);
+        yield* refused(['--give-back', 'acme/app/staging'], 2);
+        yield* refused(['--read', 'acme/app/nowhere'], 5);
+        yield* refused(['--read', 'acme/app/staging'], 2, agent);
+        expect(
+          (yield* run(world, laptop, [
+            'ask',
+            'change',
+            crypto.randomUUID(),
+            '--reason',
+            'r',
+            '--read',
+            'acme/app/staging',
+          ])).exitCode,
+        ).toBe(5);
+
+        const first = yield* change(world, laptop, keyId, ['--read', 'acme/app/staging']);
+        const second = yield* refused(['--write', 'acme/app/staging'], 6);
+        expect(second.error.message).toContain(first.json.id);
+        // Waited on together with another ask, as any ask is.
+        const other = yield* ask(world, laptop, ['--read', 'acme/app/staging']);
+        const both = yield* run(world, laptop, [
+          'ask',
+          'wait',
+          '--timeout',
+          '0',
+          first.json.id,
+          other,
+        ]);
+        expect(both.exitCode).toBe(9);
+        expect(both.lines.map((line: { id: string }) => line.id).toSorted()).toEqual(
+          [first.json.id, other].toSorted(),
+        );
+      }),
+    );
+  });
+
   describe('ask create-environment', () => {
     it.effect('asks the owner for a new environment, which gives nobody access', () =>
       Effect.gen(function* () {
@@ -1568,12 +2050,13 @@ layer(NodeServices.layer)(it => {
         expect(new Set(activity.flatMap(({ environmentName }) => environmentName ?? []))).toEqual(
           new Set(['app/production']),
         );
-        const { credentials } = (yield* run(world, laptop, ['service-account', 'list'])).json;
-        expect(credentials).toMatchObject(
+        const { keys } = (yield* run(world, laptop, ['key', 'list'])).json;
+        expect(keys).toMatchObject(
           expect.arrayContaining([
-            expect.objectContaining({ id: loginId, grants: [] }),
+            expect.objectContaining({ id: loginId, kind: 'cli-login', grants: [] }),
             expect.objectContaining({
               id,
+              kind: 'agent-key',
               parentId: loginId,
               grants: [
                 expect.objectContaining({
@@ -1585,7 +2068,7 @@ layer(NodeServices.layer)(it => {
             }),
           ]),
         );
-        expect((yield* run(world, agent, ['auth', 'whoami'])).json.credential).toMatchObject({
+        expect((yield* run(world, agent, ['auth', 'whoami'])).json.key).toMatchObject({
           id,
           grants: [{ environmentName: 'app/production' }],
         });
@@ -2245,7 +2728,7 @@ layer(NodeServices.layer)(it => {
           // A service account's key file, or one that is not there, logs nothing out.
           const asAgent = yield* run(world, agent, ['auth', 'logout']);
           expect(asAgent.exitCode).toBe(2);
-          expect(asAgent.error.message).toContain('baymutt service-account revoke');
+          expect(asAgent.error.message).toContain('baymutt key revoke');
           const missing = withKeyFile(laptop, `${laptop.configHome}/no such key`);
           expect((yield* run(world, missing, ['auth', 'logout'])).exitCode).toBe(3);
           expect(yield* fs.exists(keys)).toBe(true);

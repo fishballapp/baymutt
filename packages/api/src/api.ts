@@ -10,6 +10,7 @@ import { CredentialsGroup } from './credentials.ts';
 import { EnvironmentRequestsGroup } from './environment-requests.ts';
 import { EnvironmentsGroup } from './environments.ts';
 import { RequestValidation } from './guards.ts';
+import { KeyChangesGroup } from './key-changes.ts';
 import { OrgsGroup } from './orgs.ts';
 import { PasteGroup, PasteLinksGroup } from './paste-links.ts';
 import { RequestsGroup } from './requests.ts';
@@ -19,6 +20,7 @@ export class Api extends HttpApi.make('baymutt')
   .add(AccountGroup)
   .add(CredentialsGroup)
   .add(RequestsGroup)
+  .add(KeyChangesGroup)
   .add(OrgsGroup)
   .add(EnvironmentsGroup)
   .add(EnvironmentRequestsGroup)

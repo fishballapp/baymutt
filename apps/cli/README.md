@@ -1,6 +1,6 @@
 # @baymutt/cli
 
-The `baymutt` command: everything a CLI login, a service account or a coding agent does with
+The `baymutt` command: everything a CLI login, a key or a coding agent does with
 [baymutt](https://baymutt.fsh.ba), a zero-knowledge secret store. Also published as
 [`baymutt`](https://www.npmjs.com/package/baymutt).
 
@@ -9,7 +9,9 @@ npm install -g @baymutt/cli
 baymutt auth login                       # once per computer: prints a link; the owner opens it and approves
 baymutt secret list acme/app/production  # names, versions and sizes; never a value
 baymutt ask access --read acme/app/production --reason "run the migration" --expires 1h
+baymutt ask change <id> --read acme/app/staging --reason "the migration moves on to staging"
 baymutt ask wait <id> [<id>…]            # returns once the owner has answered what was asked
+baymutt key list                         # this login's keys: cli-login, agent-key or service-account
 baymutt auth logout                      # revokes this CLI login and forgets its key
 ```
 
@@ -21,6 +23,15 @@ baymutt auth logout                      # revokes this CLI login and forgets it
   the request waits an hour. `--read-write` asks for both in one approval; two separate asks cost
   the owner two. `ask wait <id>` returns once the owner has approved or rejected it: approved, it
   prints the path of a key file, used as `BAYMUTT_KEY_FILE=<path>`.
+- Within a task, change the key you hold rather than asking for another: `ask change <id>` adds
+  environments or access (`--read`, `--write`, `--read-write`), gives back what is no longer needed
+  (`--give-back`), or asks for a new end (`--expires`, from the approval). The same key file keeps
+  working, and holds the new set once the owner approves; giving back alone takes effect at once.
+  Rejected or expired, the key holds what it held. Ask for a new key only for a different job.
+  A service account this login asked for (piped into a command) is changed the same way; with no
+  key file here, `ask wait` checks only the store's listing of it and says what it did not check
+  (`unchecked`). `ask wait` proves an added read by opening it with the key; an added write and a
+  new end are the store's own to enforce, so there is nothing to check them against.
 - The owner sees only your reply to them, not a command's output: end that reply with the link
   alone on its last line, and run `ask wait` in the background or after that reply, since a wait
   that blocks first hides the link. `ask wait <id> <id> …` waits for several asks, of any kind,
@@ -31,7 +42,7 @@ baymutt auth logout                      # revokes this CLI login and forgets it
   next, with a stable exit code: 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict,
   7 unreachable, 8 integrity, 9 check differs.
 - Every command is a thing and an action: `auth`, `ask`, `org`, `env`, `secret`, `bin`,
-  `service-account`, `activity`. `baymutt <thing> --help` lists its actions.
+  `key`, `activity`. `baymutt <thing> --help` lists its actions.
 - No command prints a value. `secret set` reads one from stdin, `secret generate` makes one
   without showing it,
   and `ask access … -- <command>` asks for a key that stays (for CI): `ask wait` pipes it into the
@@ -40,7 +51,8 @@ baymutt auth logout                      # revokes this CLI login and forgets it
 - `ask create-environment <org>/<name> --reason …` asks the owner for a new environment; it
   gives no access. `ask cancel <id>` withdraws anything asked.
 - A CLI login's key is kept in the login keychain on a Mac and in an owner-only file elsewhere. A
-  CI job holds a service account's as `BAYMUTT_KEY`.
+  CI job holds a service account's key as `BAYMUTT_KEY`. `key list` tells the three apart
+  (`kind`), and `key revoke <id>` revokes one.
 
 `baymutt --help` lists every command. To load an environment's values into a process, use
 [`@baymutt/varlock-plugin`](https://www.npmjs.com/package/@baymutt/varlock-plugin).

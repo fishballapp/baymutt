@@ -1,4 +1,4 @@
-// Service accounts: listing and revoking them, and the activity. A service account comes from a
+// Keys: listing and revoking them, and the activity. A key other than a CLI login comes from a
 // request (`baymutt ask access`) the owner approved.
 import type { ActivityEvent, ServiceAccount as Listed } from '@baymutt/api';
 import * as Argument from 'effect/cli/Argument';
@@ -12,8 +12,24 @@ import { type NamesKeys, openStoredName } from '../names.ts';
 import { print } from '../output.ts';
 import { ServiceAccount } from '../service-account.ts';
 
-/** A credential as listed, the environments it holds named as written. */
-export const namedCredential = (namesKeys: NamesKeys, { grants, ...credential }: Listed) =>
+/**
+ * Which of the three a key is: a CLI login (`baymutt auth login`), a service account (made for
+ * another system: its ask gave a command to pipe it into) or an agent key (an agent's own, kept
+ * in a file). The store says which in `intent`; a key it has none for is told by its end.
+ */
+export const kindOf = ({
+  parentId,
+  intent,
+  expiresAt,
+}: Pick<Listed, 'parentId' | 'intent' | 'expiresAt'>) => {
+  if (parentId === null) return 'cli-login';
+  if (intent === 'agent') return 'agent-key';
+  if (intent === 'service-account') return 'service-account';
+  return expiresAt === null ? 'service-account' : 'agent-key';
+};
+
+/** A key as listed: which kind it is, and the environments it holds named as written. */
+export const namedKey = (namesKeys: NamesKeys, { grants, ...key }: Listed) =>
   Effect.map(
     Effect.forEach(
       grants,
@@ -27,27 +43,25 @@ export const namedCredential = (namesKeys: NamesKeys, { grants, ...credential }:
         ),
       { concurrency: 'unbounded' },
     ),
-    named => ({ ...credential, grants: named }),
+    named => ({ kind: kindOf(key), ...key, grants: named }),
   );
 
 const listCommand = Command.make(
   'list',
   {},
-  Effect.fn('service-account.list')(function* () {
+  Effect.fn('key.list')(function* () {
     const { api } = yield* ServiceAccount;
     const [{ credentials }, { namesKeys }] = yield* Effect.all(
       [api.credentials.list(), listEnvironments()],
       { concurrency: 2 },
     );
     yield* print({
-      credentials: yield* Effect.forEach(credentials, credential =>
-        namedCredential(namesKeys, credential),
-      ),
+      keys: yield* Effect.forEach(credentials, credential => namedKey(namesKeys, credential)),
     });
   }, report),
 ).pipe(
   Command.withDescription(
-    'This CLI login or service account, and the service accounts its requests made, with what each holds',
+    'This key, and the keys it asked for, with what each holds. `kind` says which each is: `cli-login` (made by `baymutt auth login`, lists names and holds no environment), `agent-key` (asked for with `baymutt ask access` and kept in a file, for an agent’s own work) or `service-account` (asked for with a command after --, for another system such as CI)',
   ),
 );
 
@@ -56,23 +70,23 @@ const revokeCommand = Command.make(
   {
     id: Argument.String('id').pipe(
       Argument.withDescription(
-        'The id of a service account this CLI login asked for, or of this one itself (see `baymutt service-account list`). To revoke this computer’s own CLI login and forget its key, use `baymutt auth logout`',
+        'The id of a key this CLI login asked for, or of this key itself (see `baymutt key list`). To revoke this computer’s own CLI login and forget its key, use `baymutt auth logout`',
       ),
     ),
   },
-  Effect.fn('service-account.revoke')(function* ({ id }) {
+  Effect.fn('key.revoke')(function* ({ id }) {
     const { api } = yield* ServiceAccount;
     yield* print(yield* api.credentials.revoke({ params: { id } }));
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke a service account this CLI login asked for, or this one itself by its id, with every service account it asked for. What it already read stays read',
+    'Revoke a key this CLI login asked for, or this key itself by its id, with every key it asked for. What it already read stays read. To give back only some of what a key holds, use `baymutt ask change <id> --give-back <org>/<name>`',
   ),
 );
 
-export const serviceAccountCommand = Command.make('service-account').pipe(
+export const keyCommand = Command.make('key').pipe(
   Command.withDescription(
-    'List and revoke service accounts. A new one comes from `baymutt ask access`, once the owner approves it',
+    'List and revoke keys. A new one comes from `baymutt ask access` once the owner approves it; `baymutt ask change` changes what one holds',
   ),
   Command.withSubcommands([listCommand, revokeCommand]),
   Command.provide(ServiceAccount.layer),
@@ -135,7 +149,7 @@ const activityListCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'What this CLI login or service account did, newest first. The owner reads all of an org’s activity in the dashboard',
+    'What this key did, newest first. The owner reads all of an org’s activity in the dashboard',
   ),
 );
 

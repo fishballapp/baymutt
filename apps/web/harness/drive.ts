@@ -580,16 +580,6 @@ const main = async (browser: Browser) => {
   await page.goto(`${WEB}/ask/create-environment/${crypto.randomUUID()}`);
   await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
   check('a missing environment request says so', true);
-  // CLI 0.8.0 printed these links, and the first two paths of the dashboard were named for it.
-  const oldId = crypto.randomUUID();
-  await page.goto(`${WEB}/environment-requests/${oldId}`);
-  await page.waitForURL(`${WEB}/ask/create-environment/${oldId}`);
-  await page.goto(`${WEB}/requests/${oldId}`);
-  await page.waitForURL(`${WEB}/ask/access/${oldId}`);
-  await page.goto(`${WEB}/service-accounts`);
-  await page.waitForURL(`${WEB}/keys`);
-  check('the paths CLI 0.8.0 printed, and the old name of Keys, redirect', true);
-
   // --- a rejected request ---------------------------------------------------------------------
   const rejected = laptop.cli([
     'ask',
@@ -609,6 +599,155 @@ const main = async (browser: Browser) => {
   await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
   await shoot(page, '08g-request-missing');
   check('a missing request says so', true);
+
+  // --- baymutt ask change: the same key gains, gives back, and gets a new end -------------------
+  const agentId: string = asked.json.id;
+  const changeKey = (args: readonly string[]) => laptop.cli(['ask', 'change', agentId, ...args]);
+  const loadsWithAgentKey = (environment: string) =>
+    laptop
+      .cli(['env', 'list'], { keyFile: agentKey })
+      .json?.environments?.some(
+        (listed: { address: string; canRead: boolean }) =>
+          listed.address === environment && listed.canRead,
+      ) === true;
+  const agentEnds = laptop
+    .cli(['key', 'list'])
+    .json?.keys?.find((key: { id: string }) => key.id === agentId)?.expiresAt;
+
+  const moving = changeKey([
+    '--read',
+    'acme/app/staging',
+    '--give-back',
+    'acme/app/production',
+    '--expires',
+    '1d',
+    '--reason',
+    'the migration moves on to staging',
+  ]);
+  check(
+    '`baymutt ask change` prints the change’s link and returns',
+    moving.status === 0 &&
+      moving.json?.status === 'pending' &&
+      moving.json?.key === agentId &&
+      moving.json?.url === `${WEB}/ask/change/${moving.json?.id}`,
+  );
+  await page.goto(`${WEB}/keys`);
+  await page.getByRole('heading', { name: 'Requests' }).waitFor();
+  check(
+    'a key change waits under Keys, counted in the nav',
+    (await page.getByText(/asks to change/).count()) === 1 &&
+      (await page
+        .getByRole('navigation', { name: 'Main' })
+        .getByText('1 waiting for you')
+        .count()) === 1,
+  );
+  await page.getByRole('link', { name: 'Review' }).click();
+  await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
+  check('the Review link opens the change’s own page', page.url() === moving.json.url);
+  check(
+    'the change page shows what the key holds now, what it adds, what it gives back, and the end asked for',
+    (await page.getByText('“the migration moves on to staging”').count()) === 1 &&
+      (await page.getByRole('heading', { name: 'What it holds now' }).count()) === 1 &&
+      (await page.getByRole('heading', { name: 'What it adds' }).count()) === 1 &&
+      (await page.getByRole('heading', { name: 'What it gives back' }).count()) === 1 &&
+      (await page.getByText('acme/app/staging').count()) === 1 &&
+      (await page.getByText('acme/app/production').count()) === 2 &&
+      (await page.getByLabel('Ends').inputValue()) === `${24 * 60 * MINUTE_MS}`,
+  );
+  await shoot(page, '08h1-key-change-new-end');
+  await shootPhone(page, '08h2-key-change-new-end-phone');
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
+  const movingWait = laptop.cli(['ask', 'wait', moving.json.id]);
+  check(
+    'a rejected change ends the wait, and the key holds what it held',
+    movingWait.status === 4 &&
+      loadsWithAgentKey('acme/app/production') &&
+      !loadsWithAgentKey('acme/app/staging'),
+  );
+
+  const moved = changeKey([
+    '--read',
+    'acme/app/staging',
+    '--give-back',
+    'acme/app/production',
+    '--reason',
+    'the migration moves on to staging',
+  ]);
+  await page.goto(moved.json.url);
+  await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
+  check(
+    'a change that asks for no new end keeps the key’s own by default',
+    (await page.getByLabel('Ends').inputValue()) === 'keep',
+  );
+  await shoot(page, '08h3-key-change');
+  await shootPhone(page, '08h4-key-change-phone');
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  const movedWait = laptop.cli(['ask', 'wait', moved.json.id]);
+  check(
+    'a change that adds and gives back, once approved, is the same key file holding the new set, with its end kept',
+    movedWait.status === 0 &&
+      movedWait.json?.keyFile === agentKey &&
+      movedWait.json?.expiresAt === agentEnds &&
+      loadsWithAgentKey('acme/app/staging') &&
+      !loadsWithAgentKey('acme/app/production'),
+  );
+  check(
+    'and it loads the environment it gained through varlock',
+    varlockLoads({ ...laptop.env, BAYMUTT_KEY_FILE: agentKey }, 'acme/app/staging', {
+      API_KEY: 'staging-value',
+    }).isLoaded,
+  );
+
+  const adding = changeKey(['--read-write', 'acme/app/production', '--reason', 'one more check']);
+  await page.goto(adding.json.url);
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  check(
+    'a change that only adds, once approved, loads both',
+    laptop.cli(['ask', 'wait', adding.json.id]).status === 0 &&
+      loadsWithAgentKey('acme/app/staging') &&
+      loadsWithAgentKey('acme/app/production'),
+  );
+  await page.goto(`${WEB}/keys`);
+  await page.getByText('Migration agent').waitFor();
+  await shoot(page, '08h5-keys-after-change');
+
+  const givingBack = changeKey([
+    '--give-back',
+    'acme/app/staging',
+    '--reason',
+    'done with staging',
+  ]);
+  check(
+    'giving back alone takes effect at once, with no approval',
+    givingBack.status === 0 &&
+      givingBack.json?.status === 'applied' &&
+      !loadsWithAgentKey('acme/app/staging') &&
+      loadsWithAgentKey('acme/app/production'),
+  );
+
+  const extending = changeKey(['--expires', '2h', '--reason', 'the migration runs long']);
+  await page.goto(extending.json.url);
+  await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
+  check(
+    'a new end alone waits for the owner, and offers what was asked',
+    extending.json?.status === 'pending' &&
+      (await page.getByLabel('Ends').inputValue()) === `${120 * MINUTE_MS}` &&
+      (await page.getByText('It gains nothing.').count()) === 1,
+  );
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  const extended = laptop.cli(['ask', 'wait', extending.json.id]);
+  check(
+    'the new end counts from the approval',
+    extended.status === 0 &&
+      Math.abs(extended.json.expiresAt - (Date.now() + 120 * MINUTE_MS)) < 2 * MINUTE_MS,
+  );
+  await page.goto(`${WEB}/ask/change/${crypto.randomUUID()}`);
+  await page.getByRole('heading', { name: 'No change at this link' }).waitFor();
+  check('a missing key change says so', true);
 
   // --- a name that does not open: nothing is approved or pasted for it ---------------------------
   const unopenedAsk = laptop.cli([
@@ -804,6 +943,26 @@ const main = async (browser: Browser) => {
     }).status === 5,
   );
 
+  // A service account its login asked for is changed the same way, and its page says what it is.
+  const ciChange = laptop.cli([
+    'ask',
+    'change',
+    piped.json.id,
+    '--read',
+    'acme/app/staging',
+    '--reason',
+    'CI deploys staging too',
+  ]);
+  await page.goto(ciChange.json.url);
+  await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
+  check(
+    '`baymutt ask change` asks for a service account too, and its page names it as one',
+    ciChange.json?.status === 'pending' &&
+      (await page.getByText(/asks to change the service account/).count()) === 1,
+  );
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
+
   // --- the Keys page, and access changed by the owner ------------------------------------------
   await page.goto(`${WEB}/keys`);
   await page.getByText('CI deploy').waitFor();
@@ -814,7 +973,8 @@ const main = async (browser: Browser) => {
       (await page.getByRole('img', { name: 'Service account' }).count()) === 1 &&
       (await page.getByRole('img', { name: 'Agent key' }).count()) === 2 &&
       (await page.getByText('never expires').count()) === 1 &&
-      (await page.getByText(/expires in 1[0-5] minutes/).count()) === 1 &&
+      // The migration agent's end, as its key change set it.
+      (await page.getByText(/expires in 2 hours/).count()) === 1 &&
       (await page.getByText(/expires in (1 hour|5[0-9] minutes)/).count()) === 1 &&
       (await page.getByText(/expires in 90 days/).count()) === 1,
   );
@@ -856,7 +1016,32 @@ const main = async (browser: Browser) => {
 
   // A key whose end has passed falls out of sight, and one click brings it back.
   const [migration] = d1(`SELECT expires_at FROM credential WHERE name = 'Migration agent'`);
+  const onEndedKey = changeKey(['--read', 'acme/app/staging', '--reason', 'one more environment']);
   d1(`UPDATE credential SET expires_at = ${Date.now() - MINUTE_MS} WHERE name = 'Migration agent'`);
+  await page.goto(`${WEB}/keys`);
+  await page.getByText('CI deploy').waitFor();
+  const keysWaiting = () =>
+    page
+      .getByRole('navigation', { name: 'Main' })
+      .getByRole('link', { name: /^Keys/ })
+      .getByText(/waiting for you/)
+      .count();
+  check(
+    'a change to a key that has ended waits on nobody: not counted, not listed',
+    onEndedKey.json?.status === 'pending' &&
+      (await keysWaiting()) === 0 &&
+      (await page.getByText(/asks to change/).count()) === 0,
+  );
+  await page.goto(onEndedKey.json.url);
+  await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
+  check(
+    'its page says the key has ended and offers only Reject',
+    (await page.getByText(/has ended, so this change cannot be approved/).count()) === 1 &&
+      (await page.getByRole('button', { name: 'Approve', exact: true }).count()) === 0,
+  );
+  await shoot(page, '11h0-key-change-ended');
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
   await page.goto(`${WEB}/keys`);
   await page.getByText('CI deploy').waitFor();
   check(
@@ -920,9 +1105,27 @@ const main = async (browser: Browser) => {
   await page.getByLabel('New environment').fill('app/old');
   await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/old/ }).click();
+  // A change waits for it, and the dashboard learns of it from what the owner does next.
+  const toPurged = changeKey(['--read', 'acme/app/old', '--reason', 'one last look']);
   await page.getByRole('button', { name: 'Delete environment' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete environment' }).click();
   await page.waitForURL(`${WEB}/environments`);
+  const keysWaitingNow = () =>
+    page
+      .getByRole('navigation', { name: 'Main' })
+      .getByRole('link', { name: /^Keys/ })
+      .getByText(/waiting for you/)
+      .count();
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: /^Keys/ })
+    .getByText('1 waiting for you')
+    .waitFor({ timeout: 5000 })
+    .catch(() => undefined);
+  check(
+    'deleting an environment refreshes the waiting key changes',
+    toPurged.json?.status === 'pending' && (await keysWaitingNow()) === 1,
+  );
   await page.getByRole('link', { name: 'Bin' }).first().click();
   await page.getByText('OLD_TOKEN').waitFor();
   await page.getByText('acme/app/old').waitFor();
@@ -941,6 +1144,29 @@ const main = async (browser: Browser) => {
   await environmentRow.getByRole('button', { name: 'Delete for good' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete for good' }).click();
   await page.getByText('The bin is empty').waitFor();
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: /^Keys/ })
+    .getByText(/waiting for you/)
+    .waitFor({ state: 'detached', timeout: 5000 })
+    .catch(() => undefined);
+  check(
+    'a change naming an environment removed for good waits on nobody once it is gone',
+    (await keysWaitingNow()) === 0,
+  );
+  await page.goto(toPurged.json.url);
+  await page.getByRole('heading', { name: 'Approve this change?' }).waitFor();
+  check(
+    'its page says so and offers only Reject',
+    (await page.getByText(/removed for good, so it cannot be approved/).count()) === 1 &&
+      (await page.getByRole('button', { name: 'Approve', exact: true }).count()) === 0,
+  );
+  await page.getByRole('button', { name: 'Reject' }).click();
+  await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
+  check(
+    'and the terminal hears it was not approved',
+    laptop.cli(['ask', 'wait', toPurged.json.id]).status === 4,
+  );
   await page.goto(`${WEB}/environments`);
   await page.getByLabel('New environment').fill('app/old');
   await page.getByRole('button', { name: 'Create environment' }).click();

@@ -58,19 +58,23 @@ export const findEnvironment = (
 export const askFor = (address: string, need: 'read' | 'write') =>
   `\`baymutt ask access --${need} ${address} --reason "<why>"\``;
 
+/** How the CLI login that asked for key `id` asks to add `address` to it, on the same key. */
+export const changeFor = (id: string, address: string, need: 'read' | 'write') =>
+  `\`baymutt ask change ${id} --${need} ${address} --reason "<why>"\` (run by the CLI login, without BAYMUTT_KEY_FILE)`;
+
 /** An environment by its address (or id), among `environments`; refused with what to do next. */
 export const resolveIn = Effect.fn('environments.resolveIn')(function* (
   environments: ReadonlyArray<NamedEnvironment>,
   address: string,
 ) {
-  const { isLogin } = yield* ServiceAccount;
+  const { isLogin, key } = yield* ServiceAccount;
   const found = findEnvironment(environments, address);
   if (found !== undefined) return found;
   const hint = ' An environment is named with its org first: `<org>/<name>`.';
   return yield* usage(
     isLogin
       ? `None of your orgs has an environment ${address}.${hint} See them with \`baymutt env list\`. To ask the owner for a new one, run \`baymutt ask create-environment ${address} --reason "<why>"\`.`
-      : `No environment ${address} is granted to this service account.${hint} See what is with \`baymutt env list\`. A CLI login asks the owner for more with ${askFor(address, 'read')}.`,
+      : `No environment ${address} is granted to this key.${hint} See what is with \`baymutt env list\`. The CLI login that asked for it asks to add one with ${changeFor(key.credentialId, address, 'read')}.`,
     'notFound',
   );
 });
@@ -102,7 +106,7 @@ export const trustedKey = Effect.fn('environments.trustedKey')(function* (
   }
   if (!(need === 'read' ? environment.canRead : environment.canWrite)) {
     return yield* usage(
-      `This service account may not ${verb} ${environment.address}. A CLI login asks the owner for that with ${askFor(environment.address, need)}.`,
+      `This key may not ${verb} ${environment.address}. The CLI login that asked for it asks to add that with ${changeFor(serviceAccount.key.credentialId, environment.address, need)}.`,
       'noAccess',
     );
   }

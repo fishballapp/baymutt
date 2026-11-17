@@ -3,7 +3,7 @@
 // was asked for, refused, or no longer live at the store. The command, when there is one, waits in
 // an owner-only file of its own beside the key, so asks running at once never share a file.
 import { IdSchema, type Request } from '@baymutt/api';
-import { vouchedEnvironmentKey } from '@baymutt/keys';
+import { unwrapEnvironmentKey, vouchedEnvironmentKey } from '@baymutt/keys';
 import * as Clock from 'effect/Clock';
 import * as Duration from 'effect/Duration';
 import * as Effect from 'effect/Effect';
@@ -18,7 +18,7 @@ import * as Schema from 'effect/Schema';
 import * as Semaphore from 'effect/Semaphore';
 import * as Stream from 'effect/Stream';
 import { listEnvironments } from './environments.ts';
-import { answerFor, crypto_, usage } from './errors.ts';
+import { answerFor, crypto_, type UsageError, usage } from './errors.ts';
 import { openStoredName } from './names.ts';
 import type { Outcome } from './outcome.ts';
 import { ServiceAccount, serviceAccountFromToken } from './service-account.ts';
@@ -221,26 +221,36 @@ const describeItems = Effect.fn('requests.describeItems')(function* (request: Re
 });
 
 /**
- * That the owner really approved `request`, as its own key sees it: every environment it names is
- * listed to the key with a proof of its public key that opens under the account key this login
- * pinned, which only the owner's browser can make. "Approved" alone is the store's word, and a key
- * the owner never approved would be piped into a command or handed out holding nothing.
+ * That the owner really gave the key `token` each of `items`, as that key sees it: each is listed to
+ * the key with at least the access named and a proof of its public key that opens under the account
+ * key this login pinned, which only the owner's browser can make. "Approved" alone is the store's
+ * word, and a key the owner never approved would be piped into a command or handed out holding
+ * nothing. Answers what the key lists, for describing it.
  */
-const checkApproved = Effect.fn('requests.checkApproved')(function* (
-  request: Request,
+export const checkHolds = Effect.fn('requests.checkHolds')(function* (
+  items: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly canRead: boolean;
+    readonly canWrite: boolean;
+  }>,
   token: string,
+  unproven: UsageError,
+  {
+    unwrapsReads = false,
+  }: {
+    /**
+     * Also open the read key of each environment asked to read, with this key: a proof of the
+     * environment's public key is not a read, since a key that only writes holds one too.
+     */
+    readonly unwrapsReads?: boolean;
+  } = {},
 ) {
   const { pinnedAccount } = yield* ServiceAccount;
   const account = yield* pinnedAccount;
   const { key, api } = yield* serviceAccountFromToken(Redacted.make(token));
   const { environments } = yield* api.environments.list();
-  const unproven = usage(
-    `The store says request ${request.id} was approved, but its key holds no access the owner gave it. Nothing was piped or handed out; its key stays at ${yield* keyFileOf(request.id)}.`,
-    'integrity',
-  );
-  if (request.items.length === 0) return yield* unproven;
   yield* Effect.forEach(
-    request.items,
+    items,
     Effect.fnUntraced(function* (item) {
       const listed = environments.find(environment => environment.id === item.environmentId);
       if (
@@ -262,26 +272,57 @@ const checkApproved = Effect.fn('requests.checkApproved')(function* (
         }),
       ).pipe(Effect.catchTag('IntegrityError', () => Effect.fail(unproven)));
       if (publicKey !== listed.publicKey) return yield* unproven;
+      if (!(unwrapsReads && item.canRead)) return;
+      const binding = { environmentId: listed.id, keyVersion: listed.keyVersion };
+      const { wrap } = yield* api.secrets.bundle({ params: { environmentId: listed.id } }).pipe(
+        Effect.catchTag('NoAccessError', () => Effect.fail(unproven)),
+        Effect.catchTag('NotFoundError', () => Effect.fail(unproven)),
+      );
+      yield* crypto_(() =>
+        unwrapEnvironmentKey({
+          wrap,
+          readerKey: key.privateKey,
+          // Its own id, never one the store names: the wrap opens only if it was sealed to it.
+          readerId: key.credentialId,
+          binding,
+          environmentPublicKey: publicKey,
+        }),
+      ).pipe(Effect.catchTag('IntegrityError', () => Effect.fail(unproven)));
     }),
     { discard: true },
   );
+  return environments;
+});
+
+/** That the owner really approved `request`: its key holds everything it named. */
+const checkApproved = Effect.fn('requests.checkApproved')(function* (
+  request: Request,
+  token: string,
+) {
+  const unproven = usage(
+    `The store says request ${request.id} was approved, but its key holds no access the owner gave it. Nothing was piped or handed out; its key stays at ${yield* keyFileOf(request.id)}.`,
+    'integrity',
+  );
+  if (request.items.length === 0) return yield* unproven;
+  yield* checkHolds(request.items, token, unproven);
 });
 
 const finishApproved = Effect.fn('requests.finishApproved')(function* (request: Request) {
   const fs = yield* FileSystem.FileSystem;
   const { api } = yield* ServiceAccount;
   const keyFile = yield* keyFileOf(request.id);
-  const token = yield* fs.readFileString(keyFile).pipe(
-    Effect.catchReason('PlatformError', 'NotFound', () =>
-      Effect.fail(
-        usage(
-          `The owner approved request ${request.id}, but its key is not on this computer (${keyFile}): it is where \`baymutt ask access\` ran.`,
-          'notFound',
-        ),
-      ),
-    ),
+  const stored = yield* fs.readFileString(keyFile).pipe(
+    Effect.asSome,
+    Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeedNone),
     Effect.orDie,
   );
+  if (Option.isNone(stored)) {
+    return yield* usage(
+      `The owner approved request ${request.id}, but its key is not on this computer (${keyFile}): it is where \`baymutt ask access\` ran.`,
+      'notFound',
+    );
+  }
+  const token = stored.value;
   yield* checkApproved(request, token.trim());
   const environments = yield* describeItems(request);
   const kept = yield* readCommand(request.id);

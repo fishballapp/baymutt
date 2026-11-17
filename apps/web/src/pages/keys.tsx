@@ -30,8 +30,10 @@ import {
   hasEnded,
   isLogin,
   isVouched,
+  keyChangesAtom,
   kindOf,
   type OpenedEnvironment,
+  type OpenedKeyChange,
   type OpenedRequest,
   type OpenedServiceAccount,
   requestsAtom,
@@ -364,15 +366,85 @@ const RequestRow = ({ request }: { readonly request: OpenedRequest }) => (
   </Row>
 );
 
+/** An environment of a change, by its address, with what the line says of it. */
+const Changed = ({
+  items,
+  sign,
+}: {
+  readonly items: OpenedKeyChange['add'];
+  readonly sign: string;
+}) =>
+  items.map((item, index) => (
+    <span key={item.environmentId}>
+      {index > 0 && ', '}
+      <Code>{addressOf({ orgSlug: item.orgSlug, name: item.openedEnvironmentName })}</Code>{' '}
+      <span className="text-muted">
+        ({sign} {grantWords(item)})
+      </span>
+    </span>
+  ));
+
+/** One change to a key, waiting for the owner, as a sentence: who asks to change which key, and how. */
+const KeyChangeRow = ({ change }: { readonly change: OpenedKeyChange }) => (
+  <Row>
+    <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
+      <div className="min-w-0 flex-1">
+        <p>
+          <span className="font-medium">{change.maker.name}</span> asks to change{' '}
+          <span className="font-medium">{change.key.name}</span>
+          {change.add.length > 0 && (
+            <>
+              : adds <Changed items={change.add} sign="+" />
+            </>
+          )}
+          {change.giveBack.length > 0 && (
+            <>
+              {change.add.length > 0 ? '; gives back ' : ': gives back '}
+              <Changed items={change.giveBack} sign="−" />
+            </>
+          )}
+          {change.lifetime !== null && (
+            <span className="text-muted">
+              {change.add.length + change.giveBack.length > 0 ? '; ' : ': '}a new end
+            </span>
+          )}
+        </p>
+        <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted [overflow-wrap:anywhere]">
+          {change.reason}
+        </p>
+        <p className="mt-1.5 text-sm text-muted">
+          asked <Time at={change.createdAt} />
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5 sm:shrink-0">
+        <Link to="/ask/change/$id" params={{ id: change.id }} className={buttonStyles()}>
+          Review
+        </Link>
+      </div>
+    </div>
+  </Row>
+);
+
 const Requests = () => {
-  const requests = latest(useAtomValue(requestsAtom(useOwner())));
-  if (requests === null || requests.length === 0) return null;
+  const owner = useOwner();
+  const requests = latest(useAtomValue(requestsAtom(owner))) ?? [];
+  const changes = latest(useAtomValue(keyChangesAtom(owner))) ?? [];
+  if (requests.length === 0 && changes.length === 0) return null;
   return (
-    <Section title="Requests" lede="Each waits for you.">
+    <Section title="Requests" lede="Each waits for you: a new key, or a change to one.">
       <Rows>
-        {requests.map(request => (
-          <RequestRow key={request.id} request={request} />
-        ))}
+        {[
+          ...requests.map(request => ({
+            at: request.createdAt,
+            row: <RequestRow key={request.id} request={request} />,
+          })),
+          ...changes.map(change => ({
+            at: change.createdAt,
+            row: <KeyChangeRow key={change.id} change={change} />,
+          })),
+        ]
+          .toSorted((a, b) => b.at - a.at)
+          .map(({ row }) => row)}
       </Rows>
     </Section>
   );

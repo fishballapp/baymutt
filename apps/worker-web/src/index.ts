@@ -29,12 +29,15 @@ export default {
     return env.ASSETS.fetch(new Request(new URL('/_shell', request.url), request));
   },
   // The daily Cron Trigger (wrangler.jsonc): what has been in the bin for 30 days goes for good, a
-  // request nobody answered is rejected, and a key whose time is up is revoked.
+  // request nobody answered is rejected, a key whose time is up is revoked, and a key change nobody
+  // answered is marked expired.
   scheduled: async () => {
     await runtime.runPromise(
       Effect.gen(function* () {
         yield* (yield* Bin).sweep;
-        yield* (yield* Access).sweepRequests;
+        const access = yield* Access;
+        yield* access.sweepRequests;
+        yield* access.sweepKeyChanges;
       }),
     );
   },
