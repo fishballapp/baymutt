@@ -44,8 +44,8 @@ const Outcome = ({ title, children }: { readonly title: string; readonly childre
   <div className="max-w-[34rem] space-y-4">
     <h1 className="text-xl">{title}</h1>
     {children}
-    <Link to="/service-accounts" className={buttonStyles()}>
-      See service accounts
+    <Link to="/keys" className={buttonStyles()}>
+      See keys
     </Link>
   </div>
 );
@@ -131,7 +131,12 @@ const Decision = ({ request }: { readonly request: OpenedRequest }) => {
           </Code>
         </Claim>
       )}
-      <div className="w-full sm:w-72">
+      <p>
+        {request.command === null
+          ? 'Its key stays in a file on that CLI login’s computer, so approving makes an agent key.'
+          : 'Its key goes into that command, so approving makes a service account.'}
+      </p>
+      <div className="w-full sm:w-96">
         <SelectField
           label="Ends"
           value={choice}
@@ -185,7 +190,7 @@ const OUTCOME_TITLES = {
   expired: 'This request expired',
 } as const;
 
-export const RequestPage = ({ id }: { readonly id: string }) => {
+export const AskAccessPage = ({ id }: { readonly id: string }) => {
   const result = useAtomValue(requestAtom(useOwner())(id));
   const approving = useAtomValue(approveRequestAtom(id));
   const rejecting = useAtomValue(rejectRequestAtom(id));

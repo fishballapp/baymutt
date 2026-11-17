@@ -16,6 +16,7 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AppAccountRouteImport } from './routes/_app.account'
 import { Route as AppActivityRouteImport } from './routes/_app.activity'
 import { Route as AppBinRouteImport } from './routes/_app.bin'
+import { Route as AppKeysRouteImport } from './routes/_app.keys'
 import { Route as AppPairRouteImport } from './routes/_app.pair'
 import { Route as AppPasteLinksRouteImport } from './routes/_app.paste-links'
 import { Route as AppServiceAccountsRouteImport } from './routes/_app.service-accounts'
@@ -25,6 +26,8 @@ import { Route as AppEnvironmentRequestsIdRouteImport } from './routes/_app.envi
 import { Route as AppEnvironmentsIndexRouteImport } from './routes/_app.environments.index'
 import { Route as AppEnvironmentsIdRouteImport } from './routes/_app.environments.$id'
 import { Route as AppRequestsIdRouteImport } from './routes/_app.requests.$id'
+import { Route as AppAskAccessIdRouteImport } from './routes/_app.ask.access.$id'
+import { Route as AppAskCreateEnvironmentIdRouteImport } from './routes/_app.ask.create-environment.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -58,6 +61,11 @@ const AppActivityRoute = AppActivityRouteImport.update({
 const AppBinRoute = AppBinRouteImport.update({
   id: '/bin',
   path: '/bin',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppKeysRoute = AppKeysRouteImport.update({
+  id: '/keys',
+  path: '/keys',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPairRoute = AppPairRouteImport.update({
@@ -106,6 +114,17 @@ const AppRequestsIdRoute = AppRequestsIdRouteImport.update({
   path: '/requests/$id',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAskAccessIdRoute = AppAskAccessIdRouteImport.update({
+  id: '/ask/access/$id',
+  path: '/ask/access/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAskCreateEnvironmentIdRoute =
+  AppAskCreateEnvironmentIdRouteImport.update({
+    id: '/ask/create-environment/$id',
+    path: '/ask/create-environment/$id',
+    getParentRoute: () => AppRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -114,6 +133,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AppAccountRoute
   '/activity': typeof AppActivityRoute
   '/bin': typeof AppBinRoute
+  '/keys': typeof AppKeysRoute
   '/pair': typeof AppPairRoute
   '/paste-links': typeof AppPasteLinksRoute
   '/service-accounts': typeof AppServiceAccountsRoute
@@ -123,6 +143,8 @@ export interface FileRoutesByFullPath {
   '/environments/$id': typeof AppEnvironmentsIdRoute
   '/requests/$id': typeof AppRequestsIdRoute
   '/environments/': typeof AppEnvironmentsIndexRoute
+  '/ask/access/$id': typeof AppAskAccessIdRoute
+  '/ask/create-environment/$id': typeof AppAskCreateEnvironmentIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -131,6 +153,7 @@ export interface FileRoutesByTo {
   '/account': typeof AppAccountRoute
   '/activity': typeof AppActivityRoute
   '/bin': typeof AppBinRoute
+  '/keys': typeof AppKeysRoute
   '/pair': typeof AppPairRoute
   '/paste-links': typeof AppPasteLinksRoute
   '/service-accounts': typeof AppServiceAccountsRoute
@@ -140,6 +163,8 @@ export interface FileRoutesByTo {
   '/environments/$id': typeof AppEnvironmentsIdRoute
   '/requests/$id': typeof AppRequestsIdRoute
   '/environments': typeof AppEnvironmentsIndexRoute
+  '/ask/access/$id': typeof AppAskAccessIdRoute
+  '/ask/create-environment/$id': typeof AppAskCreateEnvironmentIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -150,6 +175,7 @@ export interface FileRoutesById {
   '/_app/account': typeof AppAccountRoute
   '/_app/activity': typeof AppActivityRoute
   '/_app/bin': typeof AppBinRoute
+  '/_app/keys': typeof AppKeysRoute
   '/_app/pair': typeof AppPairRoute
   '/_app/paste-links': typeof AppPasteLinksRoute
   '/_app/service-accounts': typeof AppServiceAccountsRoute
@@ -159,6 +185,8 @@ export interface FileRoutesById {
   '/_app/environments/$id': typeof AppEnvironmentsIdRoute
   '/_app/requests/$id': typeof AppRequestsIdRoute
   '/_app/environments/': typeof AppEnvironmentsIndexRoute
+  '/_app/ask/access/$id': typeof AppAskAccessIdRoute
+  '/_app/ask/create-environment/$id': typeof AppAskCreateEnvironmentIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -169,6 +197,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/bin'
+    | '/keys'
     | '/pair'
     | '/paste-links'
     | '/service-accounts'
@@ -178,6 +207,8 @@ export interface FileRouteTypes {
     | '/environments/$id'
     | '/requests/$id'
     | '/environments/'
+    | '/ask/access/$id'
+    | '/ask/create-environment/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -186,6 +217,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/activity'
     | '/bin'
+    | '/keys'
     | '/pair'
     | '/paste-links'
     | '/service-accounts'
@@ -195,6 +227,8 @@ export interface FileRouteTypes {
     | '/environments/$id'
     | '/requests/$id'
     | '/environments'
+    | '/ask/access/$id'
+    | '/ask/create-environment/$id'
   id:
     | '__root__'
     | '/'
@@ -204,6 +238,7 @@ export interface FileRouteTypes {
     | '/_app/account'
     | '/_app/activity'
     | '/_app/bin'
+    | '/_app/keys'
     | '/_app/pair'
     | '/_app/paste-links'
     | '/_app/service-accounts'
@@ -213,6 +248,8 @@ export interface FileRouteTypes {
     | '/_app/environments/$id'
     | '/_app/requests/$id'
     | '/_app/environments/'
+    | '/_app/ask/access/$id'
+    | '/_app/ask/create-environment/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -272,6 +309,13 @@ declare module '@tanstack/react-router' {
       path: '/bin'
       fullPath: '/bin'
       preLoaderRoute: typeof AppBinRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/keys': {
+      id: '/_app/keys'
+      path: '/keys'
+      fullPath: '/keys'
+      preLoaderRoute: typeof AppKeysRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/pair': {
@@ -337,6 +381,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRequestsIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/ask/access/$id': {
+      id: '/_app/ask/access/$id'
+      path: '/ask/access/$id'
+      fullPath: '/ask/access/$id'
+      preLoaderRoute: typeof AppAskAccessIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/ask/create-environment/$id': {
+      id: '/_app/ask/create-environment/$id'
+      path: '/ask/create-environment/$id'
+      fullPath: '/ask/create-environment/$id'
+      preLoaderRoute: typeof AppAskCreateEnvironmentIdRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -344,6 +402,7 @@ interface AppRouteChildren {
   AppAccountRoute: typeof AppAccountRoute
   AppActivityRoute: typeof AppActivityRoute
   AppBinRoute: typeof AppBinRoute
+  AppKeysRoute: typeof AppKeysRoute
   AppPairRoute: typeof AppPairRoute
   AppPasteLinksRoute: typeof AppPasteLinksRoute
   AppServiceAccountsRoute: typeof AppServiceAccountsRoute
@@ -352,12 +411,15 @@ interface AppRouteChildren {
   AppEnvironmentsIdRoute: typeof AppEnvironmentsIdRoute
   AppRequestsIdRoute: typeof AppRequestsIdRoute
   AppEnvironmentsIndexRoute: typeof AppEnvironmentsIndexRoute
+  AppAskAccessIdRoute: typeof AppAskAccessIdRoute
+  AppAskCreateEnvironmentIdRoute: typeof AppAskCreateEnvironmentIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppAccountRoute: AppAccountRoute,
   AppActivityRoute: AppActivityRoute,
   AppBinRoute: AppBinRoute,
+  AppKeysRoute: AppKeysRoute,
   AppPairRoute: AppPairRoute,
   AppPasteLinksRoute: AppPasteLinksRoute,
   AppServiceAccountsRoute: AppServiceAccountsRoute,
@@ -366,6 +428,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppEnvironmentsIdRoute: AppEnvironmentsIdRoute,
   AppRequestsIdRoute: AppRequestsIdRoute,
   AppEnvironmentsIndexRoute: AppEnvironmentsIndexRoute,
+  AppAskAccessIdRoute: AppAskAccessIdRoute,
+  AppAskCreateEnvironmentIdRoute: AppAskCreateEnvironmentIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

@@ -60,8 +60,8 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
           The terminal picks this up by itself. It lists the names in your orgs now; each request it
           makes for an environment waits for you.
         </p>
-        <Link to="/service-accounts" className={buttonStyles({ intent: 'primary' })}>
-          See service accounts
+        <Link to="/keys" className={buttonStyles({ intent: 'primary' })}>
+          See keys
         </Link>
       </div>
     );

@@ -50,6 +50,12 @@ export const ServiceAccountSchema = Schema.Struct({
   description: Schema.NullOr(DescriptionSchema),
   /** When it stops working; null for never. An expired one is listed until it is revoked. */
   expiresAt: Schema.NullOr(TimestampSchema),
+  /**
+   * What the key is for, as it was asked for: a `service-account` is for another system (the ask
+   * gave a command to pipe the key into), an `agent` key is for an agent's own work (kept in a
+   * file). Null for a CLI login. Neither says whether it ends.
+   */
+  intent: Schema.NullOr(Schema.Literals(['service-account', 'agent'])),
   /** The owner's vault vouching for `publicKey`. Only a service account the owner paired has one, and only the owner can read it. */
   endorsement: Schema.NullOr(SealedSchema),
   /**

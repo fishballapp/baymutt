@@ -62,8 +62,8 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
 const NAV = [
   // Environment requests wait under Environments: approving one creates it.
   { to: '/environments', label: 'Environments', pending: pendingEnvironmentRequestsAtom },
-  // Requests wait under Service accounts: approving one makes its key a service account.
-  { to: '/service-accounts', label: 'Service accounts', pending: pendingRequestsAtom },
+  // Requests wait under Keys: approving one makes its key.
+  { to: '/keys', label: 'Keys', pending: pendingRequestsAtom },
   { to: '/paste-links', label: 'Paste links', pending: pendingPasteLinksAtom },
   { to: '/activity', label: 'Activity', pending: null },
   { to: '/bin', label: 'Bin', pending: null },
@@ -73,12 +73,12 @@ const NAV = [
 type NavPath = (typeof NAV)[number]['to'];
 
 /**
- * The nav item a page belongs to: a pairing link and a request are about service accounts, an
- * environment request about environments.
+ * The nav item a page belongs to: a pairing link and an ask for access are about keys, an ask for
+ * an environment is about environments.
  */
 const sectionOf = (path: string): NavPath | undefined => {
-  if (path.startsWith('/pair') || path.startsWith('/requests')) return '/service-accounts';
-  if (path.startsWith('/environment-requests')) return '/environments';
+  if (path.startsWith('/pair') || path.startsWith('/ask/access')) return '/keys';
+  if (path.startsWith('/ask/create-environment')) return '/environments';
   return NAV.find(({ to }) => path.startsWith(to))?.to;
 };
 
@@ -152,7 +152,7 @@ const navItem = (isCurrent: boolean) =>
  * The side nav and one column of content. The org picker sits under the wordmark and scopes
  * Environments, Activity and the Bin. Under 48rem the nav is a bar across the top: the wordmark
  * and the picker on one line, then the six items in three columns over two rows, which gives
- * "Service accounts" and "Environments" room to stay on one line at 390px.
+ * "Environments" room to stay on one line at 390px.
  */
 export const Shell = () => {
   const owner = useOwner();

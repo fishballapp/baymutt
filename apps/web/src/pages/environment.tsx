@@ -317,8 +317,8 @@ const SecretRow = ({
             }}
           >
             <p>
-              Service accounts stop receiving it on their next load. It stays in the Bin for 30
-              days, where you can restore it.
+              Keys stop receiving it on their next load. It stays in the Bin for 30 days, where you
+              can restore it.
             </p>
           </Confirm>
         </RowActions>
@@ -374,9 +374,7 @@ const Secrets = ({ environment }: { readonly environment: OpenedEnvironment }) =
       {secrets === null && !failureMessage(result) && <Skeleton />}
       {secrets?.length === 0 && !isAdding && (
         <Empty title="No secrets yet">
-          <p>
-            Add one here, or from a service account that can write here, with the value on stdin:
-          </p>
+          <p>Add one here, or from a key that can write here, with the value on stdin:</p>
           <CommandLine>{`baymutt secret set ${addressOfEnvironment(environment)} NAME < file`}</CommandLine>
           <p>
             For a value only you can fetch, a CLI login runs <Code>baymutt ask paste-link</Code>: it
@@ -435,7 +433,7 @@ const Access = ({ environment }: { readonly environment: OpenedEnvironment }) =>
   return (
     <Section
       title="Who can reach it"
-      lede="You can read and write it. A service account reaches it when a request you approved named it, or you gave it access. One that reads keeps what it read: taking access away stops the next load, not the last one."
+      lede="You can read and write it. A key reaches it when a request you approved named it, or you gave it access. One that reads keeps what it read: taking access away stops the next load, not the last one."
     >
       {grants === null && <Skeleton rows={2} />}
       {grants?.length === 0 && (

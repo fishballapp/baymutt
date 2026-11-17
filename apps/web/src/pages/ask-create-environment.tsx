@@ -65,8 +65,8 @@ const justAnswered = ({
         }
       >
         <p className="text-muted">
-          No service account reaches <Code className="text-foreground">{address}</Code> until you
-          approve a request that names it.
+          No key reaches <Code className="text-foreground">{address}</Code> until you approve a
+          request that names it.
         </p>
       </Outcome>
     );
@@ -133,7 +133,7 @@ const OUTCOME_TITLES = {
   expired: 'This request expired',
 } as const;
 
-export const EnvironmentRequestPage = ({ id }: { readonly id: string }) => {
+export const AskCreateEnvironmentPage = ({ id }: { readonly id: string }) => {
   const result = useAtomValue(environmentRequestAtom(useOwner())(id));
   const creating = useAtomValue(approveEnvironmentRequestAtom(id));
   const rejecting = useAtomValue(rejectEnvironmentRequestAtom(id));

@@ -69,7 +69,7 @@ export const PasteLinksPage = () => {
     <>
       <PageHeader
         title="Paste links"
-        lede="Values your CLI logins and service accounts asked you to paste, in every org."
+        lede="Values your CLI logins and keys asked you to paste, in every org."
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
       {paste === null && !failure && <Skeleton rows={2} />}

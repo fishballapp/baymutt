@@ -271,6 +271,25 @@ export const pickedOrg = (orgs: ReadonlyArray<Org>, pickedId: string | null): Or
 export const isLogin = (serviceAccount: Pick<ServiceAccount, 'parentId'>): boolean =>
   serviceAccount.parentId === null;
 
+export type KeyKind = 'login' | 'service-account' | 'agent';
+
+/**
+ * What a key is for, by how it was asked: a CLI login, a service account (made for another
+ * system: the ask gave a command to pipe the key into) or an agent key (an agent's own, kept in a
+ * file). The Worker writes `intent` for every key that came from a request; one without it, which
+ * the store does not return, is told by its end.
+ */
+export const kindOf = (
+  serviceAccount: Pick<ServiceAccount, 'parentId' | 'intent' | 'expiresAt'>,
+): KeyKind => {
+  if (isLogin(serviceAccount)) return 'login';
+  return serviceAccount.intent ?? (serviceAccount.expiresAt === null ? 'service-account' : 'agent');
+};
+
+/** A key whose end has passed. It stays listed until the nightly sweep revokes it, and a later end revives it. */
+export const hasEnded = (serviceAccount: Pick<ServiceAccount, 'expiresAt'>, now: number): boolean =>
+  serviceAccount.expiresAt !== null && serviceAccount.expiresAt <= now;
+
 /** Who gets an org's names key when it is sealed, and who could not be given it. */
 type NamesReaders = {
   readonly readers: ReadonlyArray<{ readonly id: string; readonly publicKey: string }>;

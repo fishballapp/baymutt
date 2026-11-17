@@ -279,7 +279,12 @@ describe('approving', () => {
       body: { wrap: sealedLike('read-wrap'), readerId: request.id },
     });
     expect(await call(w, 'GET', '/credentials', owner)).toMatchObject({
-      body: { credentials: [{ id: login.id }, { id: request.id, expiresAt, parentId: login.id }] },
+      body: {
+        credentials: [
+          { id: login.id, intent: null },
+          { id: request.id, expiresAt, parentId: login.id, intent: 'agent' },
+        ],
+      },
     });
 
     const log = actions(world);
@@ -596,5 +601,49 @@ describe('the daily run', () => {
 
     // Nothing is left for the next run.
     expect(await sweep(world)).toEqual({ expired: 0, ended: 0 });
+  });
+});
+
+describe('what a key is for', () => {
+  it('is a service account when the ask gave a command and an agent key when it did not, whether or not it ends', async () => {
+    const { w, owner, production, login, ask, approve } = await setup();
+    const piped = await ask(login, [{ environmentId: production, read: true }], {
+      name: 'ci',
+      command: 'gh secret set BAYMUTT_KEY',
+      lifetime: DAY,
+    });
+    const kept = await ask(login, [{ environmentId: production, read: true }], {
+      name: 'session',
+      lifetime: null,
+    });
+    await approve(piped.id, Date.now() + DAY);
+    await approve(kept.id, null);
+
+    const { credentials } = await ok<{
+      credentials: { id: string; intent: string | null; expiresAt: number | null }[];
+    }>(w, 'GET', '/credentials', owner);
+    const byId = new Map(credentials.map(credential => [credential.id, credential]));
+    expect(byId.get(login.id)).toMatchObject({ intent: null });
+    expect(byId.get(piped.id)).toMatchObject({ intent: 'service-account' });
+    expect(byId.get(piped.id)?.expiresAt).not.toBeNull();
+    expect(byId.get(kept.id)).toMatchObject({ intent: 'agent', expiresAt: null });
+  });
+
+  it('is kept when the owner later changes when the key ends', async () => {
+    const { w, owner, production, login, ask, approve } = await setup();
+    const piped = await ask(login, [{ environmentId: production, read: true }], {
+      command: 'gh secret set BAYMUTT_KEY',
+    });
+    await approve(piped.id, null);
+    expect(
+      await call(w, 'PUT', `/credentials/${piped.id}/expiry`, owner, {
+        expiresAt: Date.now() + DAY,
+      }),
+    ).toMatchObject({ status: 200 });
+    expect(
+      (
+        await ok<{ credentials: { id: string; intent: string }[] }>(w, 'GET', '/credentials', owner)
+      ).credentials.find(({ id }) => id === piped.id)?.intent,
+    ).toBe('service-account');
   });
 });

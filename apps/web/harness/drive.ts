@@ -392,19 +392,19 @@ const main = async (browser: Browser) => {
     '`baymutt ask access` prints the request’s link and returns',
     asked.status === 0 &&
       asked.json?.status === 'pending' &&
-      asked.json?.url.includes('/requests/'),
+      asked.json?.url.includes('/ask/access/'),
   );
-  await page.goto(`${WEB}/service-accounts`);
+  await page.goto(`${WEB}/keys`);
   await page.getByRole('heading', { name: 'Requests' }).waitFor();
   check(
-    'a request waits under Service accounts, counted in the nav',
+    'a request waits under Keys, counted in the nav',
     (await page.getByText('run the migration').count()) === 1 &&
       (await page
         .getByRole('navigation', { name: 'Main' })
         .getByText('1 waiting for you')
         .count()) === 1,
   );
-  await shoot(page, '08-service-accounts-request-waiting');
+  await shoot(page, '08-keys-request-waiting');
   await page.getByRole('link', { name: 'Review' }).click();
   await page.getByRole('heading', { name: 'Approve this request?' }).waitFor();
   check('the Review link opens the request’s own page', page.url() === asked.json.url);
@@ -417,6 +417,10 @@ const main = async (browser: Browser) => {
       (await page.getByLabel('Ends').inputValue()) === `${60 * MINUTE_MS}`,
   );
   await page.getByLabel('Ends').selectOption(`${15 * MINUTE_MS}`);
+  check(
+    'the request page says approving a key kept in a file makes an agent key',
+    (await page.getByText(/approving makes an agent key/).count()) === 1,
+  );
   await shoot(page, '08b-request');
   await shootPhone(page, '08c-request-phone');
   await page.getByRole('button', { name: 'Approve', exact: true }).click();
@@ -472,7 +476,7 @@ const main = async (browser: Browser) => {
     '`baymutt ask create-environment` prints the environment request’s link and returns',
     creating.status === 0 &&
       creating.json?.status === 'pending' &&
-      creating.json?.url === `${WEB}/environment-requests/${creating.json?.id}`,
+      creating.json?.url === `${WEB}/ask/create-environment/${creating.json?.id}`,
   );
   await page.goto(`${WEB}/environments`);
   await page.getByRole('heading', { name: 'Requests' }).waitFor();
@@ -573,9 +577,18 @@ const main = async (browser: Browser) => {
           (environment: { name: string }) => environment.name !== 'app/scratch',
         ) === true,
   );
-  await page.goto(`${WEB}/environment-requests/${crypto.randomUUID()}`);
+  await page.goto(`${WEB}/ask/create-environment/${crypto.randomUUID()}`);
   await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
   check('a missing environment request says so', true);
+  // CLI 0.8.0 printed these links, and the first two paths of the dashboard were named for it.
+  const oldId = crypto.randomUUID();
+  await page.goto(`${WEB}/environment-requests/${oldId}`);
+  await page.waitForURL(`${WEB}/ask/create-environment/${oldId}`);
+  await page.goto(`${WEB}/requests/${oldId}`);
+  await page.waitForURL(`${WEB}/ask/access/${oldId}`);
+  await page.goto(`${WEB}/service-accounts`);
+  await page.waitForURL(`${WEB}/keys`);
+  check('the paths CLI 0.8.0 printed, and the old name of Keys, redirect', true);
 
   // --- a rejected request ---------------------------------------------------------------------
   const rejected = laptop.cli([
@@ -592,7 +605,7 @@ const main = async (browser: Browser) => {
   await shoot(page, '08f-request-rejected');
   const rejectedWait = laptop.cli(['ask', 'wait', rejected.json.id]);
   check('a rejected request ends the terminal’s wait with no key', rejectedWait.status === 4);
-  await page.goto(`${WEB}/requests/${crypto.randomUUID()}`);
+  await page.goto(`${WEB}/ask/access/${crypto.randomUUID()}`);
   await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
   await shoot(page, '08g-request-missing');
   check('a missing request says so', true);
@@ -765,6 +778,10 @@ const main = async (browser: Browser) => {
     (await page.getByLabel('Ends').inputValue()) === 'never' &&
       (await page.getByText(/With no end, it works until you revoke it/).count()) === 1,
   );
+  check(
+    'the request page says approving a key piped into a command makes a service account',
+    (await page.getByText(/approving makes a service account/).count()) === 1,
+  );
   await shoot(page, '08h-request-piped');
   await page.getByRole('button', { name: 'Approve', exact: true }).click();
   await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
@@ -787,14 +804,15 @@ const main = async (browser: Browser) => {
     }).status === 5,
   );
 
-  // --- the service accounts page, and access changed by the owner ------------------------------
-  await page.goto(`${WEB}/service-accounts`);
+  // --- the Keys page, and access changed by the owner ------------------------------------------
+  await page.goto(`${WEB}/keys`);
   await page.getByText('CI deploy').waitFor();
-  await shoot(page, '11-service-accounts');
+  await shoot(page, '11-keys');
   check(
-    'the list tells CLI logins from service accounts, with when each ends',
+    'the list tells CLI logins, service accounts and agent keys apart, with when each ends',
     (await page.getByRole('img', { name: 'CLI login' }).count()) === 1 &&
-      (await page.getByRole('img', { name: 'Service account' }).count()) === 3 &&
+      (await page.getByRole('img', { name: 'Service account' }).count()) === 1 &&
+      (await page.getByRole('img', { name: 'Agent key' }).count()) === 2 &&
       (await page.getByText('never expires').count()) === 1 &&
       (await page.getByText(/expires in 1[0-5] minutes/).count()) === 1 &&
       (await page.getByText(/expires in (1 hour|5[0-9] minutes)/).count()) === 1 &&
@@ -809,7 +827,7 @@ const main = async (browser: Browser) => {
       .getByRole('button', { name: 'Access' })
       .count()) === 0,
   );
-  await shootPhone(page, '11b-service-accounts-phone');
+  await shootPhone(page, '11b-keys-phone');
   const ciRow = page.getByRole('listitem').filter({ hasText: 'CI deploy' });
   await ciRow.getByRole('button', { name: 'Access' }).click();
   const accessDialog = page.getByRole('alertdialog');
@@ -834,7 +852,25 @@ const main = async (browser: Browser) => {
   await page.getByRole('alertdialog').waitFor({ state: 'hidden' });
   await ciRow.getByText(/expires in 30 days/).waitFor();
   check('the owner changes when a service account ends', true);
-  await shoot(page, '11g-service-accounts-after-access');
+  await shoot(page, '11g-keys-after-access');
+
+  // A key whose end has passed falls out of sight, and one click brings it back.
+  const [migration] = d1(`SELECT expires_at FROM credential WHERE name = 'Migration agent'`);
+  d1(`UPDATE credential SET expires_at = ${Date.now() - MINUTE_MS} WHERE name = 'Migration agent'`);
+  await page.goto(`${WEB}/keys`);
+  await page.getByText('CI deploy').waitFor();
+  check(
+    'a key that has ended is hidden, and counted in the button that shows it',
+    (await page.getByText('Migration agent').count()) === 0 &&
+      (await page.getByRole('button', { name: 'Show 1 ended key' }).count()) === 1,
+  );
+  await page.getByRole('button', { name: 'Show 1 ended key' }).click();
+  await page.getByText('Migration agent').waitFor();
+  check('the ended key is listed as expired', (await page.getByText('expired').count()) === 1);
+  await shoot(page, '11h-keys-ended-shown');
+  d1(
+    `UPDATE credential SET expires_at = ${String(migration?.expires_at)} WHERE name = 'Migration agent'`,
+  );
 
   // --- the environment, the bin and the activity --------------------------------------------------
   laptop.cli(['secret', 'set', 'acme/app/production', 'OLD_TOKEN'], {
@@ -1096,9 +1132,9 @@ const main = async (browser: Browser) => {
       !varlockLoads(ciEnv, 'acme/app/production', { API_KEY: 'value-from-the-cli' }).isLoaded,
   );
   check('a logged-out computer is not logged in', laptop.cli(['env', 'list']).status === 3);
-  await page.goto(`${WEB}/service-accounts`);
+  await page.goto(`${WEB}/keys`);
   await page.getByText('No CLI logins yet').waitFor();
-  await shoot(page, '14b-service-accounts-empty');
+  await shoot(page, '14b-keys-empty');
   await page.goto(`${WEB}/paste-links`);
   await page.getByText('Nothing is waiting on you').waitFor();
   await shoot(page, '14c-paste-links-empty');
@@ -1113,9 +1149,9 @@ const main = async (browser: Browser) => {
   await page.setViewportSize(PHONE);
   await shoot(page, '16-environment-dark-phone');
   await page.setViewportSize(DESKTOP);
-  await page.goto(`${WEB}/service-accounts`);
+  await page.goto(`${WEB}/keys`);
   await page.getByText('No CLI logins yet').waitFor();
-  await shoot(page, '16b-service-accounts-empty-dark');
+  await shoot(page, '16b-keys-empty-dark');
   await context.close();
 
   // --- a second person, with a password and no passkey ------------------------------------------

@@ -20,7 +20,7 @@ const secret = ({ openedSecretName, version }: Entry) => (
 );
 
 /**
- * A grant's detail is "<service account>: <read + write>": as a sentence, "<read + write> for <service account>".
+ * A grant's detail is "<key>: <read + write>": as a sentence, "<read + write> for <key>".
  * Anything else is shown as it came.
  */
 const grantDetail = ({ detail }: Entry) => {
@@ -38,7 +38,7 @@ const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   'password.remove': () => 'removed the password',
   'recovery.rotate': () => 'made a new recovery key',
   'credential.pair': ({ detail }) => <>approved the CLI login {detail}</>,
-  'credential.create': ({ detail }) => <>made the service account {detail}</>,
+  'credential.create': ({ detail }) => <>made the key {detail}</>,
   'request.create': ({ detail }) => <>asked for a key, {detail}</>,
   'request.approve': ({ detail }) => {
     // "<key>: <until …, or no end>", as `credential.expiry` writes its detail.

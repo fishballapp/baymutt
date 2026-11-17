@@ -387,6 +387,8 @@ export const requests = ({
             now,
             parentId: actor.credentialId,
             vouchers,
+            // A key piped into a command is for another system, one kept in a file for the agent.
+            intent: command === null ? 'agent' : 'service-account',
           }),
           sql`INSERT INTO access_request (credential_id, status, command, lifetime, created_at)
               SELECT ${key.id}, 'pending', ${command}, ${lifetime}, ${now} WHERE ${made}`,

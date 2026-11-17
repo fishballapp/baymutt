@@ -1,6 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { EnvironmentRequestPage } from '../pages/environment-request.tsx';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
-const Page = () => <EnvironmentRequestPage id={Route.useParams().id} />;
-
-export const Route = createFileRoute('/_app/environment-requests/$id')({ component: Page });
+// Where CLI 0.8.0's `baymutt ask create-environment` links to.
+export const Route = createFileRoute('/_app/environment-requests/$id')({
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: '/ask/create-environment/$id', params, replace: true });
+  },
+});

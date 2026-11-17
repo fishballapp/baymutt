@@ -1,5 +1,5 @@
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
-import { RobotIcon, TerminalWindowIcon } from '@phosphor-icons/react';
+import { ChatCircleDotsIcon, RobotIcon, TerminalWindowIcon } from '@phosphor-icons/react';
 import { Link } from '@tanstack/react-router';
 import * as Atom from 'effect/reactivity/Atom';
 import { useState } from 'react';
@@ -27,8 +27,10 @@ import {
   addressOf,
   changeAccessAtom,
   environmentsAtom,
+  hasEnded,
   isLogin,
   isVouched,
+  kindOf,
   type OpenedEnvironment,
   type OpenedRequest,
   type OpenedServiceAccount,
@@ -40,13 +42,19 @@ import {
 import { counted, expiryWords } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-/** A login and a scoped service account are told apart by a glyph and a word, never by colour. */
+const KINDS = {
+  login: { Icon: TerminalWindowIcon, label: 'CLI login' },
+  'service-account': { Icon: RobotIcon, label: 'Service account' },
+  agent: { Icon: ChatCircleDotsIcon, label: 'Agent key' },
+} as const;
+
+/** A CLI login, a service account and an agent key are told apart by a glyph and a word, never by colour. */
 const KindIcon = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
-  const Icon = isLogin(serviceAccount) ? TerminalWindowIcon : RobotIcon;
+  const { Icon, label } = KINDS[kindOf(serviceAccount)];
   return (
     <Icon
       role="img"
-      aria-label={isLogin(serviceAccount) ? 'CLI login' : 'Service account'}
+      aria-label={label}
       weight="regular"
       className="mt-0.5 size-5 shrink-0 text-muted"
     />
@@ -87,8 +95,8 @@ const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: OpenedServi
       />
       <p>
         Once it expires its key stops working
-        {isLogin(serviceAccount) && ', and so do the service accounts it asked for'}. A later date
-        revives it. What it already read stays read.
+        {isLogin(serviceAccount) && ', and so do the keys it asked for'}. A later date revives it.
+        What it already read stays read.
       </p>
     </Confirm>
   );
@@ -264,13 +272,7 @@ const ServiceAccountRow = ({
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium">{serviceAccount.name}</span>
-            <Tag
-              tone={
-                serviceAccount.expiresAt !== null && serviceAccount.expiresAt <= Date.now()
-                  ? 'warn'
-                  : 'plain'
-              }
-            >
+            <Tag tone={hasEnded(serviceAccount, Date.now()) ? 'warn' : 'plain'}>
               {expiryWords(serviceAccount.expiresAt, Date.now())}
             </Tag>
           </p>
@@ -278,8 +280,8 @@ const ServiceAccountRow = ({
             <p className="mt-0.5 text-sm [overflow-wrap:anywhere]">{serviceAccount.description}</p>
           )}
           <p className="mt-0.5 text-sm text-muted">
-            {isLogin(serviceAccount) ? 'CLI login, approved' : 'Service account, asked for by'}{' '}
-            {maker !== undefined && `${maker.name} `}
+            {isLogin(serviceAccount) ? 'CLI login, approved' : 'Asked for'}{' '}
+            {maker !== undefined && `by ${maker.name} `}
             <Time at={serviceAccount.createdAt} /> ·{' '}
             {serviceAccount.lastUsedAt === null ? (
               'never used'
@@ -305,8 +307,8 @@ const ServiceAccountRow = ({
               </Button>
             }
             title={`Revoke ${serviceAccount.name}?`}
-            keepLabel="Keep service account"
-            confirmLabel="Revoke service account"
+            keepLabel="Keep key"
+            confirmLabel="Revoke key"
             pendingLabel="Revoking…"
             isDangerous
             isPending={revoking.waiting}
@@ -318,7 +320,7 @@ const ServiceAccountRow = ({
           >
             <p>
               Its key stops working at once
-              {made > 0 && `, and so do the ${counted(made, 'service account')} it asked for`}.
+              {made > 0 && `, and so do the ${counted(made, 'key')} it asked for`}.
             </p>
             <p>
               What it already read stays read. If the key may have leaked, replace those values at
@@ -354,7 +356,7 @@ const RequestRow = ({ request }: { readonly request: OpenedRequest }) => (
         </p>
       </div>
       <div className="flex flex-wrap gap-1.5 sm:shrink-0">
-        <Link to="/requests/$id" params={{ id: request.id }} className={buttonStyles()}>
+        <Link to="/ask/access/$id" params={{ id: request.id }} className={buttonStyles()}>
           Review
         </Link>
       </div>
@@ -366,10 +368,7 @@ const Requests = () => {
   const requests = latest(useAtomValue(requestsAtom(useOwner())));
   if (requests === null || requests.length === 0) return null;
   return (
-    <Section
-      title="Requests"
-      lede="Each waits for you. Approving one makes its key a service account."
-    >
+    <Section title="Requests" lede="Each waits for you.">
       <Rows>
         {requests.map(request => (
           <RequestRow key={request.id} request={request} />
@@ -379,20 +378,41 @@ const Requests = () => {
   );
 };
 
-export const ServiceAccountsPage = () => {
+const byNewest = (a: OpenedServiceAccount, b: OpenedServiceAccount) => b.createdAt - a.createdAt;
+
+export const KeysPage = () => {
   const result = useAtomValue(serviceAccountsAtom(useOwner()));
+  const [isShowingEnded, setIsShowingEnded] = useState(false);
   const serviceAccounts = latest(result);
+  const now = Date.now();
+  const ended = serviceAccounts?.filter(key => hasEnded(key, now)) ?? [];
+  const shown = (serviceAccounts ?? [])
+    .filter(key => isShowingEnded || !hasEnded(key, now))
+    .toSorted(byNewest);
+  const sections = [
+    { title: 'CLI logins', lede: undefined, keys: shown.filter(key => kindOf(key) === 'login') },
+    {
+      title: 'Service accounts',
+      lede: 'Keys made for another system, such as CI.',
+      keys: shown.filter(key => kindOf(key) === 'service-account'),
+    },
+    {
+      title: 'Agent keys',
+      lede: 'Keys an agent asked for, for its own work.',
+      keys: shown.filter(key => kindOf(key) === 'agent'),
+    },
+  ];
   return (
     <>
       <PageHeader
-        title="Service accounts"
-        lede="A CLI login lists the names in your orgs and opens nothing. A service account is the key of a request you approved: it reaches what the request named, until it ends."
+        title="Keys"
+        lede="A key reaches what the request you approved named. A CLI login lists the names in your orgs and opens nothing."
       />
       <Requests />
-      <Section title="CLI logins and service accounts">
-        {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-        {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
-        {serviceAccounts?.length === 0 && (
+      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
+      {serviceAccounts === null && !failureMessage(result) && <Skeleton />}
+      {serviceAccounts?.length === 0 && (
+        <Section title="CLI logins">
           <Empty title="No CLI logins yet">
             <p>Install the CLI and log in:</p>
             <CommandLine>npm install -g baymutt</CommandLine>
@@ -403,22 +423,36 @@ export const ServiceAccountsPage = () => {
               <Code>baymutt ask access</Code>.
             </p>
           </Empty>
-        )}
-        {serviceAccounts !== null && serviceAccounts.length > 0 && (
-          <Rows>
-            {serviceAccounts.map(serviceAccount => (
-              <ServiceAccountRow
-                key={serviceAccount.id}
-                serviceAccount={serviceAccount}
-                maker={serviceAccounts.find(({ id }) => id === serviceAccount.parentId)}
-                made={
-                  serviceAccounts.filter(({ parentId }) => parentId === serviceAccount.id).length
-                }
-              />
-            ))}
-          </Rows>
-        )}
-      </Section>
+        </Section>
+      )}
+      {sections.map(
+        ({ title, lede, keys }) =>
+          keys.length > 0 && (
+            <Section key={title} title={title} lede={lede}>
+              <Rows>
+                {keys.map(serviceAccount => (
+                  <ServiceAccountRow
+                    key={serviceAccount.id}
+                    serviceAccount={serviceAccount}
+                    maker={serviceAccounts?.find(({ id }) => id === serviceAccount.parentId)}
+                    made={
+                      (serviceAccounts ?? []).filter(
+                        ({ parentId }) => parentId === serviceAccount.id,
+                      ).length
+                    }
+                  />
+                ))}
+              </Rows>
+            </Section>
+          ),
+      )}
+      {ended.length > 0 && (
+        <div className="mt-8">
+          <Button size="sm" intent="quiet" onClick={() => setIsShowingEnded(current => !current)}>
+            {isShowingEnded ? 'Hide ended keys' : `Show ${counted(ended.length, 'ended key')}`}
+          </Button>
+        </div>
+      )}
     </>
   );
 };

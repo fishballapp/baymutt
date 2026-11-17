@@ -70,6 +70,7 @@ export const insertCredential = (
     endorsement = null,
     welcome = null,
     vouchers,
+    intent = null,
   }: {
     readonly accountId: string;
     readonly credential: NewServiceAccount;
@@ -78,16 +79,19 @@ export const insertCredential = (
     readonly endorsement?: string | null;
     readonly welcome?: string | null;
     readonly vouchers?: ServiceAccountVouchers;
+    /** What a key from a request is for; a CLI login has none. */
+    readonly intent?: 'service-account' | 'agent' | null;
   },
 ) =>
   sql`INSERT OR IGNORE INTO credential
       (id, account_id, name, public_key, bearer_hash, parent_id, description, endorsement,
-       welcome, key_voucher_owner, key_voucher_maker, account_voucher, created_at, expires_at)
+       welcome, key_voucher_owner, key_voucher_maker, account_voucher, created_at, expires_at,
+       intent)
     VALUES (${credential.id}, ${accountId}, ${credential.name}, ${credential.publicKey},
       ${credential.bearerHash}, ${parentId}, ${credential.description ?? null},
       ${endorsement}, ${welcome}, ${vouchers?.keyToOwner ?? null},
       ${vouchers?.keyToMaker ?? null}, ${vouchers?.accountKey ?? null}, ${now},
-      ${credential.expiresAt ?? null})
+      ${credential.expiresAt ?? null}, ${intent})
     RETURNING id`;
 
 /** Whether this request's insert is the row: an id that was taken leaves another's bearer there. */
@@ -158,7 +162,7 @@ export const serviceAccounts = ({
     execute: id =>
       sql`SELECT c.id, c.account_id, c.name, c.public_key, c.bearer_hash, c.parent_id,
             c.description, c.endorsement, c.welcome, c.key_voucher_owner, c.key_voucher_maker,
-            c.account_voucher, c.created_at, c.last_used_at, c.expires_at,
+            c.account_voucher, c.created_at, c.last_used_at, c.expires_at, c.intent,
             p.expires_at AS parent_expires_at
           FROM credential c LEFT JOIN credential p ON p.id = c.parent_id
           WHERE c.id = ${id} AND c.revoked_at IS NULL`,
@@ -170,7 +174,7 @@ export const serviceAccounts = ({
     execute: ({ accountId, self }) =>
       sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
             key_voucher_owner, key_voucher_maker, account_voucher, created_at, last_used_at,
-            expires_at
+            expires_at, intent
           FROM credential
           WHERE account_id = ${accountId} AND revoked_at IS NULL
             AND (${self} IS NULL OR id = ${self} OR parent_id = ${self})
@@ -243,6 +247,7 @@ export const serviceAccounts = ({
         parentId: row.parentId,
         description: row.description,
         expiresAt: row.expiresAt,
+        intent: row.intent,
         // Only the owner's vault can read an endorsement, and only the owner acts on one.
         endorsement: actor._tag === 'Owner' ? row.endorsement : null,
         keyVoucher: keyVoucherFor(actor, row),
@@ -305,7 +310,7 @@ export const serviceAccounts = ({
       const now = yield* Clock.currentTimeMillis;
       if (expiresAt !== null && expiresAt <= now) {
         return yield* new UnauthorizedError({
-          message: `This key expired on ${dayOf(expiresAt)}. The owner can extend it under Service accounts in the dashboard; otherwise make a new one.`,
+          message: `This key expired on ${dayOf(expiresAt)}. The owner can extend it under Keys in the dashboard; otherwise make a new one.`,
         });
       }
       if (parentExpiresAt !== null && parentExpiresAt <= now) {

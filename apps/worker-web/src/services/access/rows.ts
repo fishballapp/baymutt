@@ -35,6 +35,7 @@ export const ServiceAccountRowSchema = Schema.Struct({
   createdAt: Schema.Finite,
   lastUsedAt: Schema.NullOr(Schema.Finite),
   expiresAt: Schema.NullOr(Schema.Finite),
+  intent: Schema.NullOr(Schema.Literals(['service-account', 'agent'])),
 });
 export type ServiceAccountRow = typeof ServiceAccountRowSchema.Type;
 
@@ -253,7 +254,7 @@ export const lookups = (sql: D1Client.D1Client) => {
     execute: ({ accountId, id, isAnsweredOnly }) =>
       sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
             key_voucher_owner, key_voucher_maker, account_voucher, created_at, last_used_at,
-            expires_at
+            expires_at, intent
           FROM credential
           WHERE id = ${id} AND account_id = ${accountId} AND revoked_at IS NULL
             AND (${isAnsweredOnly ? 1 : 0} = 0 OR NOT EXISTS (SELECT 1 FROM access_request

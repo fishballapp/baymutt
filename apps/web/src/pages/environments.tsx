@@ -106,7 +106,7 @@ const EnvironmentRequests = () => {
               </div>
               <div className="flex flex-wrap gap-1.5 sm:shrink-0">
                 <Link
-                  to="/environment-requests/$id"
+                  to="/ask/create-environment/$id"
                   params={{ id: request.id }}
                   className={buttonStyles()}
                 >
@@ -140,7 +140,7 @@ export const EnvironmentsPage = () => {
     <>
       <PageHeader
         title="Environments"
-        lede="An environment is the unit of access. A CLI login lists it and opens nothing in it; a service account reaches it when a request you approved named it."
+        lede="An environment is the unit of access. A CLI login lists it and opens nothing in it; a key reaches it when a request you approved named it."
       />
       <EnvironmentRequests />
       {org !== null && <NewEnvironment org={org} />}
