@@ -77,10 +77,13 @@ const readAsked = Effect.fn('keyChanges.readAsked')(function* (id: string) {
   return Option.some(asked);
 });
 
-/** Where the owner answers key change `id`: the dashboard's page for an `ask change`. */
-export const keyChangeUrl = Effect.fn('keyChanges.url')(function* (id: string) {
+/** Where the owner answers a key change: its page under the org its key belongs to. */
+export const keyChangeUrl = Effect.fn('keyChanges.url')(function* ({
+  id,
+  org,
+}: Pick<KeyChange, 'id' | 'org'>) {
   const { origin } = yield* Settings;
-  return `${origin}/ask/change/${id}`;
+  return `${origin}/orgs/${org.slug}/ask/change/${id}`;
 });
 
 /** The key file of `keyId`, if this computer holds it: what decides whether a change is checked with the key. */
@@ -248,7 +251,7 @@ export const settleKeyChange = Effect.fn('keyChanges.settle')(function* (
       result: {
         id: id,
         status: 'pending',
-        url: yield* keyChangeUrl(id),
+        url: yield* keyChangeUrl(change),
         next: `Run \`baymutt ask wait ${id}\` to keep waiting. Key ${change.key.id} keeps working with what it holds meanwhile.`,
       },
       failure: usage(

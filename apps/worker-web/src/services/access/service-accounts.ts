@@ -33,6 +33,7 @@ import {
   orgsOf,
   type ServiceAccountRow,
   ServiceAccountRowSchema,
+  serviceAccountColumns,
 } from './rows.ts';
 
 const LAST_USED_RESOLUTION_MS = 60_000;
@@ -71,6 +72,7 @@ export const insertCredential = (
     welcome = null,
     vouchers,
     intent = null,
+    orgId = null,
   }: {
     readonly accountId: string;
     readonly credential: NewServiceAccount;
@@ -81,17 +83,19 @@ export const insertCredential = (
     readonly vouchers?: ServiceAccountVouchers;
     /** What a key from a request is for; a CLI login has none. */
     readonly intent?: 'service-account' | 'agent' | null;
+    /** The org a key from a request belongs to; a CLI login has none. */
+    readonly orgId?: string | null;
   },
 ) =>
   sql`INSERT OR IGNORE INTO credential
       (id, account_id, name, public_key, bearer_hash, parent_id, description, endorsement,
        welcome, key_voucher_owner, key_voucher_maker, account_voucher, created_at, expires_at,
-       intent)
+       intent, org_id)
     VALUES (${credential.id}, ${accountId}, ${credential.name}, ${credential.publicKey},
       ${credential.bearerHash}, ${parentId}, ${credential.description ?? null},
       ${endorsement}, ${welcome}, ${vouchers?.keyToOwner ?? null},
       ${vouchers?.keyToMaker ?? null}, ${vouchers?.accountKey ?? null}, ${now},
-      ${credential.expiresAt ?? null}, ${intent})
+      ${credential.expiresAt ?? null}, ${intent}, ${orgId})
     RETURNING id`;
 
 /** Whether this request's insert is the row: an id that was taken leaves another's bearer there. */
@@ -166,11 +170,10 @@ export const serviceAccounts = ({
     }),
     // A revoked parent revokes its children with it; an expired one stops them too.
     execute: id =>
-      sql`SELECT c.id, c.account_id, c.name, c.public_key, c.bearer_hash, c.parent_id,
-            c.description, c.endorsement, c.welcome, c.key_voucher_owner, c.key_voucher_maker,
-            c.account_voucher, c.created_at, c.last_used_at, c.expires_at, c.intent,
-            p.expires_at AS parent_expires_at
-          FROM credential c LEFT JOIN credential p ON p.id = c.parent_id
+      sql`SELECT ${serviceAccountColumns(sql)}, c.bearer_hash, p.expires_at AS parent_expires_at
+          FROM credential c
+          LEFT JOIN organization o ON o.id = c.org_id
+          LEFT JOIN credential p ON p.id = c.parent_id
           WHERE c.id = ${id} AND c.revoked_at IS NULL`,
   });
 
@@ -178,15 +181,13 @@ export const serviceAccounts = ({
     Request: Schema.Struct({ accountId: Schema.String, self: Schema.NullOr(Schema.String) }),
     Result: ServiceAccountRowSchema,
     execute: ({ accountId, self }) =>
-      sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
-            key_voucher_owner, key_voucher_maker, account_voucher, created_at, last_used_at,
-            expires_at, intent
-          FROM credential
-          WHERE account_id = ${accountId} AND revoked_at IS NULL
-            AND (${self} IS NULL OR id = ${self} OR parent_id = ${self})
+      sql`SELECT ${serviceAccountColumns(sql)}
+          FROM credential c LEFT JOIN organization o ON o.id = c.org_id
+          WHERE c.account_id = ${accountId} AND c.revoked_at IS NULL
+            AND (${self} IS NULL OR c.id = ${self} OR c.parent_id = ${self})
             AND NOT EXISTS (SELECT 1 FROM access_request r
-                            WHERE r.credential_id = credential.id AND r.status = 'pending')
-          ORDER BY created_at`,
+                            WHERE r.credential_id = c.id AND r.status = 'pending')
+          ORDER BY c.created_at`,
   });
 
   const grantsOf = SqlSchema.findAll({
@@ -250,6 +251,8 @@ export const serviceAccounts = ({
         id: row.id,
         name: row.name,
         publicKey: row.publicKey,
+        org:
+          row.orgId === null || row.orgSlug === null ? null : { id: row.orgId, slug: row.orgSlug },
         parentId: row.parentId,
         description: row.description,
         expiresAt: row.expiresAt,
@@ -453,6 +456,11 @@ export const serviceAccounts = ({
         });
       }
       const { environment } = yield* ownersEnvironment(actor, environmentId, 'grants access');
+      if (environment.orgId !== target.orgId) {
+        return yield* new InvalidRequestError({
+          message: `${target.name} belongs to ${target.orgSlug ?? 'another org'}, and a key holds environments of its own org only.`,
+        });
+      }
       // Only what was made for the environment's current key is kept.
       const [held] = yield* sql<{
         readonly readWrap: string | null;

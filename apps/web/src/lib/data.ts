@@ -256,19 +256,6 @@ export const orgsAtom = ApiClient.query('orgs', 'list', { reactivityKeys: ['orgs
   Atom.mapResult(({ orgs }) => orgs),
 );
 
-const PICKED_ORG = 'baymutt.org';
-
-/** The org the picker shows, by id, as this browser last picked it. */
-export const pickedOrgIdAtom = Atom.make<string | null>(localStorage.getItem(PICKED_ORG)).pipe(
-  Atom.keepAlive,
-);
-
-export const rememberPickedOrg = (id: string) => localStorage.setItem(PICKED_ORG, id);
-
-/** The picked org, or the first when the one picked is gone or none was. */
-export const pickedOrg = (orgs: ReadonlyArray<Org>, pickedId: string | null): Org | null =>
-  orgs.find(org => org.id === pickedId) ?? orgs[0] ?? null;
-
 /** A CLI login: made by `baymutt auth login` and approved here, so it has no parent. It holds no environment. */
 export const isLogin = (serviceAccount: Pick<ServiceAccount, 'parentId'>): boolean =>
   serviceAccount.parentId === null;
@@ -301,11 +288,11 @@ type NamesReaders = {
 
 /**
  * Everyone who may list an org's names, each by a key the vault trusts: the owner's account,
- * every CLI login the vault approved, and every service account, by the key its CLI login vouched
- * for. Every service account, not only those the store lists in the org: one whose environment
- * there is in the bin lists it again once it is restored. A request's key still waiting gets the
- * names key when it is approved. One whose key cannot be verified is left out, never trusted on
- * the store's word; it is named only if it reaches the org.
+ * every CLI login the vault approved, and every key of the org, by the key its CLI login vouched
+ * for. Every key of the org, not only those the store lists holding something there: one whose
+ * environment is in the bin lists it again once it is restored. A request's key still waiting
+ * gets the names key when it is approved. One whose key cannot be verified is left out, never
+ * trusted on the store's word, and named.
  */
 const namesReaders = Effect.fnUntraced(function* (owner: Owner, orgId: string) {
   const [{ credentials }, { requests }] = yield* ApiClient.use(client =>
@@ -322,16 +309,15 @@ const namesReaders = Effect.fnUntraced(function* (owner: Owner, orgId: string) {
       : keys(() => vouchedScopedReader(owner, { serviceAccount, maker }));
   };
   const verified = yield* Effect.forEach(
-    credentials.filter(({ id }) => !waiting.has(id)),
+    credentials.filter(
+      serviceAccount =>
+        !waiting.has(serviceAccount.id) &&
+        (isLogin(serviceAccount) || serviceAccount.org?.id === orgId),
+    ),
     serviceAccount =>
       readerOf(serviceAccount).pipe(
         Effect.orElseSucceed(() => null),
-        Effect.map(reader => ({
-          reader,
-          name: serviceAccount.name,
-          isNamed:
-            isLogin(serviceAccount) || serviceAccount.grants.some(grant => grant.orgId === orgId),
-        })),
+        Effect.map(reader => ({ reader, name: serviceAccount.name })),
       ),
   );
   return {
@@ -339,9 +325,7 @@ const namesReaders = Effect.fnUntraced(function* (owner: Owner, orgId: string) {
       { id: owner.accountId, publicKey: accountPublicKey(owner) },
       ...verified.flatMap(({ reader }) => (reader === null ? [] : [reader])),
     ],
-    leftOut: verified.flatMap(({ reader, name, isNamed }) =>
-      reader === null && isNamed ? [name] : [],
-    ),
+    leftOut: verified.flatMap(({ reader, name }) => (reader === null ? [name] : [])),
   } satisfies NamesReaders;
 });
 
@@ -435,8 +419,18 @@ export const deleteOrgAtom = Atom.family((_id: string) =>
   ApiClient.runtime.fn(
     (id: string) =>
       ApiClient.use(client => client.orgs.remove({ params: { id } })).pipe(faultsAsDefects),
-    // Deleting an org also removes the environment requests waiting in it.
-    { reactivityKeys: ['orgs', 'environmentRequests', 'audit'] },
+    // Deleting an org also removes its keys, and the requests, key changes and environment requests
+    // waiting in it.
+    {
+      reactivityKeys: [
+        'orgs',
+        'serviceAccounts',
+        'requests',
+        'keyChanges',
+        'environmentRequests',
+        'audit',
+      ],
+    },
   ),
 );
 

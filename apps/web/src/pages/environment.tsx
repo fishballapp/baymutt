@@ -7,6 +7,7 @@ import * as Atom from 'effect/reactivity/Atom';
 import * as Schema from 'effect/Schema';
 import { useEffect, useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import {
   Code,
   CommandLine,
@@ -475,7 +476,12 @@ const DeleteEnvironment = ({ environment }: { readonly environment: OpenedEnviro
           error={failureMessage(deleting)}
           onConfirm={async () => {
             const exit = await remove(environment.id);
-            if (exit._tag === 'Success') await navigate({ to: '/environments' });
+            if (exit._tag === 'Success') {
+              await navigate({
+                to: '/orgs/$slug/environments',
+                params: { slug: environment.orgSlug },
+              });
+            }
           }}
         >
           <p>
@@ -489,15 +495,20 @@ const DeleteEnvironment = ({ environment }: { readonly environment: OpenedEnviro
 };
 
 export const EnvironmentPage = ({ id }: { readonly id: string }) => {
+  const org = useOrg();
   const result = useAtomValue(environmentAtom(useOwner())(id));
-  const environment = latest(result);
+  const found = latest(result);
+  // Only an environment of the org the address names: one of another org is not found here.
+  const environment = found?.orgId === org.id ? found : null;
   if (environment === null) {
-    return failureMessage(result) ? (
+    const failure =
+      found === null ? failureMessage(result) : `${org.name} has no environment with this id.`;
+    return failure ? (
       <>
-        <Notice>{failureMessage(result)}</Notice>
+        <Notice>{failure}</Notice>
         <p className="mt-4">
-          <Link to="/environments" className="underline">
-            Back to all environments
+          <Link to="/orgs/$slug/environments" params={{ slug: org.slug }} className="underline">
+            Back to the environments of {org.name}
           </Link>
         </p>
       </>
@@ -508,7 +519,8 @@ export const EnvironmentPage = ({ id }: { readonly id: string }) => {
   return (
     <>
       <Link
-        to="/environments"
+        to="/orgs/$slug/environments"
+        params={{ slug: org.slug }}
         className="-ml-1 mb-3 inline-flex items-center gap-1 rounded-control px-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-foreground"
       >
         <CaretLeftIcon aria-hidden="true" className="size-3.5" />

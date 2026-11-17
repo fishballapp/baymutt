@@ -36,6 +36,9 @@ export const ServiceAccountRowSchema = Schema.Struct({
   lastUsedAt: Schema.NullOr(Schema.Finite),
   expiresAt: Schema.NullOr(Schema.Finite),
   intent: Schema.NullOr(Schema.Literals(['service-account', 'agent'])),
+  /** The org a key belongs to; null for a CLI login. */
+  orgId: Schema.NullOr(Schema.String),
+  orgSlug: Schema.NullOr(Schema.String),
 });
 export type ServiceAccountRow = typeof ServiceAccountRowSchema.Type;
 
@@ -79,6 +82,25 @@ export type EnvironmentAccess = {
   /** The caller is a CLI login, which lists every environment and holds none. */
   readonly readerIsLogin: boolean;
 };
+
+/** What `ServiceAccountRowSchema` reads, from `credential c LEFT JOIN organization o` on its org. */
+export const serviceAccountColumns = (sql: D1Client.D1Client) =>
+  sql`c.id, c.account_id, c.name, c.public_key, c.parent_id, c.description, c.endorsement,
+    c.welcome, c.key_voucher_owner, c.key_voucher_maker, c.account_voucher, c.created_at,
+    c.last_used_at, c.expires_at, c.intent, c.org_id, o.slug AS org_slug`;
+
+/**
+ * Who may hold an org's names key besides the owner's account: a CLI login, which lists names in
+ * every org of its person, or a key of that org. A key of another org may not.
+ */
+export const mayListNamesIn = (
+  reader: { readonly parentId: string | null; readonly orgId: string | null },
+  orgId: string,
+) => reader.parentId === null || reader.orgId === orgId;
+
+/** What a key is told when it reaches past the one org it belongs to. */
+export const outsideKeyOrg = (keyOrgSlug: string, what: string) =>
+  `A key belongs to one org, and this one belongs to ${keyOrgSlug}: ${what}. Ask once per org: a key for another org is asked for with its own \`baymutt ask access\`.`;
 
 /** A CLI login: made by `baymutt auth login` and approved by the owner, so it has no parent. It holds no environment. */
 export const isLogin = (actor: ActorIdentity): boolean =>
@@ -252,13 +274,11 @@ export const lookups = (sql: D1Client.D1Client) => {
     }),
     Result: ServiceAccountRowSchema,
     execute: ({ accountId, id, isAnsweredOnly }) =>
-      sql`SELECT id, account_id, name, public_key, parent_id, description, endorsement, welcome,
-            key_voucher_owner, key_voucher_maker, account_voucher, created_at, last_used_at,
-            expires_at, intent
-          FROM credential
-          WHERE id = ${id} AND account_id = ${accountId} AND revoked_at IS NULL
+      sql`SELECT ${serviceAccountColumns(sql)}
+          FROM credential c LEFT JOIN organization o ON o.id = c.org_id
+          WHERE c.id = ${id} AND c.account_id = ${accountId} AND c.revoked_at IS NULL
             AND (${isAnsweredOnly ? 1 : 0} = 0 OR NOT EXISTS (SELECT 1 FROM access_request
-              WHERE credential_id = credential.id AND status <> 'approved'))`,
+              WHERE credential_id = c.id AND status <> 'approved'))`,
   });
 
   const notFound = () => new NotFoundError({ message: 'No CLI login or key has this id.' });

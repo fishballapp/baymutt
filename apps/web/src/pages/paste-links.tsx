@@ -1,6 +1,7 @@
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
 import { useOwner } from '../components/gate.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import {
   Code,
   Empty,
@@ -63,13 +64,14 @@ const PasteRow = ({ link }: { readonly link: OpenedPasteLink }) => {
 
 export const PasteLinksPage = () => {
   const result = useAtomValue(pasteLinksAtom(useOwner()));
-  const paste = latest(result);
+  const org = useOrg();
+  const paste = latest(result)?.filter(link => link.orgId === org.id) ?? null;
   const failure = failureMessage(result);
   return (
     <>
       <PageHeader
         title="Paste links"
-        lede="Values your CLI logins and keys asked you to paste, in every org."
+        lede={`Values your CLI logins and keys asked you to paste into ${org.name}.`}
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
       {paste === null && !failure && <Skeleton rows={2} />}

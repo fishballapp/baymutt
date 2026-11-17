@@ -28,8 +28,8 @@ export const kindOf = ({
   return expiresAt === null ? 'service-account' : 'agent-key';
 };
 
-/** A key as listed: which kind it is, and the environments it holds named as written. */
-export const namedKey = (namesKeys: NamesKeys, { grants, ...key }: Listed) =>
+/** A key as listed: which kind it is, the slug of its org, and the environments it holds named as written. */
+export const namedKey = (namesKeys: NamesKeys, { grants, org, ...key }: Listed) =>
   Effect.map(
     Effect.forEach(
       grants,
@@ -43,7 +43,7 @@ export const namedKey = (namesKeys: NamesKeys, { grants, ...key }: Listed) =>
         ),
       { concurrency: 'unbounded' },
     ),
-    named => ({ kind: kindOf(key), ...key, grants: named }),
+    named => ({ kind: kindOf(key), ...key, org: org?.slug ?? null, grants: named }),
   );
 
 const listCommand = Command.make(
@@ -61,7 +61,7 @@ const listCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'This key, and the keys it asked for, with what each holds. `kind` says which each is: `cli-login` (made by `baymutt auth login`, lists names and holds no environment), `agent-key` (asked for with `baymutt ask access` and kept in a file, for an agent’s own work) or `service-account` (asked for with a command after --, for another system such as CI)',
+    'This key, and the keys it asked for, with what each holds. `kind` says which each is: `cli-login` (made by `baymutt auth login`, lists names and holds no environment), `agent-key` (asked for with `baymutt ask access` and kept in a file, for an agent’s own work) or `service-account` (asked for with a command after --, for another system such as CI). `org` is the slug of the one org a key belongs to, whose environments alone it can hold; null for a CLI login, which is the account’s',
   ),
 );
 

@@ -2,8 +2,12 @@ import { MIN_PASSWORD_LENGTH } from '@baymutt/keys';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
+import { KeyRows, useEndedShown } from '../components/keys.tsx';
 import { OrgList } from '../components/orgs.tsx';
 import {
+  Code,
+  CommandLine,
+  Empty,
   Notice,
   PageHeader,
   Row,
@@ -19,15 +23,56 @@ import { Confirm } from '../components/ui/confirm.tsx';
 import { TextField } from '../components/ui/field.tsx';
 import {
   addPasskeyAtom,
+  isLogin,
   removePasskeyAtom,
   removePasswordAtom,
   rotateRecoveryKeyAtom,
+  serviceAccountsAtom,
   sessionAtom,
   setPasswordAtom,
   signOutAtom,
 } from '../lib/data.ts';
 import { exactTime } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
+
+/**
+ * The account's CLI logins: each lists the names in every org and holds no environment, so they
+ * are the account's, not an org's. A new one is approved from the link `baymutt auth login` prints.
+ */
+const CliLogins = () => {
+  const result = useAtomValue(serviceAccountsAtom(useOwner()));
+  const all = latest(result);
+  const logins = all?.filter(isLogin) ?? null;
+  const { shown, toggle } = useEndedShown(logins);
+  return (
+    <Section
+      title="CLI logins"
+      lede={
+        <>
+          Each lists the names in your orgs and opens nothing. One is approved from the link{' '}
+          <Code>baymutt auth login</Code> prints.
+        </>
+      }
+    >
+      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
+      {logins === null && !failureMessage(result) && <Skeleton rows={1} />}
+      {logins?.length === 0 && (
+        <Empty title="No CLI logins yet">
+          <p>Install the CLI and log in:</p>
+          <CommandLine>npm install -g baymutt</CommandLine>
+          <CommandLine>baymutt auth login</CommandLine>
+          <p>
+            It prints a link and a code. Open the link here and approve it if the codes match. The
+            CLI login then lists the names in your orgs, and asks you for environments with{' '}
+            <Code>baymutt ask access</Code>.
+          </p>
+        </Empty>
+      )}
+      {shown.length > 0 && <KeyRows keys={shown} all={all ?? []} />}
+      {toggle}
+    </Section>
+  );
+};
 
 const Passkeys = () => {
   const owner = useOwner();
@@ -211,6 +256,7 @@ export const AccountPage = () => {
       <Section title="Orgs" lede="Environments belong to an org. You own each org you create.">
         <OrgList />
       </Section>
+      <CliLogins />
       <Passkeys />
       <Password />
       <Recovery onNewKey={setNewKey} />

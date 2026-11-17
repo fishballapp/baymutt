@@ -29,10 +29,13 @@ const POLL_EVERY = Duration.seconds(2);
 /** One key is handed out at a time: asks waited on together would otherwise share a command's output. */
 const handingOut = Semaphore.makeUnsafe(1);
 
-/** Where the owner answers request `id`: the dashboard's page for an `ask access`. */
-export const requestUrl = Effect.fn('requests.url')(function* (id: string) {
+/** Where the owner answers a request: its page under the org its key belongs to. */
+export const requestUrl = Effect.fn('requests.url')(function* ({
+  id,
+  org,
+}: Pick<Request, 'id' | 'org'>) {
   const { origin } = yield* Settings;
-  return `${origin}/ask/access/${id}`;
+  return `${origin}/orgs/${org.slug}/ask/access/${id}`;
 });
 
 /** A key file younger than this may belong to an `ask` in another terminal that has not sent its request yet. */
@@ -393,7 +396,7 @@ export const settleRequest = Effect.fn('requests.settle')(function* (
       result: {
         id: request.id,
         status: 'pending',
-        url: yield* requestUrl(request.id),
+        url: yield* requestUrl(request),
         next: `Run \`baymutt ask wait ${request.id}\` to keep waiting.`,
       },
       failure: usage(

@@ -1,72 +1,137 @@
-// Orgs in the dashboard: the picker that scopes Environments, Activity and the Bin, the form that
-// creates one, and the list on the Account page.
+// Orgs in the dashboard: the org an address names (`/orgs/<slug>/…`) and the scope it gives every
+// page under it, the picker that moves between orgs, the form that creates one, and the list on
+// the Account page.
 import { LabelSchema, type Org, OrgSlugSchema } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { CaretDownIcon } from '@phosphor-icons/react';
+import { Link, Navigate, useNavigate } from '@tanstack/react-router';
 import * as Schema from 'effect/Schema';
-import { useState } from 'react';
-import {
-  createOrgAtom,
-  deleteOrgAtom,
-  orgsAtom,
-  pickedOrg,
-  pickedOrgIdAtom,
-  rememberPickedOrg,
-} from '../lib/data.ts';
+import { createContext, type ReactNode, use, useEffect, useState } from 'react';
+import { createOrgAtom, deleteOrgAtom, orgsAtom } from '../lib/data.ts';
 import { counted } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 import { useOwner } from './gate.tsx';
-import { Code, Notice, Row, RowActions, Rows, Time } from './parts.tsx';
-import { Button } from './ui/button.tsx';
+import { Code, Notice, PageHeader, Row, RowActions, Rows, Skeleton, Time } from './parts.tsx';
+import { Button, buttonStyles } from './ui/button.tsx';
 import { Confirm } from './ui/confirm.tsx';
 import { TextField } from './ui/field.tsx';
 
-/** The person's orgs, and the one the picker shows. `null` while they load. */
-export const usePickedOrg = (): {
-  readonly orgs: ReadonlyArray<Org> | null;
-  readonly org: Org | null;
-  readonly pick: (id: string) => void;
-} => {
-  const orgs = latest(useAtomValue(orgsAtom));
-  const [pickedId, setPickedId] = useAtom(pickedOrgIdAtom);
-  return {
-    orgs,
-    org: orgs === null ? null : pickedOrg(orgs, pickedId),
-    pick: id => {
-      rememberPickedOrg(id);
-      setPickedId(id);
-    },
-  };
+/** Holds a slug. A new name: `baymutt.org` held an org's id before 0.10.0. */
+const LAST_ORG = 'baymutt.lastOrgSlug';
+
+/**
+ * The org the dashboard opens on: the one this browser last showed, else the first. The address
+ * decides which org a page shows; this decides only where `/orgs` and the wordmark land.
+ */
+export const homeOrg = (orgs: ReadonlyArray<Org>): Org | null =>
+  orgs.find(org => org.slug === localStorage.getItem(LAST_ORG)) ?? orgs[0] ?? null;
+
+const OrgContext = createContext<Org | null>(null);
+
+/** The org the address names. Only under `OrgScope`, which renders nothing beneath it for any other. */
+export const useOrg = (): Org => {
+  const org = use(OrgContext);
+  if (org === null) throw new Error('useOrg is only available under OrgScope');
+  return org;
 };
 
-/** In the nav: which org's environments, activity and bin the pages show. */
-export const OrgPicker = () => {
-  const { orgs, org, pick } = usePickedOrg();
-  if (orgs === null || org === null) return null;
+/**
+ * Everything under `/orgs/<slug>`: the person's org with that slug, or a page that says there is
+ * none, with a way back.
+ */
+export const OrgScope = ({
+  slug,
+  children,
+}: {
+  readonly slug: string;
+  readonly children: ReactNode;
+}) => {
+  const result = useAtomValue(orgsAtom);
+  const orgs = latest(result);
+  const org = orgs?.find(listed => listed.slug === slug);
+  useEffect(() => {
+    if (org !== undefined) localStorage.setItem(LAST_ORG, org.slug);
+  }, [org]);
+  if (orgs === null) {
+    const failure = failureMessage(result);
+    return failure === null ? <Skeleton /> : <Notice>{failure}</Notice>;
+  }
+  // An org just created is not in the list until it has been read again.
+  if (org === undefined && result.waiting) return <Skeleton />;
+  if (org === undefined) {
+    return (
+      <div className="max-w-[34rem] space-y-4">
+        <h1 className="text-xl">No org here</h1>
+        <p className="text-muted">
+          None of your orgs has the slug <Code className="text-foreground">{slug}</Code>.
+        </p>
+        <Link to="/orgs" className={buttonStyles()}>
+          Go to your orgs
+        </Link>
+      </div>
+    );
+  }
+  return <OrgContext value={org}>{children}</OrgContext>;
+};
+
+/** `/orgs`: the org this browser last showed, or the form for a person with no org yet. */
+export const OrgsHome = () => {
+  const result = useAtomValue(orgsAtom);
+  const orgs = latest(result);
+  if (orgs === null) {
+    const failure = failureMessage(result);
+    return failure === null ? <Skeleton /> : <Notice>{failure}</Notice>;
+  }
+  const org = homeOrg(orgs);
+  if (org !== null) {
+    return <Navigate to="/orgs/$slug/environments" params={{ slug: org.slug }} replace />;
+  }
   return (
-    <div className="relative">
-      <label htmlFor="org-picker" className="sr-only">
-        Org
-      </label>
-      <select
-        id="org-picker"
-        value={org.id}
-        onChange={event => pick(event.target.value)}
-        className="h-9 w-full cursor-pointer appearance-none truncate rounded-control border border-line bg-background pr-9 pl-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-muted focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none"
-      >
-        {orgs.map(listed => (
-          <option key={listed.id} value={listed.id}>
-            {listed.name}
-          </option>
-        ))}
-      </select>
-      <CaretDownIcon
-        aria-hidden="true"
-        className="pointer-events-none absolute top-1/2 right-3 size-3.5 -translate-y-1/2 text-muted"
+    <>
+      <PageHeader
+        title="Create your first org"
+        lede="Every environment belongs to an org, and is named with the org’s slug first."
       />
-    </div>
+      <NewOrg />
+    </>
   );
 };
+
+/** In the nav: the org the page shows. Picking another opens it at `onPick`'s section. */
+export const OrgPicker = ({
+  orgs,
+  current,
+  onPick,
+}: {
+  readonly orgs: ReadonlyArray<Org>;
+  readonly current: Org;
+  readonly onPick: (org: Org) => void;
+}) => (
+  <div className="relative">
+    <label htmlFor="org-picker" className="sr-only">
+      Org
+    </label>
+    <select
+      id="org-picker"
+      value={current.id}
+      onChange={event => {
+        const picked = orgs.find(org => org.id === event.target.value);
+        if (picked !== undefined) onPick(picked);
+      }}
+      className="h-9 w-full cursor-pointer appearance-none truncate rounded-control border border-line bg-background pr-9 pl-3 text-sm font-medium text-foreground transition-colors duration-150 hover:border-muted focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none"
+    >
+      {orgs.map(org => (
+        <option key={org.id} value={org.id}>
+          {org.name}
+        </option>
+      ))}
+    </select>
+    <CaretDownIcon
+      aria-hidden="true"
+      className="pointer-events-none absolute top-1/2 right-3 size-3.5 -translate-y-1/2 text-muted"
+    />
+  </div>
+);
 
 const isName = Schema.is(LabelSchema);
 const isSlug = Schema.is(OrgSlugSchema);
@@ -80,11 +145,11 @@ const slugOf = (name: string) =>
     .slice(0, 40)
     .replace(/-+$/, '');
 
-/** Creates an org and shows it in the picker. */
+/** Creates an org and opens it. */
 export const NewOrg = ({ className }: { readonly className?: string }) => {
   const owner = useOwner();
   const [creation, create] = useAtom(createOrgAtom, { mode: 'promiseExit' });
-  const { pick } = usePickedOrg();
+  const navigate = useNavigate();
   const [name, setName] = useState('');
   const [slug, setSlug] = useState<string | null>(null);
   const shownSlug = slug ?? slugOf(name);
@@ -96,7 +161,7 @@ export const NewOrg = ({ className }: { readonly className?: string }) => {
         event.preventDefault();
         const exit = await create({ owner, name, slug: shownSlug });
         if (exit._tag === 'Success') {
-          pick(exit.value.id);
+          await navigate({ to: '/orgs/$slug/environments', params: { slug: exit.value.slug } });
           setName('');
           setSlug(null);
         }

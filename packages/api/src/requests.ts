@@ -8,7 +8,7 @@ import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
-import { ServiceAccountVouchersSchema } from './credentials.ts';
+import { KeyOrgSchema, ServiceAccountVouchersSchema } from './credentials.ts';
 import {
   AlreadyExistsError,
   LimitReachedError,
@@ -67,6 +67,8 @@ export const RequestSchema = Schema.Struct({
   /** The id of the key it is for: the service account it becomes. */
   id: IdSchema,
   name: LabelSchema,
+  /** The org its key belongs to: every environment it names is in it. */
+  org: KeyOrgSchema,
   /** Why, in its maker's words. A claim. */
   reason: DescriptionSchema,
   /** `expired`: nobody answered it within `REQUEST_WAIT_MS` of `createdAt`. Its maker asks again. */
@@ -124,7 +126,7 @@ export class RequestsGroup extends HttpApiGroup.make('requests')
         reason: DescriptionSchema,
         command: Schema.NullOr(CommandSchema),
         lifetime: Schema.NullOr(LifetimeSchema),
-        /** At least one, each environment once. Read, write or both on each. */
+        /** At least one, each environment once, all of one org. Read, write or both on each. */
         items: Schema.NonEmptyArray(
           Schema.Struct({
             environmentId: Schema.String,
@@ -144,7 +146,7 @@ export class RequestsGroup extends HttpApiGroup.make('requests')
       OpenApi.annotations({
         summary: 'Ask for environments',
         description:
-          'A CLI login only. It registers a new key that holds nothing, and a request for whole environments of the person’s orgs, each of which exists. The key works once the owner approves; a request left unanswered for an hour expires.',
+          'A CLI login only. It registers a new key that holds nothing, and a request for whole environments of one of the person’s orgs, each of which exists: the key belongs to that org. Environments of more than one org are refused; ask once per org. The key works once the owner approves; a request left unanswered for an hour expires.',
       }),
     ),
     HttpApiEndpoint.post('approve', '/requests/:id/approve', {

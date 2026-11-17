@@ -39,10 +39,11 @@ value. `baymutt --help` lists them all.
   are made in the dashboard; their creator owns them.
 - **A CLI login lists names and holds no environment.** It shows orgs, environments and secret
   names, and makes requests and paste links. `baymutt auth logout` revokes it and forgets its key.
-- **Each request is approved on its own**, for whole environments: `--read`, `--write` or both,
+- **Each request is approved on its own**, for whole environments of one org: `--read`, `--write` or both,
   `--expires 15m`, `1h` or `90d`. Nothing carries over to the next agent, which asks for itself.
   `--write` does not include `--read`: `--read-write` asks for both in one approval, where two
-  separate asks cost the owner two.
+  separate asks cost the owner two. A key belongs to the one org it was asked for in, and is
+  changed to add environments of that org only; environments of two orgs are two asks.
 - **Within a task, change the key you hold rather than ask for another.** `baymutt ask change <id>
   --read acme/app/staging --give-back acme/app/production --reason "…"` asks the owner to add to the
   key the agent already holds and take back what it no longer needs, as one approval; `--expires`

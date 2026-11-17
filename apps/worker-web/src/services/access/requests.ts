@@ -54,6 +54,8 @@ const RequestRowSchema = Schema.Struct({
   accountId: Schema.String,
   name: Schema.String,
   reason: Schema.String,
+  orgId: Schema.String,
+  orgSlug: Schema.String,
   publicKey: Schema.String,
   keyVoucherOwner: Schema.NullOr(Schema.String),
   expiresAt: Schema.NullOr(Schema.Finite),
@@ -126,12 +128,14 @@ export const requests = ({
     Request: RequestQuerySchema,
     Result: RequestRowSchema,
     execute: query =>
-      sql`SELECT c.id, c.account_id, c.name, c.description AS reason, c.public_key,
-            c.key_voucher_owner, c.expires_at, r.status, r.command, r.lifetime, r.created_at,
-            r.resolved_at, p.id AS maker_id, p.name AS maker_name,
-            p.public_key AS maker_public_key, p.endorsement AS maker_endorsement
+      sql`SELECT c.id, c.account_id, c.name, c.description AS reason, c.org_id,
+            ko.slug AS org_slug, c.public_key, c.key_voucher_owner, c.expires_at, r.status,
+            r.command, r.lifetime, r.created_at, r.resolved_at, p.id AS maker_id,
+            p.name AS maker_name, p.public_key AS maker_public_key,
+            p.endorsement AS maker_endorsement
           FROM access_request r
           JOIN credential c ON c.id = r.credential_id
+          JOIN organization ko ON ko.id = c.org_id
           JOIN credential p ON p.id = c.parent_id
           WHERE ${matching(query)}
           ORDER BY r.created_at`,
@@ -167,11 +171,12 @@ export const requests = ({
   /** The live environments of the person's orgs among `ids`. */
   const liveEnvironments = SqlSchema.findAll({
     Request: Schema.Struct({ accountId: Schema.String, ids: Schema.String }),
-    Result: Schema.Struct({ id: Schema.String }),
+    Result: Schema.Struct({ id: Schema.String, orgId: Schema.String, orgSlug: Schema.String }),
     execute: ({ accountId, ids }) =>
-      sql`SELECT id FROM environment
-          WHERE id IN (SELECT value FROM json_each(${ids}))
-            AND org_id IN (${orgsOf(sql, accountId)}) AND deleted_at IS NULL`,
+      sql`SELECT e.id, e.org_id, o.slug AS org_slug FROM environment e
+          JOIN organization o ON o.id = e.org_id
+          WHERE e.id IN (SELECT value FROM json_each(${ids}))
+            AND e.org_id IN (${orgsOf(sql, accountId)}) AND e.deleted_at IS NULL`,
   });
 
   const toRequest = (
@@ -187,6 +192,7 @@ export const requests = ({
     return {
       id: row.id,
       name: row.name,
+      org: { id: row.orgId, slug: row.orgSlug },
       reason: row.reason,
       status: hasExpired ? 'expired' : row.status,
       command: row.command,
@@ -374,6 +380,17 @@ export const requests = ({
             'A request names an environment that is not a live environment of your orgs. List them with `baymutt env list`; a new one is asked for with `baymutt ask create-environment`.',
         });
       }
+      // A key belongs to one org: the store refuses a request across orgs, whatever the CLI sent.
+      const orgSlugs = [...new Set(live.map(environment => environment.orgSlug))].toSorted();
+      const [org] = live;
+      if (org === undefined) {
+        return yield* Effect.die('a request with no environment passed its schema');
+      }
+      if (orgSlugs.length > 1) {
+        return yield* new InvalidRequestError({
+          message: `A key belongs to one org, and this request names environments of ${orgSlugs.length} (${orgSlugs.join(', ')}). Ask once per org: one \`baymutt ask access\` for each, naming only that org's environments.`,
+        });
+      }
       yield* underLimit(actor.accountId, 'serviceAccounts');
       const now = yield* Clock.currentTimeMillis;
       const credential = { ...key, description: reason };
@@ -389,6 +406,7 @@ export const requests = ({
             vouchers,
             // A key piped into a command is for another system, one kept in a file for the agent.
             intent: command === null ? 'agent' : 'service-account',
+            orgId: org.orgId,
           }),
           sql`INSERT INTO access_request (credential_id, status, command, lifetime, created_at)
               SELECT ${key.id}, 'pending', ${command}, ${lifetime}, ${now} WHERE ${made}`,
@@ -461,9 +479,10 @@ export const requests = ({
       if (
         namesKeyWraps.size !== approval.namesKeyWraps.length ||
         !orgIds.isSubsetOf(new Set(namesKeyWraps.keys())) ||
-        namesKeyWraps.size !== orgIds.size
+        namesKeyWraps.size !== orgIds.size ||
+        [...namesKeyWraps.keys()].some(orgId => orgId !== request.org.id)
       ) {
-        return yield* mismatch('the names of each org it reaches, and of no other');
+        return yield* mismatch('the names of its key’s org, and of no other');
       }
       for (const orgId of orgIds) {
         const org = yield* ownedOrg(actor, orgId, 'approves access to its environments');

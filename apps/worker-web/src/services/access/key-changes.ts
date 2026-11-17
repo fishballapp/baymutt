@@ -22,7 +22,7 @@ import * as Schema from 'effect/Schema';
 import * as SqlSchema from 'effect/sql/SqlSchema';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
-import { isLogin, type Lookups, namesNotSealed, orgsOf } from './rows.ts';
+import { isLogin, type Lookups, namesNotSealed, orgsOf, outsideKeyOrg } from './rows.ts';
 import { dayOf } from './service-accounts.ts';
 
 /** Who expires a change nobody answered. */
@@ -59,6 +59,8 @@ const ChangeRowSchema = Schema.Struct({
   keyPublicKey: Schema.String,
   keyVoucherOwner: Schema.NullOr(Schema.String),
   keyExpiresAt: Schema.NullOr(Schema.Finite),
+  orgId: Schema.String,
+  orgSlug: Schema.String,
   reason: Schema.String,
   status: Schema.Literals(['pending', 'approved', 'applied', 'rejected', 'expired']),
   lifetime: Schema.NullOr(Schema.Finite),
@@ -149,11 +151,12 @@ export const keyChanges = ({
     execute: query =>
       sql`SELECT k.id, c.id AS key_id, c.name AS key_name, c.intent AS key_intent,
             c.public_key AS key_public_key, c.key_voucher_owner, c.expires_at AS key_expires_at,
-            k.reason, k.status, k.lifetime, k.created_at, k.resolved_at, p.id AS maker_id,
+            c.org_id, ko.slug AS org_slug, k.reason, k.status, k.lifetime, k.created_at, k.resolved_at, p.id AS maker_id,
             p.name AS maker_name, p.public_key AS maker_public_key,
             p.endorsement AS maker_endorsement
           FROM key_change k
           JOIN credential c ON c.id = k.credential_id
+          JOIN organization ko ON ko.id = c.org_id
           JOIN credential p ON p.id = c.parent_id
           WHERE ${matching(query)}
           ORDER BY k.created_at`,
@@ -233,6 +236,7 @@ export const keyChanges = ({
         keyVoucher: isOwner ? row.keyVoucherOwner : null,
         expiresAt: row.keyExpiresAt,
       },
+      org: { id: row.orgId, slug: row.orgSlug },
       reason: row.reason,
       status: hasExpired ? 'expired' : row.status,
       lifetime: row.lifetime,
@@ -395,6 +399,14 @@ export const keyChanges = ({
           message:
             'A key change adds an environment that is not a live environment of your orgs. List them with `baymutt env list`; a new one is asked for with `baymutt ask create-environment`.',
         });
+      }
+      if (live.some(environment => environment.orgId !== key.orgId)) {
+        return yield* invalid(
+          outsideKeyOrg(
+            key.orgSlug ?? 'another org',
+            `a key change adds environments of its own org only`,
+          ),
+        );
       }
       const held = new Map(
         (yield* holdings(actor.accountId, [key.id])).map(holding => [
@@ -582,9 +594,10 @@ export const keyChanges = ({
       if (
         namesKeyWraps.size !== approval.namesKeyWraps.length ||
         !orgIds.isSubsetOf(new Set(namesKeyWraps.keys())) ||
-        namesKeyWraps.size !== orgIds.size
+        namesKeyWraps.size !== orgIds.size ||
+        [...namesKeyWraps.keys()].some(orgId => orgId !== change.org.id)
       ) {
-        return yield* mismatch('the names of each org it adds to, and of no other');
+        return yield* mismatch('the names of its key’s org when it adds to it, and of no other');
       }
       for (const orgId of new Set([...orgIds, ...change.giveBack.map(item => item.orgId)])) {
         const org = yield* ownedOrg(actor, orgId, 'approves access to its environments');

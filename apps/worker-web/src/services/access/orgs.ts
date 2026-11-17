@@ -19,7 +19,7 @@ import * as SqlSchema from 'effect/sql/SqlSchema';
 import type { Auth } from '../../platform/auth.ts';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
-import { areNamesSealedIn, isLogin, type Lookups, namesNotSealed } from './rows.ts';
+import { areNamesSealedIn, isLogin, type Lookups, mayListNamesIn, namesNotSealed } from './rows.ts';
 
 const OrgRowSchema = Schema.Struct({
   id: Schema.String,
@@ -314,17 +314,22 @@ export const orgs = ({
       }
       const readers = new Set(wraps.map(({ readerId }) => readerId));
       if (readers.size !== wraps.length || !readers.has(actor.accountId)) {
-        return yield* mismatch('covers your account and each of its CLI logins and keys once');
+        return yield* mismatch(
+          'covers your account, each of its CLI logins and each key of this org once',
+        );
       }
       for (const readerId of readers) {
         if (readerId === actor.accountId) continue;
-        yield* serviceAccountIn(actor.accountId, readerId).pipe(
+        const reader = yield* serviceAccountIn(actor.accountId, readerId).pipe(
           Effect.catchTag('NotFoundError', () =>
             Effect.fail(
               mismatch('covers only your account and the CLI logins and keys that still work'),
             ),
           ),
         );
+        if (!mayListNamesIn(reader, id)) {
+          return yield* mismatch(`covers no key of another org than ${org.slug}`);
+        }
       }
       const now = yield* Clock.currentTimeMillis;
       const notSealed = sql`NOT ${areNamesSealedIn(sql, id)}`;
@@ -368,7 +373,14 @@ export const orgs = ({
     }) {
       const org = yield* ownedOrg(actor, id, 'hands its names key on');
       if (!org.areNamesSealed) return yield* namesNotSealed(org.slug);
-      if (readerId !== actor.accountId) yield* serviceAccountIn(actor.accountId, readerId);
+      if (readerId !== actor.accountId) {
+        const reader = yield* serviceAccountIn(actor.accountId, readerId);
+        if (!mayListNamesIn(reader, id)) {
+          return yield* new InvalidRequestError({
+            message: `${reader.name} is a key of another org, so it does not list the names in ${org.slug}.`,
+          });
+        }
+      }
       const now = yield* Clock.currentTimeMillis;
       yield* sql`INSERT INTO names_key_wrap (org_id, reader_id, wrap, created_at)
           VALUES (${id}, ${readerId}, ${wrap}, ${now})

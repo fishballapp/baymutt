@@ -116,13 +116,14 @@ const legacy = async (world: StoreWorld) => {
     );
   }
   run(
-    `INSERT INTO credential (id, account_id, name, public_key, bearer_hash, parent_id, created_at)
-     VALUES (?, ?, 'deploy', ?, ?, ?, 0)`,
+    `INSERT INTO credential (id, account_id, name, public_key, bearer_hash, parent_id, created_at, org_id)
+     VALUES (?, ?, 'deploy', ?, ?, ?, 0, ?)`,
     deploy.id,
     accountId,
     deploy.publicKey,
     deployBearer.hash,
     login.id,
+    orgId,
   );
   run(
     `INSERT INTO environment_grant
@@ -470,13 +471,13 @@ describe('sealing an org’s names', () => {
 });
 
 describe('handing an org’s names key on', () => {
-  it('is the owner’s, for a sealed org, to the account or a live key of it', async () => {
+  it('is the owner’s, for a sealed org, to the account, a CLI login or a live key of that org', async () => {
     const world = await storeWorld();
     const { w, owner, accountId, orgId, environment, serviceAccount, pair } = world;
     const other = await world.org('other');
     const unsealed = await world.org('legacy', { isSealed: false });
     const login = await pair('laptop');
-    // A service account approved for this org, that the owner later hands the other one too.
+    // A service account of this org, which the other org's names key is never handed to.
     const made = await serviceAccount([{ environmentId: await environment('app'), read: true }], {
       maker: login,
     });
@@ -495,15 +496,15 @@ describe('handing an org’s names key on', () => {
       status: 404,
       body: { code: 'NotFoundError' },
     });
-    expect(await put(other, made.id)).toEqual({ status: 200, body: { readerId: made.id } });
+    expect(await put(other, made.id)).toMatchObject({
+      status: 400,
+      body: { code: 'InvalidRequestError' },
+    });
+    expect(await put(orgId, made.id)).toEqual({ status: 200, body: { readerId: made.id } });
+    expect(await put(other, login.id)).toEqual({ status: 200, body: { readerId: login.id } });
     expect(await put(other, accountId)).toMatchObject({ status: 200 });
     expect(await call(w, 'GET', '/environments', made.headers)).toMatchObject({
-      body: {
-        namesKeys: expect.arrayContaining([
-          { orgId, wrap: NAMES_KEY_WRAP },
-          { orgId: other, wrap: NAMES_KEY_WRAP },
-        ]),
-      },
+      body: { namesKeys: [{ orgId, wrap: NAMES_KEY_WRAP }] },
     });
   });
 });

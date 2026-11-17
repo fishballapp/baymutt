@@ -91,7 +91,7 @@ export class OrgsGroup extends HttpApiGroup.make('orgs')
     HttpApiEndpoint.post('sealNames', '/orgs/:id/seal-names', {
       params: { id: Schema.String },
       payload: Schema.Struct({
-        /** The new names key, wrapped to the owner's account and to every CLI login and service account that reaches the org. */
+        /** The new names key, wrapped to the owner's account, every CLI login, and every key of this org: no key of another org. */
         wraps: Schema.Array(NamesKeyReaderWrapSchema),
         environments: Schema.Array(
           Schema.Struct({

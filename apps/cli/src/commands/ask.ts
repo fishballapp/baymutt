@@ -153,6 +153,16 @@ const accessCommand = Command.make(
       });
     }
 
+    // A key belongs to one org; the store refuses one across orgs too, after the key is made.
+    const orgSlugs = new Set(
+      environments.filter(({ id }) => items.has(id)).map(({ orgSlug }) => orgSlug),
+    );
+    if (orgSlugs.size > 1) {
+      return yield* usage(
+        `A key belongs to one org, and these environments are in ${orgSlugs.size}: ${[...orgSlugs].toSorted().join(', ')}. Ask once per org: one \`baymutt ask access\` for each, naming only that org's environments.`,
+      );
+    }
+
     // The new key names this login as its maker, so it takes the account key this login vouches for.
     const token = generateServiceAccountToken(key.publicKey);
     const made = yield* crypto_(() => serviceAccountKeyFromToken(token));
@@ -211,7 +221,7 @@ const accessCommand = Command.make(
     yield* print({
       id: request.id,
       status: request.status,
-      url: yield* requestUrl(request.id),
+      url: yield* requestUrl(request),
       next: `${handOver(request.id)} ${withinTask(request.id)}`,
     });
   }, report),
@@ -283,7 +293,7 @@ const createEnvironmentCommand = Command.make(
       id: request.id,
       status: request.status,
       environment: address,
-      url: yield* environmentRequestUrl(request.id),
+      url: yield* environmentRequestUrl(request),
       next: handOver(request.id),
     });
   }, report),
@@ -384,6 +394,11 @@ const changeCommand = Command.make(
     const add = new Map<string, Access>();
     for (const address of new Set([...read, ...write])) {
       const found = yield* resolve(address);
+      if (key.org !== null && found.orgId !== key.org.id) {
+        return yield* usage(
+          `Key ${keyId} belongs to ${key.org.slug}, and a key holds environments of its own org only: ${address} is not one. Ask for a key in its org with \`baymutt ask access\`.`,
+        );
+      }
       const before = add.get(found.id);
       add.set(found.id, {
         canRead: read.includes(address) || (before?.canRead ?? false),
@@ -453,7 +468,7 @@ const changeCommand = Command.make(
       id: change.id,
       status: change.status,
       key: keyId,
-      url: yield* keyChangeUrl(change.id),
+      url: yield* keyChangeUrl(change),
       next: `${handOver(change.id)} Until the owner answers, the key keeps working with what it holds; approved, the same key holds the new set.`,
     });
   }, report),

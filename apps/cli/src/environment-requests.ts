@@ -14,10 +14,13 @@ import { Settings } from './settings.ts';
 
 const POLL_EVERY = Duration.seconds(2);
 
-/** Where the owner answers environment request `id`: the dashboard's page for an `ask create-environment`. */
-export const environmentRequestUrl = Effect.fn('environmentRequests.url')(function* (id: string) {
+/** Where the owner answers an environment request: its page under the org it is for. */
+export const environmentRequestUrl = Effect.fn('environmentRequests.url')(function* ({
+  id,
+  orgSlug,
+}: Pick<EnvironmentRequest, 'id' | 'orgSlug'>) {
   const { origin } = yield* Settings;
-  return `${origin}/ask/create-environment/${id}`;
+  return `${origin}/orgs/${orgSlug}/ask/create-environment/${id}`;
 });
 
 /** The environment a request asks for, as `<org>/<name>`: its name opened with the org's names key. */
@@ -59,7 +62,7 @@ export const settleEnvironmentRequest = Effect.fn('environmentRequests.settle')(
       result: {
         id: request.id,
         status: 'pending',
-        url: yield* environmentRequestUrl(request.id),
+        url: yield* environmentRequestUrl(request),
         next: `Run \`baymutt ask wait ${request.id}\` to keep waiting.`,
       },
       failure: usage(

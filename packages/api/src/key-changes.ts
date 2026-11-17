@@ -8,7 +8,7 @@ import * as HttpApiGroup from 'effect/http-api/HttpApiGroup';
 import * as HttpApiSchema from 'effect/http-api/HttpApiSchema';
 import * as OpenApi from 'effect/http-api/OpenApi';
 import * as Schema from 'effect/Schema';
-import { CredentialGrantSchema } from './credentials.ts';
+import { CredentialGrantSchema, KeyOrgSchema } from './credentials.ts';
 import {
   AlreadyExistsError,
   LinkSpentError,
@@ -44,6 +44,8 @@ export const KeyChangeSchema = Schema.Struct({
     /** When it stops working now; null for never. */
     expiresAt: Schema.NullOr(TimestampSchema),
   }),
+  /** The org its key belongs to: it adds environments of this org only. */
+  org: KeyOrgSchema,
   /** Why, in its maker's words. A claim. */
   reason: DescriptionSchema,
   /**
@@ -104,7 +106,7 @@ export class KeyChangesGroup extends HttpApiGroup.make('keyChanges')
         reason: DescriptionSchema,
         /** A new end, from the approval; null keeps the key's end. */
         lifetime: Schema.NullOr(LifetimeSchema),
-        /** Access to add: read, write or both on each, each environment once. */
+        /** Access to add: read, write or both on each, each environment once, all of the key's org. */
         add: Schema.Array(
           Schema.Struct({
             environmentId: Schema.String,
@@ -121,7 +123,7 @@ export class KeyChangesGroup extends HttpApiGroup.make('keyChanges')
       OpenApi.annotations({
         summary: 'Ask to change a key',
         description:
-          'A CLI login only, for a key it asked for. Adding access or a new end waits for the owner, who approves it all or none; one left unanswered for an hour expires, and the key holds what it held. Giving back alone takes effect at once.',
+          'A CLI login only, for a key it asked for, adding environments of the org the key belongs to and of no other. Adding access or a new end waits for the owner, who approves it all or none; one left unanswered for an hour expires, and the key holds what it held. Giving back alone takes effect at once.',
       }),
     ),
     HttpApiEndpoint.post('approve', '/key-changes/:id/approve', {
@@ -141,7 +143,7 @@ export class KeyChangesGroup extends HttpApiGroup.make('keyChanges')
             keyVersion: Schema.Int,
           }),
         ),
-        /** The names key of each org it adds to, wrapped to the changed key. */
+        /** The names key of the key's org when it adds to it, wrapped to the changed key. */
         namesKeyWraps: Schema.Array(OrgNamesKeyWrapSchema),
       }),
       success: KeyChangeSchema,

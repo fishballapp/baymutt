@@ -806,7 +806,7 @@ layer(NodeServices.layer)(it => {
           exitCode: 0,
           json: {
             status: 'pending',
-            url: `${ORIGIN}/ask/access/${asked.json.id}`,
+            url: `${ORIGIN}/orgs/acme/ask/access/${asked.json.id}`,
             // The link goes last in the reply, and the wait runs in the background.
             next: expect.stringMatching(/last line.*in the background.*baymutt ask wait/s),
           },
@@ -1462,7 +1462,7 @@ layer(NodeServices.layer)(it => {
             json: {
               status: 'pending',
               key: keyId,
-              url: `${ORIGIN}/ask/change/${asked.json.id}`,
+              url: `${ORIGIN}/orgs/acme/ask/change/${asked.json.id}`,
               next: expect.stringMatching(/last line.*in the background.*keeps working/s),
             },
           });
@@ -1887,7 +1887,7 @@ layer(NodeServices.layer)(it => {
           json: {
             status: 'pending',
             environment: 'acme/app/staging',
-            url: `${ORIGIN}/ask/create-environment/${id}`,
+            url: `${ORIGIN}/orgs/acme/ask/create-environment/${id}`,
             next: expect.stringMatching(/last line.*in the background.*baymutt ask wait/s),
           },
         });
@@ -1899,7 +1899,7 @@ layer(NodeServices.layer)(it => {
         expect((yield* run(world, laptop, ['env', 'list'])).json.environments).toEqual([]);
         expect(yield* run(world, laptop, ['ask', 'wait', id, '--timeout', '0'])).toMatchObject({
           exitCode: 9,
-          json: { id, status: 'pending', url: `${ORIGIN}/ask/create-environment/${id}` },
+          json: { id, status: 'pending', url: `${ORIGIN}/orgs/acme/ask/create-environment/${id}` },
         });
 
         yield* Effect.promise(() => owner.approveEnvironmentRequest(id));
@@ -2053,10 +2053,11 @@ layer(NodeServices.layer)(it => {
         const { keys } = (yield* run(world, laptop, ['key', 'list'])).json;
         expect(keys).toMatchObject(
           expect.arrayContaining([
-            expect.objectContaining({ id: loginId, kind: 'cli-login', grants: [] }),
+            expect.objectContaining({ id: loginId, kind: 'cli-login', org: null, grants: [] }),
             expect.objectContaining({
               id,
               kind: 'agent-key',
+              org: 'acme',
               parentId: loginId,
               grants: [
                 expect.objectContaining({
@@ -2096,12 +2097,42 @@ layer(NodeServices.layer)(it => {
             ({ address }: { address: string }) => address,
           ),
         ).toEqual(expect.arrayContaining(['acme/app/production', 'globex/app/production']));
-        const { agent } = yield* askApproved(world, owner, laptop, [
+        // A key belongs to one org: an ask across two is refused before any key is made.
+        const across = yield* run(world, laptop, [
+          'ask',
+          'access',
+          '--read',
+          'acme/app/production',
+          '--read',
+          'globex/app/production',
+          '--reason',
+          'both',
+        ]);
+        expect(across.exitCode).toBe(2);
+        expect(across.error.message).toMatch(/belongs to one org.*acme, globex.*once per org/);
+        const { id: globexKey, agent } = yield* askApproved(world, owner, laptop, [
           '--read',
           'globex/app/production',
           '--write',
           'globex/app/production',
         ]);
+        expect(
+          (yield* run(world, laptop, ['key', 'list'])).json.keys.find(
+            ({ id }: { id: string }) => id === globexKey,
+          ),
+        ).toMatchObject({ org: 'globex' });
+        // And it is changed to add environments of its own org only.
+        const outside = yield* run(world, laptop, [
+          'ask',
+          'change',
+          globexKey,
+          '--read',
+          'acme/app/production',
+          '--reason',
+          'one more',
+        ]);
+        expect(outside.exitCode).toBe(2);
+        expect(outside.error.message).toContain('belongs to globex');
         yield* run(
           world,
           agent,

@@ -60,8 +60,8 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
           The terminal picks this up by itself. It lists the names in your orgs now; each request it
           makes for an environment waits for you.
         </p>
-        <Link to="/keys" className={buttonStyles({ intent: 'primary' })}>
-          See keys
+        <Link to="/account" className={buttonStyles({ intent: 'primary' })}>
+          See CLI logins
         </Link>
       </div>
     );
@@ -120,7 +120,7 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
         >
           {pairing.waiting ? 'Approving…' : 'The codes match: approve it'}
         </Button>
-        <Link to="/environments" className={buttonStyles()}>
+        <Link to="/account" className={buttonStyles()}>
           Do not approve
         </Link>
       </div>

@@ -143,7 +143,7 @@ const followLink = async (page: Page, from: '/signup' | '/recover', email: strin
   await page.getByRole('heading', { name: 'Check your inbox' }).waitFor();
   const answer = await fetch(`${WEB}/api/dev/magic-link?email=${encodeURIComponent(email)}`);
   const { token } = (await answer.json()) as { token: string };
-  const landOn = from === '/signup' ? '/environments' : '/recover';
+  const landOn = from === '/signup' ? '/orgs' : '/recover';
   await page.goto(`${WEB}/api/auth/magic-link/verify?token=${token}&callbackURL=${landOn}`);
 };
 
@@ -291,7 +291,7 @@ const main = async (browser: Browser) => {
       '-----BEGIN KEY-----\nmade-up-line-two\n-----END KEY-----' &&
       !(await page.content()).includes('made-up-line-two'),
   );
-  await page.goto(`${WEB}/activity`);
+  await page.goto(`${WEB}/orgs/acme/activity`);
   await page
     .getByText(/revealed or copied/)
     .first()
@@ -392,15 +392,15 @@ const main = async (browser: Browser) => {
     '`baymutt ask access` prints the request’s link and returns',
     asked.status === 0 &&
       asked.json?.status === 'pending' &&
-      asked.json?.url.includes('/ask/access/'),
+      asked.json?.url.includes('/orgs/acme/ask/access/'),
   );
-  await page.goto(`${WEB}/keys`);
+  await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByRole('heading', { name: 'Requests' }).waitFor();
   check(
     'a request waits under Keys, counted in the nav',
     (await page.getByText('run the migration').count()) === 1 &&
       (await page
-        .getByRole('navigation', { name: 'Main' })
+        .getByRole('navigation', { name: 'Acme' })
         .getByText('1 waiting for you')
         .count()) === 1,
   );
@@ -476,15 +476,15 @@ const main = async (browser: Browser) => {
     '`baymutt ask create-environment` prints the environment request’s link and returns',
     creating.status === 0 &&
       creating.json?.status === 'pending' &&
-      creating.json?.url === `${WEB}/ask/create-environment/${creating.json?.id}`,
+      creating.json?.url === `${WEB}/orgs/acme/ask/create-environment/${creating.json?.id}`,
   );
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('heading', { name: 'Requests' }).waitFor();
   check(
     'an environment request waits at the top of Environments, counted on its nav item',
     (await page.getByText('set up staging').count()) === 1 &&
       (await page
-        .getByRole('navigation', { name: 'Main' })
+        .getByRole('navigation', { name: 'Acme' })
         .getByRole('link', { name: /^Environments/ })
         .getByText('1 waiting for you')
         .count()) === 1,
@@ -553,7 +553,7 @@ const main = async (browser: Browser) => {
       API_KEY: 'staging-value',
     }).isLoaded,
   );
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('link', { name: /acme\/app\/staging/ }).waitFor();
   check('the new environment is listed in the dashboard by its name', true);
 
@@ -577,7 +577,7 @@ const main = async (browser: Browser) => {
           (environment: { name: string }) => environment.name !== 'app/scratch',
         ) === true,
   );
-  await page.goto(`${WEB}/ask/create-environment/${crypto.randomUUID()}`);
+  await page.goto(`${WEB}/orgs/acme/ask/create-environment/${crypto.randomUUID()}`);
   await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
   check('a missing environment request says so', true);
   // --- a rejected request ---------------------------------------------------------------------
@@ -595,7 +595,7 @@ const main = async (browser: Browser) => {
   await shoot(page, '08f-request-rejected');
   const rejectedWait = laptop.cli(['ask', 'wait', rejected.json.id]);
   check('a rejected request ends the terminal’s wait with no key', rejectedWait.status === 4);
-  await page.goto(`${WEB}/ask/access/${crypto.randomUUID()}`);
+  await page.goto(`${WEB}/orgs/acme/ask/access/${crypto.randomUUID()}`);
   await page.getByRole('heading', { name: 'No request at this link' }).waitFor();
   await shoot(page, '08g-request-missing');
   check('a missing request says so', true);
@@ -629,15 +629,15 @@ const main = async (browser: Browser) => {
     moving.status === 0 &&
       moving.json?.status === 'pending' &&
       moving.json?.key === agentId &&
-      moving.json?.url === `${WEB}/ask/change/${moving.json?.id}`,
+      moving.json?.url === `${WEB}/orgs/acme/ask/change/${moving.json?.id}`,
   );
-  await page.goto(`${WEB}/keys`);
+  await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByRole('heading', { name: 'Requests' }).waitFor();
   check(
     'a key change waits under Keys, counted in the nav',
     (await page.getByText(/asks to change/).count()) === 1 &&
       (await page
-        .getByRole('navigation', { name: 'Main' })
+        .getByRole('navigation', { name: 'Acme' })
         .getByText('1 waiting for you')
         .count()) === 1,
   );
@@ -710,7 +710,7 @@ const main = async (browser: Browser) => {
       loadsWithAgentKey('acme/app/staging') &&
       loadsWithAgentKey('acme/app/production'),
   );
-  await page.goto(`${WEB}/keys`);
+  await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByText('Migration agent').waitFor();
   await shoot(page, '08h5-keys-after-change');
 
@@ -745,7 +745,7 @@ const main = async (browser: Browser) => {
     extended.status === 0 &&
       Math.abs(extended.json.expiresAt - (Date.now() + 120 * MINUTE_MS)) < 2 * MINUTE_MS,
   );
-  await page.goto(`${WEB}/ask/change/${crypto.randomUUID()}`);
+  await page.goto(`${WEB}/orgs/acme/ask/change/${crypto.randomUUID()}`);
   await page.getByRole('heading', { name: 'No change at this link' }).waitFor();
   check('a missing key change says so', true);
 
@@ -836,7 +836,7 @@ const main = async (browser: Browser) => {
   );
   await shoot(strangerPage, '09-paste-signed-out-phone');
   await stranger.close();
-  await page.goto(`${WEB}/paste-links`);
+  await page.goto(`${WEB}/orgs/acme/paste-links`);
   await page.getByText('to take payments').waitFor();
   await shoot(page, '09a-paste-links');
   // The store points the link at another name after the page showed it: nothing is sealed to that.
@@ -964,30 +964,37 @@ const main = async (browser: Browser) => {
   await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
 
   // --- the Keys page, and access changed by the owner ------------------------------------------
-  await page.goto(`${WEB}/keys`);
+  await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByText('CI deploy').waitFor();
   await shoot(page, '11-keys');
   check(
-    'the list tells CLI logins, service accounts and agent keys apart, with when each ends',
-    (await page.getByRole('img', { name: 'CLI login' }).count()) === 1 &&
+    'an org’s Keys tells its service accounts and agent keys apart, with when each ends, and lists no CLI login',
+    (await page.getByRole('img', { name: 'CLI login' }).count()) === 0 &&
       (await page.getByRole('img', { name: 'Service account' }).count()) === 1 &&
       (await page.getByRole('img', { name: 'Agent key' }).count()) === 2 &&
       (await page.getByText('never expires').count()) === 1 &&
       // The migration agent's end, as its key change set it.
       (await page.getByText(/expires in 2 hours/).count()) === 1 &&
-      (await page.getByText(/expires in (1 hour|5[0-9] minutes)/).count()) === 1 &&
-      (await page.getByText(/expires in 90 days/).count()) === 1,
-  );
-  check(
-    'a CLI login offers no access change',
-    (await page
-      .getByRole('listitem')
-      .filter({ hasText: 'Work laptop' })
-      .filter({ has: page.getByRole('img', { name: 'CLI login' }) })
-      .getByRole('button', { name: 'Access' })
-      .count()) === 0,
+      (await page.getByText(/expires in (1 hour|5[0-9] minutes)/).count()) === 1,
   );
   await shootPhone(page, '11b-keys-phone');
+  await page.goto(`${WEB}/account`);
+  await page.getByRole('heading', { name: 'CLI logins' }).waitFor();
+  await page.getByText('Work laptop', { exact: true }).first().waitFor();
+  await shoot(page, '11c-account-cli-logins');
+  await shootPhone(page, '11d-account-cli-logins-phone');
+  check(
+    'CLI logins are the account’s, under Account, with when each ends, and offer no access change',
+    (await page.getByRole('img', { name: 'CLI login' }).count()) === 1 &&
+      (await page.getByText(/expires in 90 days/).count()) === 1 &&
+      (await page
+        .getByRole('listitem')
+        .filter({ hasText: 'Work laptop' })
+        .getByRole('button', { name: 'Access' })
+        .count()) === 0,
+  );
+  await page.goto(`${WEB}/orgs/acme/keys`);
+  await page.getByText('CI deploy').waitFor();
   const ciRow = page.getByRole('listitem').filter({ hasText: 'CI deploy' });
   await ciRow.getByRole('button', { name: 'Access' }).click();
   const accessDialog = page.getByRole('alertdialog');
@@ -1018,11 +1025,11 @@ const main = async (browser: Browser) => {
   const [migration] = d1(`SELECT expires_at FROM credential WHERE name = 'Migration agent'`);
   const onEndedKey = changeKey(['--read', 'acme/app/staging', '--reason', 'one more environment']);
   d1(`UPDATE credential SET expires_at = ${Date.now() - MINUTE_MS} WHERE name = 'Migration agent'`);
-  await page.goto(`${WEB}/keys`);
+  await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByText('CI deploy').waitFor();
   const keysWaiting = () =>
     page
-      .getByRole('navigation', { name: 'Main' })
+      .getByRole('navigation', { name: 'Acme' })
       .getByRole('link', { name: /^Keys/ })
       .getByText(/waiting for you/)
       .count();
@@ -1042,7 +1049,7 @@ const main = async (browser: Browser) => {
   await shoot(page, '11h0-key-change-ended');
   await page.getByRole('button', { name: 'Reject' }).click();
   await page.getByRole('heading', { name: 'Rejected', exact: true }).waitFor();
-  await page.goto(`${WEB}/keys`);
+  await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByText('CI deploy').waitFor();
   check(
     'a key that has ended is hidden, and counted in the button that shows it',
@@ -1070,7 +1077,7 @@ const main = async (browser: Browser) => {
     typeof binned.json?.purgeAt === 'number' &&
       laptop.cli(['bin', 'list']).json?.secrets?.[0]?.name === 'OLD_TOKEN',
   );
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByText('STRIPE_SECRET_KEY').waitFor();
   const shownNames = await page.locator('main li code.text-base').allInnerTexts();
@@ -1086,11 +1093,11 @@ const main = async (browser: Browser) => {
   await page.getByText(/^v1$/).waitFor();
   await shoot(page, '10b-environment-history');
   await shootPhone(page, '10c-environment-phone');
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('link', { name: /app\/production/ }).waitFor();
   await page.setViewportSize(PHONE);
   const navWraps = await page
-    .getByRole('navigation', { name: 'Main' })
+    .getByRole('navigation', { name: 'Acme' })
     .getByRole('link')
     .evaluateAll(links =>
       links.some(
@@ -1109,15 +1116,15 @@ const main = async (browser: Browser) => {
   const toPurged = changeKey(['--read', 'acme/app/old', '--reason', 'one last look']);
   await page.getByRole('button', { name: 'Delete environment' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete environment' }).click();
-  await page.waitForURL(`${WEB}/environments`);
+  await page.waitForURL(`${WEB}/orgs/acme/environments`);
   const keysWaitingNow = () =>
     page
-      .getByRole('navigation', { name: 'Main' })
+      .getByRole('navigation', { name: 'Acme' })
       .getByRole('link', { name: /^Keys/ })
       .getByText(/waiting for you/)
       .count();
   await page
-    .getByRole('navigation', { name: 'Main' })
+    .getByRole('navigation', { name: 'Acme' })
     .getByRole('link', { name: /^Keys/ })
     .getByText('1 waiting for you')
     .waitFor({ timeout: 5000 })
@@ -1145,7 +1152,7 @@ const main = async (browser: Browser) => {
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete for good' }).click();
   await page.getByText('The bin is empty').waitFor();
   await page
-    .getByRole('navigation', { name: 'Main' })
+    .getByRole('navigation', { name: 'Acme' })
     .getByRole('link', { name: /^Keys/ })
     .getByText(/waiting for you/)
     .waitFor({ state: 'detached', timeout: 5000 })
@@ -1167,13 +1174,13 @@ const main = async (browser: Browser) => {
     'and the terminal hears it was not approved',
     laptop.cli(['ask', 'wait', toPurged.json.id]).status === 4,
   );
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByLabel('New environment').fill('app/old');
   await page.getByRole('button', { name: 'Create environment' }).click();
   await page.getByRole('link', { name: /app\/old/ }).waitFor();
   check('an environment deleted for good frees its name', true);
 
-  await page.goto(`${WEB}/activity`);
+  await page.goto(`${WEB}/orgs/acme/activity`);
   await page.getByText('pasted').waitFor();
   check(
     'the activity shows requests approved and rejected, and names opened in the browser',
@@ -1193,9 +1200,12 @@ const main = async (browser: Browser) => {
   await page.getByLabel('Org name').fill('Legacy Ltd');
   await page.getByLabel('Slug').fill('legacy');
   await page.getByRole('button', { name: 'Create org' }).click();
+  await page.getByText('No environments in Legacy Ltd yet').waitFor();
+  check('a new org opens at its own address', page.url() === `${WEB}/orgs/legacy/environments`);
+  await page.goto(`${WEB}/account`);
   await page.getByRole('main').getByText('Legacy Ltd').waitFor();
   await shoot(page, '13e-account-orgs');
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/legacy/environments`);
   await page.getByText('No environments in Legacy Ltd yet').waitFor();
   await page.getByLabel('New environment').fill('app/legacy');
   await page.getByRole('button', { name: 'Create environment' }).click();
@@ -1276,8 +1286,7 @@ const main = async (browser: Browser) => {
   // Its only environment there is in the bin while the org is sealed.
   d1(`UPDATE environment SET deleted_at = ${Date.now()}, purge_at = ${Date.now() + 30 * 24 * 60 * MINUTE_MS}
       WHERE id = ${environment}`);
-  // The picker still shows the org made last.
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/legacy/environments`);
   await page.getByText('No environments in Legacy Ltd yet').waitFor();
   let sealed = false;
   for (let attempt = 0; attempt < 40 && !sealed; attempt++) {
@@ -1321,7 +1330,7 @@ const main = async (browser: Browser) => {
   await page.goto('about:blank');
   d1(`DELETE FROM names_key_wrap WHERE org_id = ${org};
       UPDATE environment SET name = 'app/made-up', sealed_name = NULL WHERE id = ${environment};`);
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/legacy/environments`);
   await page.getByRole('link', { name: /legacy\/name does not open/ }).waitFor();
   await page.getByLabel('New environment').fill('app/other');
   await page.getByRole('button', { name: 'Create environment' }).click();
@@ -1340,9 +1349,129 @@ const main = async (browser: Browser) => {
             `INSERT INTO names_key_wrap (org_id, reader_id, wrap, created_at) VALUES (${org}, ${sqlText(String(reader_id))}, ${sqlText(String(wrap))}, ${Number(created_at)});`,
         )
         .join('\n')}`);
-  await page.goto(`${WEB}/environments`);
+  await page.goto(`${WEB}/orgs/legacy/bin`);
+  await page.getByRole('heading', { name: 'Bin' }).waitFor();
   await page.getByLabel('Org', { exact: true }).selectOption({ label: 'Acme' });
+  await page.waitForURL(`${WEB}/orgs/acme/bin`);
+  check('the picker opens the same section of the org picked', true);
+  await page.goto(`${WEB}/orgs/nobody/keys`);
+  await page.getByRole('heading', { name: 'No org here' }).waitFor();
+  await shoot(page, '13h-org-not-found');
+  check(
+    'an org that is not the person’s is not found, with a way back',
+    (await page.getByRole('link', { name: 'Go to your orgs' }).count()) === 1,
+  );
+  await page.goto(`${WEB}/orgs/legacy/environments/${legacyEnvironment.id}`);
+  await page.getByText('LEGACY_TOKEN').waitFor();
+  await page.goto(`${WEB}/orgs/acme/environments/${legacyEnvironment.id}`);
+  await page.getByText('Acme has no environment with this id.').waitFor();
+  check('an environment is shown only under its own org’s address', true);
+  await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('link', { name: /acme\/app\/production/ }).waitFor();
+
+  // The last org shown is kept under its own name; the id an older dashboard kept is not read.
+  await page.evaluate(() => localStorage.setItem('baymutt.org', 'legacy'));
+  await page.goto(`${WEB}/orgs`);
+  await page.waitForURL(`${WEB}/orgs/acme/environments`);
+  check(
+    '`/orgs` lands on the org last shown, kept as a slug under a new name',
+    (await page.evaluate(() => localStorage.getItem('baymutt.lastOrgSlug'))) === 'acme',
+  );
+
+  // --- deleting an org takes its keys, and the Account page knows at once ------------------------
+  await page.goto(`${WEB}/account`);
+  await page.getByLabel('Org name').fill('Scratch');
+  await page.getByRole('button', { name: 'Create org' }).click();
+  await page.getByText('No environments in Scratch yet').waitFor();
+  await page.getByLabel('New environment').fill('app/tmp');
+  await page.getByRole('button', { name: 'Create environment' }).click();
+  await page.getByRole('link', { name: /scratch\/app\/tmp/ }).waitFor();
+  const scratchAsk = laptop.cli(['ask', 'access', '--read', 'scratch/app/tmp', '--reason', 'tmp']);
+  await page.goto(scratchAsk.json.url);
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
+  laptop.cli(['ask', 'wait', scratchAsk.json.id]);
+  await page.goto(`${WEB}/orgs/scratch/environments`);
+  await page.getByRole('link', { name: /scratch\/app\/tmp/ }).click();
+  await page.getByRole('button', { name: 'Delete environment' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete environment' }).click();
+  await page.waitForURL(`${WEB}/orgs/scratch/environments`);
+  await page.goto(`${WEB}/orgs/scratch/bin`);
+  await page.getByRole('button', { name: 'Delete for good' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete for good' }).click();
+  await page.getByText('The bin is empty').waitFor();
+  await page.goto(`${WEB}/account`);
+  /** How many keys the Work laptop's revoke dialog says it asked for. */
+  const keysAskedFor = async () => {
+    await page
+      .getByRole('listitem')
+      .filter({ hasText: 'Work laptop' })
+      .getByRole('button', { name: 'Revoke' })
+      .click();
+    const dialog = page.getByRole('alertdialog');
+    const text = await dialog.innerText();
+    await dialog.getByRole('button', { name: 'Keep key' }).click();
+    return Number(/so do the (\d+) keys/.exec(text)?.[1] ?? 0);
+  };
+  const keysBefore = await keysAskedFor();
+  await page
+    .getByRole('listitem')
+    .filter({ hasText: 'Scratch' })
+    .getByRole('button', { name: 'Delete org' })
+    .click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete org' }).click();
+  await page.getByRole('alertdialog').waitFor({ state: 'detached' });
+  check(
+    'deleting an org takes its key, and Account counts it gone without a reload',
+    keysBefore > 0 && (await keysAskedFor()) === keysBefore - 1,
+  );
+  await page.goto(`${WEB}/orgs/acme/environments`);
+  await page.getByRole('link', { name: /acme\/app\/production/ }).waitFor();
+
+  // --- a key belongs to one org, and an ask waits under its own org ------------------------------
+  const across = laptop.cli([
+    'ask',
+    'access',
+    '--read',
+    'acme/app/production',
+    '--read',
+    'legacy/app/legacy',
+    '--reason',
+    'both orgs',
+  ]);
+  check(
+    'an ask across two orgs is refused, and says to ask once per org',
+    across.status === 2 && /once per org/.test(across.stderr),
+  );
+  const elsewhere = laptop.cli([
+    'ask',
+    'access',
+    '--read',
+    'legacy/app/legacy',
+    '--reason',
+    'read the legacy app',
+  ]);
+  check(
+    'an ask links to its page under its own org',
+    elsewhere.json?.url === `${WEB}/orgs/legacy/ask/access/${elsewhere.json?.id}`,
+  );
+  await page.goto(`${WEB}/orgs/legacy/keys`);
+  await page.getByText('read the legacy app').waitFor();
+  await page
+    .getByRole('navigation', { name: 'Legacy Ltd' })
+    .getByText('1 waiting for you')
+    .waitFor();
+  await shoot(page, '13k-keys-other-org');
+  await page.goto(`${WEB}/orgs/acme/environments`);
+  await page.getByRole('link', { name: /acme\/app\/production/ }).waitFor();
+  check(
+    'an ask waits and is counted under its own org alone',
+    (await page
+      .getByRole('navigation', { name: 'Acme' })
+      .getByText(/waiting for you/)
+      .count()) === 0,
+  );
+  laptop.cli(['ask', 'cancel', elsewhere.json.id]);
 
   // The vault stays open across a reload, and a change still goes through.
   await page.goto(`${WEB}/account`);
@@ -1358,10 +1487,13 @@ const main = async (browser: Browser) => {
       !varlockLoads(ciEnv, 'acme/app/production', { API_KEY: 'value-from-the-cli' }).isLoaded,
   );
   check('a logged-out computer is not logged in', laptop.cli(['env', 'list']).status === 3);
-  await page.goto(`${WEB}/keys`);
-  await page.getByText('No CLI logins yet').waitFor();
+  await page.goto(`${WEB}/orgs/acme/keys`);
+  await page.getByText('No keys in Acme yet').waitFor();
   await shoot(page, '14b-keys-empty');
-  await page.goto(`${WEB}/paste-links`);
+  await page.goto(`${WEB}/account`);
+  await page.getByText('No CLI logins yet').waitFor();
+  await shoot(page, '14b2-account-no-cli-logins');
+  await page.goto(`${WEB}/orgs/acme/paste-links`);
   await page.getByText('Nothing is waiting on you').waitFor();
   await shoot(page, '14c-paste-links-empty');
 
@@ -1375,8 +1507,8 @@ const main = async (browser: Browser) => {
   await page.setViewportSize(PHONE);
   await shoot(page, '16-environment-dark-phone');
   await page.setViewportSize(DESKTOP);
-  await page.goto(`${WEB}/keys`);
-  await page.getByText('No CLI logins yet').waitFor();
+  await page.goto(`${WEB}/orgs/acme/keys`);
+  await page.getByText('No keys in Acme yet').waitFor();
   await shoot(page, '16b-keys-empty-dark');
   await context.close();
 
@@ -1390,8 +1522,8 @@ const main = async (browser: Browser) => {
   await otherPage.getByRole('button', { name: 'Use this password' }).click();
   await keepRecoveryKey(otherPage);
   await otherPage.getByRole('button', { name: 'Continue' }).click();
-  // No org of their own, and none of the first person's: the Environments page makes one first.
-  await otherPage.getByLabel('Org name').waitFor();
+  // No org of their own, and none of the first person's: the dashboard makes one first.
+  await otherPage.getByRole('heading', { name: 'Create your first org' }).waitFor();
   check(
     'an email link and a password make a vault, and one account sees nothing of another',
     (await otherPage.getByLabel('Org', { exact: true }).count()) === 0,
@@ -1409,7 +1541,7 @@ const main = async (browser: Browser) => {
   await shoot(otherPage, '18b-sign-in-error');
   await otherPage.getByLabel('Password').fill('a long made-up password');
   await otherPage.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await otherPage.getByRole('heading', { name: 'Environments' }).waitFor();
+  await otherPage.getByRole('heading', { name: 'Create your first org' }).waitFor();
   check('email and password sign in and unlock; a wrong password does neither', true);
   await other.close();
 

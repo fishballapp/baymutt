@@ -11,20 +11,21 @@ baymutt secret list acme/app/production  # names, versions and sizes; never a va
 baymutt ask access --read acme/app/production --reason "run the migration" --expires 1h
 baymutt ask change <id> --read acme/app/staging --reason "the migration moves on to staging"
 baymutt ask wait <id> [<id>…]            # returns once the owner has answered what was asked
-baymutt key list                         # this login's keys: cli-login, agent-key or service-account
+baymutt key list                         # this login's keys: kind (cli-login, agent-key, service-account) and org
 baymutt auth logout                      # revokes this CLI login and forgets its key
 ```
 
 - Values and names are sealed and opened on this computer. The store holds only ciphertext.
 - An environment is named with its org first, `<org>/<name>`. Orgs are made in the dashboard.
 - A CLI login lists orgs, environments and secret names, and holds no environment. `ask access` makes a
-  key of its own for whole environments (`--read`, `--write`, `--read-write`), with a `--reason` (never a secret:
+  key of its own for whole environments of one org (`--read`, `--write`, `--read-write`), with a `--reason` (never a secret:
   it is stored readable) and `--expires 15m|12h|90d`. It prints a link for the owner and returns;
   the request waits an hour. `--read-write` asks for both in one approval; two separate asks cost
   the owner two. `ask wait <id>` returns once the owner has approved or rejected it: approved, it
-  prints the path of a key file, used as `BAYMUTT_KEY_FILE=<path>`.
+  prints the path of a key file, used as `BAYMUTT_KEY_FILE=<path>`. A key belongs to the one org
+  it was asked for in: environments of two orgs are two asks.
 - Within a task, change the key you hold rather than asking for another: `ask change <id>` adds
-  environments or access (`--read`, `--write`, `--read-write`), gives back what is no longer needed
+  environments of the key's org or access (`--read`, `--write`, `--read-write`), gives back what is no longer needed
   (`--give-back`), or asks for a new end (`--expires`, from the approval). The same key file keeps
   working, and holds the new set once the owner approves; giving back alone takes effect at once.
   Rejected or expired, the key holds what it held. Ask for a new key only for a different job.
@@ -52,7 +53,7 @@ baymutt auth logout                      # revokes this CLI login and forgets it
   gives no access. `ask cancel <id>` withdraws anything asked.
 - A CLI login's key is kept in the login keychain on a Mac and in an owner-only file elsewhere. A
   CI job holds a service account's key as `BAYMUTT_KEY`. `key list` tells the three apart
-  (`kind`), and `key revoke <id>` revokes one.
+  (`kind`) and names each key's org (`org`, null for a CLI login), and `key revoke <id>` revokes one.
 
 `baymutt --help` lists every command. To load an environment's values into a process, use
 [`@baymutt/varlock-plugin`](https://www.npmjs.com/package/@baymutt/varlock-plugin).

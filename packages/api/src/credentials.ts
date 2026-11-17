@@ -38,10 +38,21 @@ export const CredentialGrantSchema = Schema.Struct({
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
 
+/** The one org a key belongs to: it holds environments of this org only. */
+export const KeyOrgSchema = Schema.Struct({ id: Schema.String, slug: OrgSlugSchema }).annotate({
+  identifier: 'KeyOrg',
+});
+export type KeyOrg = typeof KeyOrgSchema.Type;
+
 export const ServiceAccountSchema = Schema.Struct({
   id: Schema.String,
   name: LabelSchema,
   publicKey: PublicKeySchema,
+  /**
+   * The org this key belongs to, which it keeps after giving everything back. Null for a CLI
+   * login, which is the account's and lists the names in all of its orgs.
+   */
+  org: Schema.NullOr(KeyOrgSchema),
   /**
    * The CLI login that asked for this one. Null for a CLI login: one `baymutt auth login` made and the
    * owner approved, which lists the names in every org of the person and holds no environment.
@@ -174,7 +185,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Change a service account’s access to an environment',
         description:
-          'Owner only, for a service account. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make. An environment in an org it did not reach before also needs that org’s names key wrapped to it (`orgs.putNamesKeyWrap`).',
+          'Owner only, for a service account, on an environment of the org the key belongs to. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make. Its first environment also needs the org’s names key wrapped to it (`orgs.putNamesKeyWrap`).',
       }),
     ),
     HttpApiEndpoint.delete('removeAccess', '/credentials/:id/grants/:environmentId', {

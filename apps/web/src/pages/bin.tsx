@@ -1,7 +1,7 @@
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { usePickedOrg } from '../components/orgs.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import {
   Code,
   Empty,
@@ -163,10 +163,10 @@ const SecretRow = ({ secret }: { readonly secret: OpenedBinSecret }) => {
 
 export const BinPage = () => {
   const result = useAtomValue(binAtom(useOwner()));
-  const { org } = usePickedOrg();
+  const org = useOrg();
   const all = latest(result);
   const bin =
-    all === null || org === null
+    all === null
       ? null
       : {
           environments: all.environments.filter(environment => environment.orgId === org.id),
@@ -178,7 +178,7 @@ export const BinPage = () => {
     <>
       <PageHeader
         title="Bin"
-        lede={`Deleted environments and secrets${org === null ? '' : ` of ${org.name}`}. Each can be restored for 30 days, then it is removed for good.`}
+        lede={`Deleted environments and secrets of ${org.name}. Each can be restored for 30 days, then it is removed for good.`}
       />
       {failure && <Notice className="mb-6">{failure}</Notice>}
       {bin === null && !failure && <Skeleton rows={2} />}

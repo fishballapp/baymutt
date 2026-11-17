@@ -1,5 +1,6 @@
+import type { Org } from '@baymutt/api';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
-import { Link, Outlet, useRouterState } from '@tanstack/react-router';
+import { Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { cn } from 'cn';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import * as Atom from 'effect/reactivity/Atom';
@@ -16,7 +17,7 @@ import {
 import { type Owner, useOwnerStore } from '../lib/owner.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 import { Entry, Standalone } from '../pages/entry.tsx';
-import { OrgPicker } from './orgs.tsx';
+import { homeOrg, OrgPicker } from './orgs.tsx';
 import { Notice, Wordmark } from './parts.tsx';
 import { RecoveryKey } from './recovery-key.tsx';
 import { Button } from './ui/button.tsx';
@@ -59,46 +60,55 @@ export const OwnerGate = ({ children }: { readonly children: ReactNode }) => {
   return <OwnerContext value={owner}>{children}</OwnerContext>;
 };
 
-const NAV = [
-  // Environment requests wait under Environments: approving one creates it.
-  { to: '/environments', label: 'Environments', pending: pendingEnvironmentRequestsAtom },
-  // Requests and key changes wait under Keys: approving one makes or changes a key.
-  { to: '/keys', label: 'Keys', pending: pendingKeyAsksAtom },
-  { to: '/paste-links', label: 'Paste links', pending: pendingPasteLinksAtom },
-  { to: '/activity', label: 'Activity', pending: null },
-  { to: '/bin', label: 'Bin', pending: null },
-  { to: '/account', label: 'Account', pending: null },
+/** What the nav lists for the org a page shows, in order. */
+const ORG_SECTIONS = [
+  { segment: 'environments', to: '/orgs/$slug/environments', label: 'Environments' },
+  { segment: 'keys', to: '/orgs/$slug/keys', label: 'Keys' },
+  { segment: 'paste-links', to: '/orgs/$slug/paste-links', label: 'Paste links' },
+  { segment: 'activity', to: '/orgs/$slug/activity', label: 'Activity' },
+  { segment: 'bin', to: '/orgs/$slug/bin', label: 'Bin' },
 ] as const;
 
-type NavPath = (typeof NAV)[number]['to'];
+type OrgSection = (typeof ORG_SECTIONS)[number]['segment'];
 
 /**
- * The nav item a page belongs to: a pairing link, an ask for access and a key change are about
- * keys, an ask for an environment is about environments.
+ * The nav item a page belongs to: an org's section, or the account. An ask for access and a key
+ * change are about keys, an ask for an environment is about environments, and a pairing link is
+ * about the account's CLI logins.
  */
-const sectionOf = (path: string): NavPath | undefined => {
-  if (
-    path.startsWith('/pair') ||
-    path.startsWith('/ask/access') ||
-    path.startsWith('/ask/change')
-  ) {
-    return '/keys';
-  }
-  if (path.startsWith('/ask/create-environment')) return '/environments';
-  return NAV.find(({ to }) => path.startsWith(to))?.to;
+const sectionOf = (path: string): OrgSection | 'account' | undefined => {
+  if (path.startsWith('/account') || path.startsWith('/pair')) return 'account';
+  const [, segment, ask] = /^\/orgs\/[^/]+\/([^/]+)(?:\/([^/]+))?/.exec(path) ?? [];
+  if (segment === 'ask') return ask === 'create-environment' ? 'environments' : 'keys';
+  return ORG_SECTIONS.find(section => section.segment === segment)?.segment;
+};
+
+/** What waits on the owner in an org, by the nav item it waits under. */
+type Waiting = Readonly<Partial<Record<OrgSection, number>>>;
+
+/**
+ * What waits on the owner in the org the nav shows: environment requests under Environments
+ * (approving one creates it), requests and key changes under Keys (approving one makes or changes
+ * a key), and paste links.
+ */
+const useWaiting = (org: Org | null): Waiting => {
+  const environmentRequests = latest(useAtomValue(pendingEnvironmentRequestsAtom)) ?? [];
+  const keyAsks = latest(useAtomValue(pendingKeyAsksAtom)) ?? [];
+  const pasteLinks = latest(useAtomValue(pendingPasteLinksAtom)) ?? [];
+  if (org === null) return {};
+  return {
+    environments: environmentRequests.filter(request => request.orgId === org.id).length,
+    keys: keyAsks.filter(ask => ask.org.id === org.id).length,
+    'paste-links': pasteLinks.filter(link => link.orgId === org.id).length,
+  };
 };
 
 /** How many things under a nav item wait on the owner. */
-const PendingCount = ({
-  atom,
-}: {
-  readonly atom: Atom.Atom<AsyncResult.AsyncResult<ReadonlyArray<unknown>, unknown>>;
-}) => {
-  const pending = latest(useAtomValue(atom))?.length ?? 0;
-  if (pending === 0) return null;
+const PendingCount = ({ count }: { readonly count: number }) => {
+  if (count === 0) return null;
   return (
     <span className="absolute top-0.5 right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-xs leading-none font-medium text-accent-foreground tabular-nums md:static md:ml-auto md:h-5 md:min-w-5 md:px-1.5">
-      {pending}
+      {count}
       <span className="sr-only"> waiting for you</span>
     </span>
   );
@@ -155,54 +165,92 @@ const navItem = (isCurrent: boolean) =>
   );
 
 /**
- * The side nav and one column of content. The org picker sits under the wordmark and scopes
- * Environments, Activity and the Bin. Under 48rem the nav is a bar across the top: the wordmark
- * and the picker on one line, then the six items in three columns over two rows, which gives
- * "Environments" room to stay on one line at 390px.
+ * The side nav and one column of content. The org picker heads the org's own items, which all
+ * show the org the address names (or, on the account's pages, the one this browser last showed);
+ * the account sits at the foot. Under 48rem the nav is a bar across the top: the wordmark and
+ * Account on one line, the picker on the next, then the org's five items in three columns, which
+ * gives "Environments" room to stay on one line at 390px.
  */
 export const Shell = () => {
   const owner = useOwner();
   const signOut = useAtomSet(signOutAtom);
-  const current = sectionOf(useRouterState({ select: state => state.location.pathname }));
+  const navigate = useNavigate();
+  const path = useRouterState({ select: state => state.location.pathname });
+  const { slug } = useParams({ strict: false });
+  const orgs = latest(useAtomValue(orgsAtom)) ?? [];
+  // An address naming no org of the person's is no section of the org the nav shows.
+  const current =
+    slug === undefined || orgs.some(listed => listed.slug === slug) ? sectionOf(path) : undefined;
+  const org = orgs.find(listed => listed.slug === slug) ?? homeOrg(orgs);
+  const waiting = useWaiting(org);
+  const isAccount = current === 'account';
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[15rem_minmax(0,1fr)]">
       <aside className="border-line border-b bg-surface md:border-r md:border-b-0">
         <div className="flex flex-col md:sticky md:top-0 md:h-dvh">
-          <div className="flex items-center justify-between gap-4 px-4 pt-3 md:flex-col md:items-stretch md:gap-4 md:px-5 md:pt-7 md:pb-2">
-            <Link
-              to="/environments"
-              className="-mx-1 shrink-0 rounded-control px-1 py-1 md:self-start"
-            >
+          <div className="flex items-center justify-between gap-4 px-4 pt-3 md:px-5 md:pt-7">
+            <Link to="/orgs" className="-mx-1 shrink-0 rounded-control px-1 py-1">
               <Wordmark />
             </Link>
-            <div className="w-44 min-w-0 md:-mx-2 md:w-auto">
-              <OrgPicker />
-            </div>
+            <Link
+              to="/account"
+              aria-current={isAccount ? 'page' : undefined}
+              className={cn(navItem(isAccount), 'md:hidden')}
+            >
+              Account
+            </Link>
           </div>
-          <nav
-            aria-label="Main"
-            className="grid grid-cols-3 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:py-4"
-          >
-            {NAV.map(({ to, label, pending }) => (
-              <Link
-                key={to}
-                to={to}
-                aria-current={current === to ? 'page' : undefined}
-                className={navItem(current === to)}
-              >
-                {label}
-                {pending !== null && <PendingCount atom={pending} />}
-              </Link>
-            ))}
-          </nav>
-          <div className="mt-auto hidden border-line border-t px-5 py-4 md:block">
-            <p className="truncate font-medium" title={owner.accountName}>
-              {owner.accountName}
-            </p>
-            <p className="truncate text-sm text-muted" title={owner.email}>
-              {owner.email}
-            </p>
-            <Button size="sm" intent="quiet" className="mt-2 -ml-2.5" onClick={() => signOut()}>
+          {org !== null && (
+            <div className="px-4 pt-3 md:px-3 md:pt-6">
+              <OrgPicker
+                orgs={orgs}
+                current={org}
+                onPick={picked => {
+                  const section = ORG_SECTIONS.find(({ segment }) => segment === current);
+                  void navigate({
+                    to: section?.to ?? '/orgs/$slug/environments',
+                    params: { slug: picked.slug },
+                  });
+                }}
+              />
+            </div>
+          )}
+          {org !== null && (
+            <nav
+              aria-label={org.name}
+              className="grid grid-cols-3 gap-1 px-2 py-2 md:flex md:flex-col md:gap-0.5 md:px-3 md:pt-2 md:pb-4"
+            >
+              {ORG_SECTIONS.map(({ segment, to, label }) => (
+                <Link
+                  key={segment}
+                  to={to}
+                  params={{ slug: org.slug }}
+                  aria-current={current === segment ? 'page' : undefined}
+                  className={navItem(current === segment)}
+                >
+                  {label}
+                  <PendingCount count={waiting[segment] ?? 0} />
+                </Link>
+              ))}
+            </nav>
+          )}
+          <div className="mt-auto hidden border-line border-t px-3 py-4 md:block">
+            <Link
+              to="/account"
+              aria-current={isAccount ? 'page' : undefined}
+              className={cn(
+                'block rounded-control px-2.5 py-1.5 transition-colors duration-150 ease-out hover:bg-sunken',
+                isAccount && 'bg-accent-soft hover:bg-accent-soft',
+              )}
+            >
+              <span className="block truncate font-medium" title={owner.accountName}>
+                {owner.accountName}
+              </span>
+              <span className="block truncate text-sm text-muted" title={owner.email}>
+                {owner.email}
+              </span>
+            </Link>
+            <Button size="sm" intent="quiet" className="mt-1" onClick={() => signOut()}>
               Sign out
             </Button>
           </div>

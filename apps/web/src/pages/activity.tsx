@@ -2,7 +2,7 @@ import type { ActivityAction, Org } from '@baymutt/api';
 import { useAtomValue } from '@effect/atom-react';
 import type { ReactNode } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { usePickedOrg } from '../components/orgs.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import { Code, Empty, Notice, PageHeader, Skeleton } from '../components/parts.tsx';
 import { activityAtom, addressOf, NAME_NOT_OPENED, type OpenedActivityEvent } from '../lib/data.ts';
 import { clockTime, dayLabel, dayOf, exactTime } from '../lib/format.ts';
@@ -223,20 +223,14 @@ const OrgActivity = ({ org }: { readonly org: Org }) => {
 };
 
 export const ActivityPage = () => {
-  const { orgs, org } = usePickedOrg();
+  const org = useOrg();
   return (
     <>
       <PageHeader
         title="Activity"
-        lede={`Who loaded, wrote or granted what${org === null ? '' : ` in ${org.name}`}, and what was done to your account, newest first. The last 100 entries.`}
+        lede={`Who loaded, wrote or granted what in ${org.name}, and what was done to your account, newest first. The last 100 entries.`}
       />
-      {org !== null && <OrgActivity org={org} />}
-      {orgs === null && <Skeleton rows={6} />}
-      {orgs?.length === 0 && (
-        <Empty title="No org yet">
-          <p>Activity is kept per org. Create one under Environments.</p>
-        </Empty>
-      )}
+      <OrgActivity org={org} />
     </>
   );
 };

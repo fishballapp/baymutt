@@ -303,7 +303,7 @@ export const setPassword = Effect.fn('owner.setPassword')(function* ({
 
 export const sendLink = Effect.fn('owner.sendLink')(function* (link: {
   readonly email: string;
-  readonly landOn: '/environments' | '/recover';
+  readonly landOn: '/orgs' | '/recover';
 }) {
   yield* (yield* SignIn).sendLink(link);
 }, withSignIn);

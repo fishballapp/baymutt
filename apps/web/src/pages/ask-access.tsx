@@ -7,6 +7,7 @@ import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { type ReactNode, useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import {
   Claim,
   Code,
@@ -44,7 +45,7 @@ const Outcome = ({ title, children }: { readonly title: string; readonly childre
   <div className="max-w-[34rem] space-y-4">
     <h1 className="text-xl">{title}</h1>
     {children}
-    <Link to="/keys" className={buttonStyles()}>
+    <Link to="/orgs/$slug/keys" params={{ slug: useOrg().slug }} className={buttonStyles()}>
       See keys
     </Link>
   </div>
@@ -194,14 +195,18 @@ export const AskAccessPage = ({ id }: { readonly id: string }) => {
   const result = useAtomValue(requestAtom(useOwner())(id));
   const approving = useAtomValue(approveRequestAtom(id));
   const rejecting = useAtomValue(rejectRequestAtom(id));
-  const request = latest(result);
+  const org = useOrg();
+  const found = latest(result);
+  // Only an ask of the org the address names: one of another org is not at this link.
+  const request = found !== null && found.org.id === org.id ? found : null;
   if (request === null) {
-    const isMissing = AsyncResult.isFailure(result)
-      ? Option.match(AsyncResult.error(result), {
+    const isMissing =
+      found !== null ||
+      (AsyncResult.isFailure(result) &&
+        Option.match(AsyncResult.error(result), {
           onNone: () => false,
           onSome: error => error._tag === 'NotFoundError',
-        })
-      : false;
+        }));
     if (isMissing) {
       return (
         <Outcome title="No request at this link">

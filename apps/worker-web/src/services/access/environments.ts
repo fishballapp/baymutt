@@ -93,9 +93,12 @@ export const environments = ({
     Request: Schema.Struct({ accountId: Schema.String, readerId: Schema.String }),
     Result: Schema.Struct({ orgId: Schema.String, wrap: Schema.String }),
     execute: ({ accountId, readerId }) =>
-      sql`SELECT org_id, wrap FROM names_key_wrap
-          WHERE reader_id = ${readerId} AND org_id IN (${orgsOf(sql, accountId)})
-          ORDER BY org_id`,
+      // A key gets its own org's alone, whatever other rows a store from before 0.10 still holds.
+      sql`SELECT n.org_id, n.wrap FROM names_key_wrap n
+          LEFT JOIN credential c ON c.id = n.reader_id
+          WHERE n.reader_id = ${readerId} AND n.org_id IN (${orgsOf(sql, accountId)})
+            AND (c.id IS NULL OR c.parent_id IS NULL OR c.org_id = n.org_id)
+          ORDER BY n.org_id`,
   });
 
   const grantsOn = (
@@ -355,6 +358,11 @@ export const environments = ({
         return yield* new InvalidRequestError({
           message:
             'A CLI login holds no environment. It asks for one with `baymutt ask access`, and approving the request makes a key that holds it.',
+        });
+      }
+      if (serviceAccount.orgId !== environment.orgId) {
+        return yield* new InvalidRequestError({
+          message: `${serviceAccount.name} belongs to ${serviceAccount.orgSlug ?? 'another org'}, and a key holds environments of its own org only.`,
         });
       }
       if (!canWrite && readWrap === null) {

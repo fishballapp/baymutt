@@ -110,12 +110,14 @@ export const storeWorld = async (userId = 'user-1') => {
     201,
   );
 
-  /** The live credentials of the account: who sealing an org wraps its names key to. */
-  const liveCredentials = () =>
+  /** Who sealing an org wraps its names key to besides the account: its live CLI logins and the org's keys. */
+  const namesReaders = (orgId: string) =>
     (
       w.sqlite
-        .prepare('SELECT id FROM credential WHERE account_id = ? AND revoked_at IS NULL')
-        .all(accountId) as Array<{ id: string }>
+        .prepare(
+          'SELECT id FROM credential WHERE account_id = ? AND revoked_at IS NULL AND (parent_id IS NULL OR org_id = ?)',
+        )
+        .all(accountId, orgId) as Array<{ id: string }>
     ).map(({ id }) => id);
 
   /** Seals an org's names as the owner's dashboard does, with stand-in indexes and wraps. */
@@ -125,7 +127,7 @@ export const storeWorld = async (userId = 'user-1') => {
       secrets: Array<{ environmentId: string; name: string }>;
     }>(w, 'GET', `/orgs/${orgId}/unsealed-names`, owner);
     return ok(w, 'POST', `/orgs/${orgId}/seal-names`, owner, {
-      wraps: [accountId, ...liveCredentials()].map(readerId => ({
+      wraps: [accountId, ...namesReaders(orgId)].map(readerId => ({
         readerId,
         wrap: NAMES_KEY_WRAP,
       })),

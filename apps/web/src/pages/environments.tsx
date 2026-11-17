@@ -5,7 +5,7 @@ import { Link } from '@tanstack/react-router';
 import * as Schema from 'effect/Schema';
 import { useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { NewOrg, usePickedOrg } from '../components/orgs.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import {
   Code,
   Empty,
@@ -74,13 +74,12 @@ const NewEnvironment = ({ org }: { readonly org: Org }) => {
   );
 };
 
-/**
- * Environment requests waiting for the owner, in every org: each as a sentence, its decision on
- * its own page.
- */
-const EnvironmentRequests = () => {
-  const requests = latest(useAtomValue(environmentRequestsAtom(useOwner())));
-  if (requests === null || requests.length === 0) return null;
+/** Environment requests in the org waiting for the owner: each as a sentence, its decision on its own page. */
+const EnvironmentRequests = ({ org }: { readonly org: Org }) => {
+  const requests = latest(useAtomValue(environmentRequestsAtom(useOwner())))?.filter(
+    request => request.orgId === org.id,
+  );
+  if (requests === undefined || requests.length === 0) return null;
   return (
     <Section
       title="Requests"
@@ -106,8 +105,8 @@ const EnvironmentRequests = () => {
               </div>
               <div className="flex flex-wrap gap-1.5 sm:shrink-0">
                 <Link
-                  to="/ask/create-environment/$id"
-                  params={{ id: request.id }}
+                  to="/orgs/$slug/ask/create-environment/$id"
+                  params={{ slug: org.slug, id: request.id }}
                   className={buttonStyles()}
                 >
                   Review
@@ -123,30 +122,19 @@ const EnvironmentRequests = () => {
 
 export const EnvironmentsPage = () => {
   const result = useAtomValue(environmentsAtom(useOwner()));
-  const { orgs, org } = usePickedOrg();
-  const environments = latest(result)?.filter(environment => environment.orgId === org?.id) ?? null;
-  if (orgs !== null && org === null) {
-    return (
-      <>
-        <PageHeader
-          title="Environments"
-          lede="Every environment belongs to an org, and is named with the org’s slug first."
-        />
-        <NewOrg />
-      </>
-    );
-  }
+  const org = useOrg();
+  const environments = latest(result)?.filter(environment => environment.orgId === org.id) ?? null;
   return (
     <>
       <PageHeader
         title="Environments"
         lede="An environment is the unit of access. A CLI login lists it and opens nothing in it; a key reaches it when a request you approved named it."
       />
-      <EnvironmentRequests />
-      {org !== null && <NewEnvironment org={org} />}
+      <EnvironmentRequests org={org} />
+      <NewEnvironment org={org} />
       {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {(environments === null || org === null) && !failureMessage(result) && <Skeleton />}
-      {org !== null && environments?.length === 0 && (
+      {environments === null && !failureMessage(result) && <Skeleton />}
+      {environments?.length === 0 && (
         <Empty title={`No environments in ${org.name} yet`}>
           <p>
             Create one above. A CLI login asks for one with{' '}
@@ -159,8 +147,8 @@ export const EnvironmentsPage = () => {
           {environments.map(environment => (
             <Row key={environment.id} className="p-0">
               <Link
-                to="/environments/$id"
-                params={{ id: environment.id }}
+                to="/orgs/$slug/environments/$id"
+                params={{ slug: org.slug, id: environment.id }}
                 className="group flex items-center gap-4 px-4 py-3 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:-outline-offset-2"
               >
                 <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-6 gap-y-0.5">

@@ -14,18 +14,21 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as RecoverRouteImport } from './routes/recover'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AppAccountRouteImport } from './routes/_app.account'
-import { Route as AppActivityRouteImport } from './routes/_app.activity'
-import { Route as AppBinRouteImport } from './routes/_app.bin'
-import { Route as AppKeysRouteImport } from './routes/_app.keys'
 import { Route as AppPairRouteImport } from './routes/_app.pair'
-import { Route as AppPasteLinksRouteImport } from './routes/_app.paste-links'
 import { Route as AppSigninRouteImport } from './routes/_app.signin'
 import { Route as PasteIdRouteImport } from './routes/paste.$id'
-import { Route as AppEnvironmentsIndexRouteImport } from './routes/_app.environments.index'
-import { Route as AppEnvironmentsIdRouteImport } from './routes/_app.environments.$id'
-import { Route as AppAskAccessIdRouteImport } from './routes/_app.ask.access.$id'
-import { Route as AppAskChangeIdRouteImport } from './routes/_app.ask.change.$id'
-import { Route as AppAskCreateEnvironmentIdRouteImport } from './routes/_app.ask.create-environment.$id'
+import { Route as AppOrgsIndexRouteImport } from './routes/_app.orgs.index'
+import { Route as AppOrgsSlugRouteImport } from './routes/_app.orgs.$slug'
+import { Route as AppOrgsSlugIndexRouteImport } from './routes/_app.orgs.$slug.index'
+import { Route as AppOrgsSlugActivityRouteImport } from './routes/_app.orgs.$slug.activity'
+import { Route as AppOrgsSlugBinRouteImport } from './routes/_app.orgs.$slug.bin'
+import { Route as AppOrgsSlugKeysRouteImport } from './routes/_app.orgs.$slug.keys'
+import { Route as AppOrgsSlugPasteLinksRouteImport } from './routes/_app.orgs.$slug.paste-links'
+import { Route as AppOrgsSlugEnvironmentsIndexRouteImport } from './routes/_app.orgs.$slug.environments.index'
+import { Route as AppOrgsSlugEnvironmentsIdRouteImport } from './routes/_app.orgs.$slug.environments.$id'
+import { Route as AppOrgsSlugAskAccessIdRouteImport } from './routes/_app.orgs.$slug.ask.access.$id'
+import { Route as AppOrgsSlugAskChangeIdRouteImport } from './routes/_app.orgs.$slug.ask.change.$id'
+import { Route as AppOrgsSlugAskCreateEnvironmentIdRouteImport } from './routes/_app.orgs.$slug.ask.create-environment.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -51,29 +54,9 @@ const AppAccountRoute = AppAccountRouteImport.update({
   path: '/account',
   getParentRoute: () => AppRoute,
 } as any)
-const AppActivityRoute = AppActivityRouteImport.update({
-  id: '/activity',
-  path: '/activity',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppBinRoute = AppBinRouteImport.update({
-  id: '/bin',
-  path: '/bin',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppKeysRoute = AppKeysRouteImport.update({
-  id: '/keys',
-  path: '/keys',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppPairRoute = AppPairRouteImport.update({
   id: '/pair',
   path: '/pair',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppPasteLinksRoute = AppPasteLinksRouteImport.update({
-  id: '/paste-links',
-  path: '/paste-links',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSigninRoute = AppSigninRouteImport.update({
@@ -86,31 +69,68 @@ const PasteIdRoute = PasteIdRouteImport.update({
   path: '/paste/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppEnvironmentsIndexRoute = AppEnvironmentsIndexRouteImport.update({
-  id: '/environments/',
-  path: '/environments/',
+const AppOrgsIndexRoute = AppOrgsIndexRouteImport.update({
+  id: '/orgs/',
+  path: '/orgs/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppEnvironmentsIdRoute = AppEnvironmentsIdRouteImport.update({
-  id: '/environments/$id',
-  path: '/environments/$id',
+const AppOrgsSlugRoute = AppOrgsSlugRouteImport.update({
+  id: '/orgs/$slug',
+  path: '/orgs/$slug',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAskAccessIdRoute = AppAskAccessIdRouteImport.update({
+const AppOrgsSlugIndexRoute = AppOrgsSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppOrgsSlugRoute,
+} as any)
+const AppOrgsSlugActivityRoute = AppOrgsSlugActivityRouteImport.update({
+  id: '/activity',
+  path: '/activity',
+  getParentRoute: () => AppOrgsSlugRoute,
+} as any)
+const AppOrgsSlugBinRoute = AppOrgsSlugBinRouteImport.update({
+  id: '/bin',
+  path: '/bin',
+  getParentRoute: () => AppOrgsSlugRoute,
+} as any)
+const AppOrgsSlugKeysRoute = AppOrgsSlugKeysRouteImport.update({
+  id: '/keys',
+  path: '/keys',
+  getParentRoute: () => AppOrgsSlugRoute,
+} as any)
+const AppOrgsSlugPasteLinksRoute = AppOrgsSlugPasteLinksRouteImport.update({
+  id: '/paste-links',
+  path: '/paste-links',
+  getParentRoute: () => AppOrgsSlugRoute,
+} as any)
+const AppOrgsSlugEnvironmentsIndexRoute =
+  AppOrgsSlugEnvironmentsIndexRouteImport.update({
+    id: '/environments/',
+    path: '/environments/',
+    getParentRoute: () => AppOrgsSlugRoute,
+  } as any)
+const AppOrgsSlugEnvironmentsIdRoute =
+  AppOrgsSlugEnvironmentsIdRouteImport.update({
+    id: '/environments/$id',
+    path: '/environments/$id',
+    getParentRoute: () => AppOrgsSlugRoute,
+  } as any)
+const AppOrgsSlugAskAccessIdRoute = AppOrgsSlugAskAccessIdRouteImport.update({
   id: '/ask/access/$id',
   path: '/ask/access/$id',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => AppOrgsSlugRoute,
 } as any)
-const AppAskChangeIdRoute = AppAskChangeIdRouteImport.update({
+const AppOrgsSlugAskChangeIdRoute = AppOrgsSlugAskChangeIdRouteImport.update({
   id: '/ask/change/$id',
   path: '/ask/change/$id',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => AppOrgsSlugRoute,
 } as any)
-const AppAskCreateEnvironmentIdRoute =
-  AppAskCreateEnvironmentIdRouteImport.update({
+const AppOrgsSlugAskCreateEnvironmentIdRoute =
+  AppOrgsSlugAskCreateEnvironmentIdRouteImport.update({
     id: '/ask/create-environment/$id',
     path: '/ask/create-environment/$id',
-    getParentRoute: () => AppRoute,
+    getParentRoute: () => AppOrgsSlugRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -118,36 +138,41 @@ export interface FileRoutesByFullPath {
   '/recover': typeof RecoverRoute
   '/signup': typeof SignupRoute
   '/account': typeof AppAccountRoute
-  '/activity': typeof AppActivityRoute
-  '/bin': typeof AppBinRoute
-  '/keys': typeof AppKeysRoute
   '/pair': typeof AppPairRoute
-  '/paste-links': typeof AppPasteLinksRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
-  '/environments/$id': typeof AppEnvironmentsIdRoute
-  '/environments/': typeof AppEnvironmentsIndexRoute
-  '/ask/access/$id': typeof AppAskAccessIdRoute
-  '/ask/change/$id': typeof AppAskChangeIdRoute
-  '/ask/create-environment/$id': typeof AppAskCreateEnvironmentIdRoute
+  '/orgs/$slug': typeof AppOrgsSlugRouteWithChildren
+  '/orgs/': typeof AppOrgsIndexRoute
+  '/orgs/$slug/activity': typeof AppOrgsSlugActivityRoute
+  '/orgs/$slug/bin': typeof AppOrgsSlugBinRoute
+  '/orgs/$slug/keys': typeof AppOrgsSlugKeysRoute
+  '/orgs/$slug/paste-links': typeof AppOrgsSlugPasteLinksRoute
+  '/orgs/$slug/': typeof AppOrgsSlugIndexRoute
+  '/orgs/$slug/environments/$id': typeof AppOrgsSlugEnvironmentsIdRoute
+  '/orgs/$slug/environments/': typeof AppOrgsSlugEnvironmentsIndexRoute
+  '/orgs/$slug/ask/access/$id': typeof AppOrgsSlugAskAccessIdRoute
+  '/orgs/$slug/ask/change/$id': typeof AppOrgsSlugAskChangeIdRoute
+  '/orgs/$slug/ask/create-environment/$id': typeof AppOrgsSlugAskCreateEnvironmentIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/recover': typeof RecoverRoute
   '/signup': typeof SignupRoute
   '/account': typeof AppAccountRoute
-  '/activity': typeof AppActivityRoute
-  '/bin': typeof AppBinRoute
-  '/keys': typeof AppKeysRoute
   '/pair': typeof AppPairRoute
-  '/paste-links': typeof AppPasteLinksRoute
   '/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
-  '/environments/$id': typeof AppEnvironmentsIdRoute
-  '/environments': typeof AppEnvironmentsIndexRoute
-  '/ask/access/$id': typeof AppAskAccessIdRoute
-  '/ask/change/$id': typeof AppAskChangeIdRoute
-  '/ask/create-environment/$id': typeof AppAskCreateEnvironmentIdRoute
+  '/orgs': typeof AppOrgsIndexRoute
+  '/orgs/$slug/activity': typeof AppOrgsSlugActivityRoute
+  '/orgs/$slug/bin': typeof AppOrgsSlugBinRoute
+  '/orgs/$slug/keys': typeof AppOrgsSlugKeysRoute
+  '/orgs/$slug/paste-links': typeof AppOrgsSlugPasteLinksRoute
+  '/orgs/$slug': typeof AppOrgsSlugIndexRoute
+  '/orgs/$slug/environments/$id': typeof AppOrgsSlugEnvironmentsIdRoute
+  '/orgs/$slug/environments': typeof AppOrgsSlugEnvironmentsIndexRoute
+  '/orgs/$slug/ask/access/$id': typeof AppOrgsSlugAskAccessIdRoute
+  '/orgs/$slug/ask/change/$id': typeof AppOrgsSlugAskChangeIdRoute
+  '/orgs/$slug/ask/create-environment/$id': typeof AppOrgsSlugAskCreateEnvironmentIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -156,18 +181,21 @@ export interface FileRoutesById {
   '/recover': typeof RecoverRoute
   '/signup': typeof SignupRoute
   '/_app/account': typeof AppAccountRoute
-  '/_app/activity': typeof AppActivityRoute
-  '/_app/bin': typeof AppBinRoute
-  '/_app/keys': typeof AppKeysRoute
   '/_app/pair': typeof AppPairRoute
-  '/_app/paste-links': typeof AppPasteLinksRoute
   '/_app/signin': typeof AppSigninRoute
   '/paste/$id': typeof PasteIdRoute
-  '/_app/environments/$id': typeof AppEnvironmentsIdRoute
-  '/_app/environments/': typeof AppEnvironmentsIndexRoute
-  '/_app/ask/access/$id': typeof AppAskAccessIdRoute
-  '/_app/ask/change/$id': typeof AppAskChangeIdRoute
-  '/_app/ask/create-environment/$id': typeof AppAskCreateEnvironmentIdRoute
+  '/_app/orgs/$slug': typeof AppOrgsSlugRouteWithChildren
+  '/_app/orgs/': typeof AppOrgsIndexRoute
+  '/_app/orgs/$slug/activity': typeof AppOrgsSlugActivityRoute
+  '/_app/orgs/$slug/bin': typeof AppOrgsSlugBinRoute
+  '/_app/orgs/$slug/keys': typeof AppOrgsSlugKeysRoute
+  '/_app/orgs/$slug/paste-links': typeof AppOrgsSlugPasteLinksRoute
+  '/_app/orgs/$slug/': typeof AppOrgsSlugIndexRoute
+  '/_app/orgs/$slug/environments/$id': typeof AppOrgsSlugEnvironmentsIdRoute
+  '/_app/orgs/$slug/environments/': typeof AppOrgsSlugEnvironmentsIndexRoute
+  '/_app/orgs/$slug/ask/access/$id': typeof AppOrgsSlugAskAccessIdRoute
+  '/_app/orgs/$slug/ask/change/$id': typeof AppOrgsSlugAskChangeIdRoute
+  '/_app/orgs/$slug/ask/create-environment/$id': typeof AppOrgsSlugAskCreateEnvironmentIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -176,36 +204,41 @@ export interface FileRouteTypes {
     | '/recover'
     | '/signup'
     | '/account'
-    | '/activity'
-    | '/bin'
-    | '/keys'
     | '/pair'
-    | '/paste-links'
     | '/signin'
     | '/paste/$id'
-    | '/environments/$id'
-    | '/environments/'
-    | '/ask/access/$id'
-    | '/ask/change/$id'
-    | '/ask/create-environment/$id'
+    | '/orgs/$slug'
+    | '/orgs/'
+    | '/orgs/$slug/activity'
+    | '/orgs/$slug/bin'
+    | '/orgs/$slug/keys'
+    | '/orgs/$slug/paste-links'
+    | '/orgs/$slug/'
+    | '/orgs/$slug/environments/$id'
+    | '/orgs/$slug/environments/'
+    | '/orgs/$slug/ask/access/$id'
+    | '/orgs/$slug/ask/change/$id'
+    | '/orgs/$slug/ask/create-environment/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/recover'
     | '/signup'
     | '/account'
-    | '/activity'
-    | '/bin'
-    | '/keys'
     | '/pair'
-    | '/paste-links'
     | '/signin'
     | '/paste/$id'
-    | '/environments/$id'
-    | '/environments'
-    | '/ask/access/$id'
-    | '/ask/change/$id'
-    | '/ask/create-environment/$id'
+    | '/orgs'
+    | '/orgs/$slug/activity'
+    | '/orgs/$slug/bin'
+    | '/orgs/$slug/keys'
+    | '/orgs/$slug/paste-links'
+    | '/orgs/$slug'
+    | '/orgs/$slug/environments/$id'
+    | '/orgs/$slug/environments'
+    | '/orgs/$slug/ask/access/$id'
+    | '/orgs/$slug/ask/change/$id'
+    | '/orgs/$slug/ask/create-environment/$id'
   id:
     | '__root__'
     | '/'
@@ -213,18 +246,21 @@ export interface FileRouteTypes {
     | '/recover'
     | '/signup'
     | '/_app/account'
-    | '/_app/activity'
-    | '/_app/bin'
-    | '/_app/keys'
     | '/_app/pair'
-    | '/_app/paste-links'
     | '/_app/signin'
     | '/paste/$id'
-    | '/_app/environments/$id'
-    | '/_app/environments/'
-    | '/_app/ask/access/$id'
-    | '/_app/ask/change/$id'
-    | '/_app/ask/create-environment/$id'
+    | '/_app/orgs/$slug'
+    | '/_app/orgs/'
+    | '/_app/orgs/$slug/activity'
+    | '/_app/orgs/$slug/bin'
+    | '/_app/orgs/$slug/keys'
+    | '/_app/orgs/$slug/paste-links'
+    | '/_app/orgs/$slug/'
+    | '/_app/orgs/$slug/environments/$id'
+    | '/_app/orgs/$slug/environments/'
+    | '/_app/orgs/$slug/ask/access/$id'
+    | '/_app/orgs/$slug/ask/change/$id'
+    | '/_app/orgs/$slug/ask/create-environment/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -272,39 +308,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAccountRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/activity': {
-      id: '/_app/activity'
-      path: '/activity'
-      fullPath: '/activity'
-      preLoaderRoute: typeof AppActivityRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/bin': {
-      id: '/_app/bin'
-      path: '/bin'
-      fullPath: '/bin'
-      preLoaderRoute: typeof AppBinRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/keys': {
-      id: '/_app/keys'
-      path: '/keys'
-      fullPath: '/keys'
-      preLoaderRoute: typeof AppKeysRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/pair': {
       id: '/_app/pair'
       path: '/pair'
       fullPath: '/pair'
       preLoaderRoute: typeof AppPairRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/paste-links': {
-      id: '/_app/paste-links'
-      path: '/paste-links'
-      fullPath: '/paste-links'
-      preLoaderRoute: typeof AppPasteLinksRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/signin': {
@@ -321,72 +329,138 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PasteIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/environments/': {
-      id: '/_app/environments/'
+    '/_app/orgs/': {
+      id: '/_app/orgs/'
+      path: '/orgs'
+      fullPath: '/orgs/'
+      preLoaderRoute: typeof AppOrgsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/orgs/$slug': {
+      id: '/_app/orgs/$slug'
+      path: '/orgs/$slug'
+      fullPath: '/orgs/$slug'
+      preLoaderRoute: typeof AppOrgsSlugRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/orgs/$slug/': {
+      id: '/_app/orgs/$slug/'
+      path: '/'
+      fullPath: '/orgs/$slug/'
+      preLoaderRoute: typeof AppOrgsSlugIndexRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
+    }
+    '/_app/orgs/$slug/activity': {
+      id: '/_app/orgs/$slug/activity'
+      path: '/activity'
+      fullPath: '/orgs/$slug/activity'
+      preLoaderRoute: typeof AppOrgsSlugActivityRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
+    }
+    '/_app/orgs/$slug/bin': {
+      id: '/_app/orgs/$slug/bin'
+      path: '/bin'
+      fullPath: '/orgs/$slug/bin'
+      preLoaderRoute: typeof AppOrgsSlugBinRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
+    }
+    '/_app/orgs/$slug/keys': {
+      id: '/_app/orgs/$slug/keys'
+      path: '/keys'
+      fullPath: '/orgs/$slug/keys'
+      preLoaderRoute: typeof AppOrgsSlugKeysRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
+    }
+    '/_app/orgs/$slug/paste-links': {
+      id: '/_app/orgs/$slug/paste-links'
+      path: '/paste-links'
+      fullPath: '/orgs/$slug/paste-links'
+      preLoaderRoute: typeof AppOrgsSlugPasteLinksRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
+    }
+    '/_app/orgs/$slug/environments/': {
+      id: '/_app/orgs/$slug/environments/'
       path: '/environments'
-      fullPath: '/environments/'
-      preLoaderRoute: typeof AppEnvironmentsIndexRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/orgs/$slug/environments/'
+      preLoaderRoute: typeof AppOrgsSlugEnvironmentsIndexRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
     }
-    '/_app/environments/$id': {
-      id: '/_app/environments/$id'
+    '/_app/orgs/$slug/environments/$id': {
+      id: '/_app/orgs/$slug/environments/$id'
       path: '/environments/$id'
-      fullPath: '/environments/$id'
-      preLoaderRoute: typeof AppEnvironmentsIdRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/orgs/$slug/environments/$id'
+      preLoaderRoute: typeof AppOrgsSlugEnvironmentsIdRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
     }
-    '/_app/ask/access/$id': {
-      id: '/_app/ask/access/$id'
+    '/_app/orgs/$slug/ask/access/$id': {
+      id: '/_app/orgs/$slug/ask/access/$id'
       path: '/ask/access/$id'
-      fullPath: '/ask/access/$id'
-      preLoaderRoute: typeof AppAskAccessIdRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/orgs/$slug/ask/access/$id'
+      preLoaderRoute: typeof AppOrgsSlugAskAccessIdRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
     }
-    '/_app/ask/change/$id': {
-      id: '/_app/ask/change/$id'
+    '/_app/orgs/$slug/ask/change/$id': {
+      id: '/_app/orgs/$slug/ask/change/$id'
       path: '/ask/change/$id'
-      fullPath: '/ask/change/$id'
-      preLoaderRoute: typeof AppAskChangeIdRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/orgs/$slug/ask/change/$id'
+      preLoaderRoute: typeof AppOrgsSlugAskChangeIdRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
     }
-    '/_app/ask/create-environment/$id': {
-      id: '/_app/ask/create-environment/$id'
+    '/_app/orgs/$slug/ask/create-environment/$id': {
+      id: '/_app/orgs/$slug/ask/create-environment/$id'
       path: '/ask/create-environment/$id'
-      fullPath: '/ask/create-environment/$id'
-      preLoaderRoute: typeof AppAskCreateEnvironmentIdRouteImport
-      parentRoute: typeof AppRoute
+      fullPath: '/orgs/$slug/ask/create-environment/$id'
+      preLoaderRoute: typeof AppOrgsSlugAskCreateEnvironmentIdRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
     }
   }
 }
 
+interface AppOrgsSlugRouteChildren {
+  AppOrgsSlugActivityRoute: typeof AppOrgsSlugActivityRoute
+  AppOrgsSlugBinRoute: typeof AppOrgsSlugBinRoute
+  AppOrgsSlugKeysRoute: typeof AppOrgsSlugKeysRoute
+  AppOrgsSlugPasteLinksRoute: typeof AppOrgsSlugPasteLinksRoute
+  AppOrgsSlugIndexRoute: typeof AppOrgsSlugIndexRoute
+  AppOrgsSlugEnvironmentsIdRoute: typeof AppOrgsSlugEnvironmentsIdRoute
+  AppOrgsSlugEnvironmentsIndexRoute: typeof AppOrgsSlugEnvironmentsIndexRoute
+  AppOrgsSlugAskAccessIdRoute: typeof AppOrgsSlugAskAccessIdRoute
+  AppOrgsSlugAskChangeIdRoute: typeof AppOrgsSlugAskChangeIdRoute
+  AppOrgsSlugAskCreateEnvironmentIdRoute: typeof AppOrgsSlugAskCreateEnvironmentIdRoute
+}
+
+const AppOrgsSlugRouteChildren: AppOrgsSlugRouteChildren = {
+  AppOrgsSlugActivityRoute: AppOrgsSlugActivityRoute,
+  AppOrgsSlugBinRoute: AppOrgsSlugBinRoute,
+  AppOrgsSlugKeysRoute: AppOrgsSlugKeysRoute,
+  AppOrgsSlugPasteLinksRoute: AppOrgsSlugPasteLinksRoute,
+  AppOrgsSlugIndexRoute: AppOrgsSlugIndexRoute,
+  AppOrgsSlugEnvironmentsIdRoute: AppOrgsSlugEnvironmentsIdRoute,
+  AppOrgsSlugEnvironmentsIndexRoute: AppOrgsSlugEnvironmentsIndexRoute,
+  AppOrgsSlugAskAccessIdRoute: AppOrgsSlugAskAccessIdRoute,
+  AppOrgsSlugAskChangeIdRoute: AppOrgsSlugAskChangeIdRoute,
+  AppOrgsSlugAskCreateEnvironmentIdRoute:
+    AppOrgsSlugAskCreateEnvironmentIdRoute,
+}
+
+const AppOrgsSlugRouteWithChildren = AppOrgsSlugRoute._addFileChildren(
+  AppOrgsSlugRouteChildren,
+)
+
 interface AppRouteChildren {
   AppAccountRoute: typeof AppAccountRoute
-  AppActivityRoute: typeof AppActivityRoute
-  AppBinRoute: typeof AppBinRoute
-  AppKeysRoute: typeof AppKeysRoute
   AppPairRoute: typeof AppPairRoute
-  AppPasteLinksRoute: typeof AppPasteLinksRoute
   AppSigninRoute: typeof AppSigninRoute
-  AppEnvironmentsIdRoute: typeof AppEnvironmentsIdRoute
-  AppEnvironmentsIndexRoute: typeof AppEnvironmentsIndexRoute
-  AppAskAccessIdRoute: typeof AppAskAccessIdRoute
-  AppAskChangeIdRoute: typeof AppAskChangeIdRoute
-  AppAskCreateEnvironmentIdRoute: typeof AppAskCreateEnvironmentIdRoute
+  AppOrgsSlugRoute: typeof AppOrgsSlugRouteWithChildren
+  AppOrgsIndexRoute: typeof AppOrgsIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppAccountRoute: AppAccountRoute,
-  AppActivityRoute: AppActivityRoute,
-  AppBinRoute: AppBinRoute,
-  AppKeysRoute: AppKeysRoute,
   AppPairRoute: AppPairRoute,
-  AppPasteLinksRoute: AppPasteLinksRoute,
   AppSigninRoute: AppSigninRoute,
-  AppEnvironmentsIdRoute: AppEnvironmentsIdRoute,
-  AppEnvironmentsIndexRoute: AppEnvironmentsIndexRoute,
-  AppAskAccessIdRoute: AppAskAccessIdRoute,
-  AppAskChangeIdRoute: AppAskChangeIdRoute,
-  AppAskCreateEnvironmentIdRoute: AppAskCreateEnvironmentIdRoute,
+  AppOrgsSlugRoute: AppOrgsSlugRouteWithChildren,
+  AppOrgsIndexRoute: AppOrgsIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

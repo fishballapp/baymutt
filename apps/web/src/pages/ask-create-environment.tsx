@@ -7,6 +7,7 @@ import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import type { ReactNode } from 'react';
 import { useOwner } from '../components/gate.tsx';
+import { useOrg } from '../components/orgs.tsx';
 import { Claim, Code, Notice, Skeleton, Time } from '../components/parts.tsx';
 import { Button, buttonStyles } from '../components/ui/button.tsx';
 import {
@@ -19,15 +20,17 @@ import {
 import { exactTime } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
+const SeeEnvironments = () => (
+  <Link to="/orgs/$slug/environments" params={{ slug: useOrg().slug }} className={buttonStyles()}>
+    See environments
+  </Link>
+);
+
 /** A page that is not the decision: an answered or missing request, or the answer just given. */
 const Outcome = ({
   title,
   children,
-  action = (
-    <Link to="/environments" className={buttonStyles()}>
-      See environments
-    </Link>
-  ),
+  action = <SeeEnvironments />,
 }: {
   readonly title: string;
   readonly children: ReactNode;
@@ -59,7 +62,11 @@ const justAnswered = ({
       <Outcome
         title="Created"
         action={
-          <Link to="/environments/$id" params={{ id: request.id }} className={buttonStyles()}>
+          <Link
+            to="/orgs/$slug/environments/$id"
+            params={{ slug: request.orgSlug, id: request.id }}
+            className={buttonStyles()}
+          >
             Open {address}
           </Link>
         }
@@ -137,14 +144,18 @@ export const AskCreateEnvironmentPage = ({ id }: { readonly id: string }) => {
   const result = useAtomValue(environmentRequestAtom(useOwner())(id));
   const creating = useAtomValue(approveEnvironmentRequestAtom(id));
   const rejecting = useAtomValue(rejectEnvironmentRequestAtom(id));
-  const request = latest(result);
+  const org = useOrg();
+  const found = latest(result);
+  // Only an ask of the org the address names: one of another org is not at this link.
+  const request = found !== null && found.orgId === org.id ? found : null;
   if (request === null) {
-    const isMissing = AsyncResult.isFailure(result)
-      ? Option.match(AsyncResult.error(result), {
+    const isMissing =
+      found !== null ||
+      (AsyncResult.isFailure(result) &&
+        Option.match(AsyncResult.error(result), {
           onNone: () => false,
           onSome: error => error._tag === 'NotFoundError',
-        })
-      : false;
+        }));
     if (isMissing) {
       return (
         <Outcome title="No request at this link">
