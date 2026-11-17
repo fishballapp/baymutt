@@ -9,7 +9,7 @@ npm install -g @baymutt/cli
 baymutt auth login                       # once per computer: prints a link; the owner opens it and approves
 baymutt secret list acme/app/production  # names, versions and sizes; never a value
 baymutt ask access --read acme/app/production --reason "run the migration" --expires 1h
-baymutt ask wait <id>                    # returns once the owner has answered the request
+baymutt ask wait <id> [<id>…]            # returns once the owner has answered what was asked
 baymutt auth logout                      # revokes this CLI login and forgets its key
 ```
 
@@ -18,8 +18,15 @@ baymutt auth logout                      # revokes this CLI login and forgets it
 - A CLI login lists orgs, environments and secret names, and holds no environment. `ask access` makes a
   key of its own for whole environments (`--read`, `--write`, `--read-write`), with a `--reason` (never a secret:
   it is stored readable) and `--expires 15m|12h|90d`. It prints a link for the owner and returns;
-  the request waits an hour. `ask wait <id>` returns once the owner has approved or rejected it:
-  approved, it prints the path of a key file, used as `BAYMUTT_KEY_FILE=<path>`.
+  the request waits an hour. `--read-write` asks for both in one approval; two separate asks cost
+  the owner two. `ask wait <id>` returns once the owner has approved or rejected it: approved, it
+  prints the path of a key file, used as `BAYMUTT_KEY_FILE=<path>`.
+- The owner sees only your reply to them, not a command's output: end that reply with the link
+  alone on its last line, and run `ask wait` in the background or after that reply, since a wait
+  that blocks first hides the link. `ask wait <id> <id> …` waits for several asks, of any kind,
+  within one `--timeout`, and prints one JSON line for each as it is answered. It exits 0 when
+  every one was granted, 9 if any is still open (wait again for those), else with the code of the
+  first, in the order given, that was not.
 - Every command prints JSON on stdout. A failure is one JSON line on stderr that says what to do
   next, with a stable exit code: 2 usage, 3 not logged in, 4 no access, 5 not found, 6 conflict,
   7 unreachable, 8 integrity, 9 check differs.

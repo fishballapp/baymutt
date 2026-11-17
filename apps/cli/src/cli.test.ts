@@ -74,6 +74,9 @@ const withSeat = <A, E, R>(world: TestWorld, seat: Seat, effect: Effect.Effect<A
     ),
   );
 
+/** Whether `stdout` is one compact JSON object per line (`ask wait` of several), not one pretty-printed object. */
+const isLines = (stdout: string) => stdout.split('\n').every(line => /^\{.*\}$/.test(line));
+
 const run = Effect.fnUntraced(function* (
   world: TestWorld,
   seat: Seat,
@@ -97,7 +100,9 @@ const run = Effect.fnUntraced(function* (
         exitCode,
         stdout,
         stderr, // Help text, which the parser prints for bad usage, is not a result.
-        json: /^[{[]/.test(stdout) ? JSON.parse(stdout) : undefined,
+        json: /^[{[]/.test(stdout) && !isLines(stdout) ? JSON.parse(stdout) : undefined,
+        /** What a command that prints one JSON object per line printed, in the order printed. */
+        lines: isLines(stdout) ? stdout.split('\n').map(line => JSON.parse(line)) : [],
         /** The one JSON error line a failure ends with. */
         error: /^\{"error"/.test(lastLine) ? JSON.parse(lastLine).error : undefined,
       };
@@ -763,8 +768,9 @@ layer(NodeServices.layer)(it => {
           exitCode: 0,
           json: {
             status: 'pending',
-            url: `${ORIGIN}/requests/${asked.json.id}`,
-            next: expect.stringContaining(`baymutt ask wait ${asked.json.id}`),
+            url: `${ORIGIN}/ask/access/${asked.json.id}`,
+            // The link goes last in the reply, and the wait runs in the background.
+            next: expect.stringMatching(/last line.*in the background.*baymutt ask wait/s),
           },
         });
         expect(isUuid(asked.json.id)).toBe(true);
@@ -1399,8 +1405,8 @@ layer(NodeServices.layer)(it => {
           json: {
             status: 'pending',
             environment: 'acme/app/staging',
-            url: `${ORIGIN}/environment-requests/${id}`,
-            next: expect.stringContaining(`baymutt ask wait ${id}`),
+            url: `${ORIGIN}/ask/create-environment/${id}`,
+            next: expect.stringMatching(/last line.*in the background.*baymutt ask wait/s),
           },
         });
         expect(isUuid(id)).toBe(true);
@@ -1411,7 +1417,7 @@ layer(NodeServices.layer)(it => {
         expect((yield* run(world, laptop, ['env', 'list'])).json.environments).toEqual([]);
         expect(yield* run(world, laptop, ['ask', 'wait', id, '--timeout', '0'])).toMatchObject({
           exitCode: 9,
-          json: { id, status: 'pending', url: `${ORIGIN}/environment-requests/${id}` },
+          json: { id, status: 'pending', url: `${ORIGIN}/ask/create-environment/${id}` },
         });
 
         yield* Effect.promise(() => owner.approveEnvironmentRequest(id));
@@ -1899,6 +1905,7 @@ layer(NodeServices.layer)(it => {
             environment: 'acme/app/production',
             name: 'STRIPE_SECRET_KEY',
             url: `${ORIGIN}/paste/${asked.json.id}`,
+            next: expect.stringMatching(/last line.*in the background.*baymutt ask wait/s),
           },
         });
         // Nobody has pasted yet: `wait` gives up at its timeout and says the link is open.
@@ -1989,6 +1996,175 @@ layer(NodeServices.layer)(it => {
           ),
         ).toContain('LinkSpentError');
       }),
+    );
+  });
+
+  describe('ask wait, for several at once', () => {
+    it.effect('reports each ask of any kind as it is answered, and exits 9 while one is open', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop } = yield* paired;
+        yield* Effect.promise(async () => {
+          await owner.createEnvironment('acme/app/production');
+          await owner.createEnvironment('acme/app/staging');
+        });
+        const granted = yield* ask(world, laptop, ['--read', 'acme/app/production']);
+        const rejected = yield* ask(world, laptop, ['--read', 'acme/app/staging']);
+        const created = (yield* run(world, laptop, [
+          'ask',
+          'create-environment',
+          'acme/app/new',
+          '--reason',
+          'for the tests',
+        ])).json.id as string;
+        const link = (yield* run(world, laptop, [
+          'ask',
+          'paste-link',
+          'acme/app/production',
+          'TOKEN',
+          '--reason',
+          'r',
+          '--where',
+          'the vendor',
+        ])).json.id as string;
+        yield* Effect.promise(async () => {
+          await owner.approveRequest(granted);
+          await owner.rejectRequest(rejected);
+          await owner.approveEnvironmentRequest(created);
+        });
+
+        const waited = yield* run(world, laptop, [
+          'ask',
+          'wait',
+          granted,
+          rejected,
+          created,
+          link,
+          '--timeout',
+          '0',
+        ]);
+
+        // One line each, whatever order they were answered in; the open one is told to wait again.
+        expect(waited.lines).toHaveLength(4);
+        const byId = new Map(waited.lines.map(line => [line.id, line]));
+        expect(byId.get(granted)).toMatchObject({
+          status: 'approved',
+          keyFile: `${laptop.configHome}/baymutt/localhost-5183/keys/${granted}`,
+          environments: [{ environment: 'acme/app/production', canRead: true, canWrite: false }],
+        });
+        expect(byId.get(rejected)).toMatchObject({
+          status: 'rejected',
+          error: { code: 'UsageError', exitCode: 4 },
+        });
+        expect(byId.get(created)).toMatchObject({
+          status: 'approved',
+          environment: 'acme/app/new',
+        });
+        expect(byId.get(link)).toMatchObject({ status: 'pending' });
+        // Open beats rejected: 9 says there is something to wait for again.
+        expect(waited.exitCode).toBe(9);
+        expect(waited.error.message).toContain(`baymutt ask wait ${link}`);
+        expect(waited.error.message).not.toContain(`baymutt ask wait ${link} ${rejected}`);
+        expect(waited.error.message).toContain(`${rejected} rejected`);
+        // The granted key is the real one, and the rejected one's is gone.
+        const agent = withKeyFile(laptop, byId.get(granted)?.keyFile);
+        expect(yield* load(world, agent, 'acme/app/production')).toEqual({});
+        expect(
+          yield* FileSystem.FileSystem.pipe(
+            Effect.flatMap(fs =>
+              fs.exists(`${laptop.configHome}/baymutt/localhost-5183/keys/${rejected}`),
+            ),
+          ),
+        ).toBe(false);
+      }),
+    );
+
+    it.effect('exits 0 only when every ask was granted', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop } = yield* paired;
+        yield* Effect.promise(async () => {
+          await owner.createEnvironment('acme/app/production');
+          await owner.createEnvironment('acme/app/staging');
+        });
+        const first = yield* ask(world, laptop, ['--read', 'acme/app/production']);
+        const second = yield* ask(world, laptop, ['--write', 'acme/app/staging']);
+        yield* Effect.promise(async () => {
+          await owner.approveRequest(first);
+          await owner.approveRequest(second);
+        });
+
+        const waited = yield* run(world, laptop, ['ask', 'wait', first, second, first]);
+
+        // Each once, though `first` was named twice.
+        expect(waited).toMatchObject({ exitCode: 0, stderr: '' });
+        expect(waited.lines.map(line => [line.id, line.status]).sort()).toEqual(
+          [
+            [first, 'approved'],
+            [second, 'approved'],
+          ].sort(),
+        );
+      }),
+    );
+
+    it.effect('exits with the code of the first ask, as given, that was not granted', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop } = yield* paired;
+        yield* Effect.promise(() => owner.createEnvironment('acme/app/production'));
+        const approved = yield* ask(world, laptop, ['--read', 'acme/app/production']);
+        const rejected = yield* ask(world, laptop, ['--read', 'acme/app/production']);
+        const unknown = crypto.randomUUID();
+        yield* Effect.promise(async () => {
+          await owner.approveRequest(approved);
+          await owner.rejectRequest(rejected);
+        });
+
+        // A rejection is 4, an id nothing here asked is 5: the order given decides.
+        const rejectedFirst = yield* run(world, laptop, [
+          'ask',
+          'wait',
+          approved,
+          rejected,
+          unknown,
+        ]);
+        const unknownFirst = yield* run(world, laptop, [
+          'ask',
+          'wait',
+          unknown,
+          approved,
+          rejected,
+        ]);
+
+        expect(rejectedFirst.error.exitCode).toBe(4);
+        expect(unknownFirst.error.exitCode).toBe(5);
+        // One ask failing does not stop the others being answered.
+        for (const waited of [rejectedFirst, unknownFirst]) {
+          expect(waited.lines).toHaveLength(3);
+          expect(waited.lines.find(line => line.id === approved)).toMatchObject({
+            status: 'approved',
+          });
+          expect(waited.lines.find(line => line.id === unknown)).toMatchObject({
+            status: 'failed',
+            error: { exitCode: 5 },
+          });
+        }
+      }),
+    );
+
+    it.effect(
+      'refuses an id that is not one before waiting on any, and one id stays as it was',
+      () =>
+        Effect.gen(function* () {
+          const { world, owner, laptop } = yield* paired;
+          yield* Effect.promise(() => owner.createEnvironment('acme/app/production'));
+          const id = yield* ask(world, laptop, ['--read', 'acme/app/production']);
+          yield* Effect.promise(() => owner.approveRequest(id));
+
+          const refused = yield* run(world, laptop, ['ask', 'wait', id, '../../../outside']);
+          const same = yield* run(world, laptop, ['ask', 'wait', id, id]);
+
+          expect(refused).toMatchObject({ exitCode: 2, stdout: '' });
+          // The same id twice is one ask: the one object a single id prints.
+          expect(same).toMatchObject({ exitCode: 0, json: { id, status: 'approved' } });
+        }),
     );
   });
 

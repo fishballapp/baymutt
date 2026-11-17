@@ -15,15 +15,25 @@ import * as ChildProcessSpawner from 'effect/process/ChildProcessSpawner';
 import * as Redacted from 'effect/Redacted';
 import * as Schedule from 'effect/Schedule';
 import * as Schema from 'effect/Schema';
+import * as Semaphore from 'effect/Semaphore';
 import * as Stream from 'effect/Stream';
 import { listEnvironments } from './environments.ts';
 import { answerFor, crypto_, usage } from './errors.ts';
 import { openStoredName } from './names.ts';
-import { print } from './output.ts';
+import type { Outcome } from './outcome.ts';
 import { ServiceAccount, serviceAccountFromToken } from './service-account.ts';
 import { Settings } from './settings.ts';
 
 const POLL_EVERY = Duration.seconds(2);
+
+/** One key is handed out at a time: asks waited on together would otherwise share a command's output. */
+const handingOut = Semaphore.makeUnsafe(1);
+
+/** Where the owner answers request `id`: the dashboard's page for an `ask access`. */
+export const requestUrl = Effect.fn('requests.url')(function* (id: string) {
+  const { origin } = yield* Settings;
+  return `${origin}/ask/access/${id}`;
+});
 
 /** A key file younger than this may belong to an `ask` in another terminal that has not sent its request yet. */
 const SETTLING_MS = 10 * 60 * 1000;
@@ -276,13 +286,13 @@ const finishApproved = Effect.fn('requests.finishApproved')(function* (request: 
   const environments = yield* describeItems(request);
   const kept = yield* readCommand(request.id);
   if (Option.isNone(kept)) {
-    return yield* print({
+    return {
       id: request.id,
       status: 'approved',
       keyFile,
       expiresAt: request.expiresAt,
       environments,
-    });
+    };
   }
   // A key nobody received is a service account nobody can use: take it back out.
   const revoke = Effect.andThen(
@@ -298,7 +308,7 @@ const finishApproved = Effect.fn('requests.finishApproved')(function* (request: 
     );
   }
   yield* forgetRequestKey(request.id);
-  yield* print({
+  return {
     id: request.id,
     status: 'approved',
     piped: true,
@@ -306,12 +316,12 @@ const finishApproved = Effect.fn('requests.finishApproved')(function* (request: 
     exitCode,
     expiresAt: request.expiresAt,
     environments,
-  });
+  };
 });
 
 /**
  * Waits up to `timeout` seconds for the owner's answer to a request this login made, then finishes
- * it: approved, the key is where the JSON says or piped into its command; rejected, expired or
+ * it: approved, the key is where the result says or piped into its command; rejected, expired or
  * gone, the key is removed here.
  */
 export const settleRequest = Effect.fn('requests.settle')(function* (
@@ -319,7 +329,6 @@ export const settleRequest = Effect.fn('requests.settle')(function* (
   timeout: number,
 ) {
   const { api } = yield* ServiceAccount;
-  const { origin } = yield* Settings;
   // None: the store no longer has it.
   const latest = api.requests.get({ params: { id: request.id } }).pipe(
     answerFor(request.id),
@@ -338,32 +347,44 @@ export const settleRequest = Effect.fn('requests.settle')(function* (
       : Option.some(Option.some(request));
 
   if (Option.isNone(answered)) {
-    yield* print({
-      id: request.id,
-      status: 'pending',
-      url: `${origin}/requests/${request.id}`,
-      next: `Run \`baymutt ask wait ${request.id}\` to keep waiting.`,
-    });
-    return yield* usage(
-      `The owner has not answered request ${request.id} yet. It waits an hour from when it was asked: run \`baymutt ask wait ${request.id}\` to keep waiting.`,
-      'differs',
-    );
+    return {
+      kind: 'unanswered',
+      result: {
+        id: request.id,
+        status: 'pending',
+        url: yield* requestUrl(request.id),
+        next: `Run \`baymutt ask wait ${request.id}\` to keep waiting.`,
+      },
+      failure: usage(
+        `The owner has not answered request ${request.id} yet. It waits an hour from when it was asked: run \`baymutt ask wait ${request.id}\` to keep waiting.`,
+        'differs',
+      ),
+    } satisfies Outcome;
   }
   const current = answered.value;
   if (Option.isSome(current) && current.value.status === 'approved') {
-    return yield* finishApproved(current.value);
+    const result = yield* handingOut.withPermit(finishApproved(current.value));
+    return { kind: 'granted', result } satisfies Outcome;
   }
   yield* forgetRequestKey(request.id);
   if (Option.isSome(current) && current.value.status === 'expired') {
-    return yield* usage(
-      `Nobody answered request ${request.id} within an hour, so it expired. Its key was removed from this computer. Run \`baymutt ask access\` again when the owner is around.`,
-      'noAccess',
-    );
+    return {
+      kind: 'refused',
+      status: 'expired',
+      failure: usage(
+        `Nobody answered request ${request.id} within an hour, so it expired. Its key was removed from this computer. Run \`baymutt ask access\` again when the owner is around.`,
+        'noAccess',
+      ),
+    } satisfies Outcome;
   }
-  return yield* usage(
-    Option.isSome(current)
-      ? `The owner rejected request ${request.id}. Its key was removed from this computer.`
-      : `Request ${request.id} is gone: the store no longer has it. Its key was removed from this computer.`,
-    'noAccess',
-  );
+  return {
+    kind: 'refused',
+    status: Option.isSome(current) ? current.value.status : 'gone',
+    failure: usage(
+      Option.isSome(current)
+        ? `The owner rejected request ${request.id}. Its key was removed from this computer.`
+        : `Request ${request.id} is gone: the store no longer has it. Its key was removed from this computer.`,
+      'noAccess',
+    ),
+  } satisfies Outcome;
 });

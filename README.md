@@ -20,8 +20,10 @@ baymutt ask access --read acme/app/production --reason "run the migration" --exp
 baymutt ask wait <the id it printed>
 ```
 
-`baymutt ask access` prints a link and an id, and returns. The agent gives the owner the link; the
-request waits an hour for them. The owner sees which CLI login asks, for which environments, why
+`baymutt ask access` prints a link and an id, and returns. The owner sees only the agent's reply to
+them, so the agent ends that reply with the link, alone on its last line, and runs `ask wait` in
+the background or after that reply: a wait that blocks first hides the link. The request waits an
+hour for them. The owner sees which CLI login asks, for which environments, why
 and until when, and approves or rejects; they can change only when it ends. `baymutt ask wait`
 returns when they have answered. Approved, it prints the path of a key file of the agent's own:
 
@@ -39,12 +41,15 @@ value. `baymutt --help` lists them all.
   names, and makes requests and paste links. `baymutt auth logout` revokes it and forgets its key.
 - **Each request is approved on its own**, for whole environments: `--read`, `--write` or both,
   `--expires 15m`, `1h` or `90d`. Nothing carries over to the next agent, which asks for itself.
-  `--write` does not include `--read`: `--read-write` asks for both.
+  `--write` does not include `--read`: `--read-write` asks for both in one approval, where two
+  separate asks cost the owner two.
 - **A new environment is asked for on its own**: `baymutt ask create-environment acme/app/staging
   --reason "…"` prints a link; the owner creates it, empty, or rejects. Access to it is then an
   `ask access` like any other.
 - **Everything asked of the owner is under `baymutt ask`** and waits an hour: `ask wait <id>`
-  returns when they have answered, `ask cancel <id>` withdraws it.
+  returns when they have answered, `ask cancel <id>` withdraws it. `ask wait` takes any number of
+  ids, of any kind, and prints one JSON line for each as it is answered; it exits 0 only when
+  every one was granted (see its `--help`).
 - **A key that stays, for CI,** is a request too. `baymutt ask wait` hands the key to the command
   after `--` on stdin once the owner has approved, never onto a screen, and the approval shows
   that command:

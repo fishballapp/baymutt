@@ -2,7 +2,7 @@
 // `ask access` makes a key that holds nothing, keeps it in a file here, and sends a request naming
 // whole environments, why, and for how long; approved, the key holds exactly that. `ask
 // create-environment` asks for a new environment, `ask paste-link` for one value; `ask wait` and
-// `ask cancel` follow and withdraw any of the three.
+// `ask cancel` follow and withdraw any of the three (`ask wait` several at once).
 import { hostname } from 'node:os';
 import {
   CommandSchema,
@@ -21,27 +21,23 @@ import * as Argument from 'effect/cli/Argument';
 import * as Command from 'effect/cli/Command';
 import * as Flag from 'effect/cli/Flag';
 import * as Effect from 'effect/Effect';
-import * as FileSystem from 'effect/FileSystem';
 import * as Option from 'effect/Option';
 import * as Schema from 'effect/Schema';
 import { durationMs } from '../about.ts';
-import { environmentRequestUrl, settleEnvironmentRequest } from '../environment-requests.ts';
+import { checkedId, handOver, notAsked, waitForAsks } from '../asks.ts';
+import { environmentRequestUrl } from '../environment-requests.ts';
 import { findEnvironment, listEnvironments } from '../environments.ts';
 import { answerFor, crypto_, describeFailure, isRefusal, report, usage } from '../errors.ts';
 import { sealNewName } from '../names.ts';
 import { print } from '../output.ts';
-import { settlePasteLink } from '../paste-links.ts';
 import {
   commandLine,
   forgetDeadKeys,
   forgetRequestKey,
-  isId,
   keepRequestKey,
-  keyFileOf,
-  settleRequest,
+  requestUrl,
 } from '../requests.ts';
 import { ServiceAccount } from '../service-account.ts';
-import { Settings } from '../settings.ts';
 import { pasteLinkCommand } from './secrets.ts';
 
 const HOUR_MS = 3600 * 1000;
@@ -64,7 +60,9 @@ const accessCommand = Command.make(
       Flag.atLeast(0),
     ),
     readWrite: Flag.String('read-write').pipe(
-      Flag.withDescription('An environment to load and write (repeatable), as <org>/<name>'),
+      Flag.withDescription(
+        'An environment to load and write (repeatable), as <org>/<name>. Asks for both in one approval; --read and --write on separate asks cost the owner two',
+      ),
       Flag.atLeast(0),
     ),
     write: Flag.String('write').pipe(
@@ -204,17 +202,16 @@ const accessCommand = Command.make(
         answerFor(made.credentialId),
       );
 
-    const { origin } = yield* Settings;
     yield* print({
       id: request.id,
       status: request.status,
-      url: `${origin}/requests/${request.id}`,
-      next: `Give the owner the link: the request waits an hour for them. Then run \`baymutt ask wait ${request.id}\`.`,
+      url: yield* requestUrl(request.id),
+      next: handOver(request.id),
     });
   }, report),
 ).pipe(
   Command.withDescription(
-    'Ask the owner for access to environments: a new key that holds nothing until the owner approves, then exactly what was asked for. It prints a link for the owner and returns at once; the request waits an hour for them. `baymutt ask wait <id>` then finishes it: with no command, it prints the key file, to use with BAYMUTT_KEY_FILE=<keyFile> or its content as BAYMUTT_KEY inside a sandbox; with a command after --, the key is piped to it and never kept',
+    'Ask the owner for access to environments: a new key that holds nothing until the owner approves, then exactly what was asked for. Ask for everything the task needs in one request, and use --read-write for both: each request is one approval for the owner, so two separate asks cost two. It prints a link for the owner and returns at once, and the request waits an hour for them: end your reply to the owner with the link, alone on its last line, since they see only that reply. Run `baymutt ask wait <id>` in the background, or after that reply, never before it: a wait that blocks first hides the link. It finishes the request: with no command, it prints the key file, to use with BAYMUTT_KEY_FILE=<keyFile> or its content as BAYMUTT_KEY inside a sandbox; with a command after --, the key is piped to it and never kept',
   ),
   Command.provide(ServiceAccount.layer),
 );
@@ -281,12 +278,12 @@ const createEnvironmentCommand = Command.make(
       status: request.status,
       environment: address,
       url: yield* environmentRequestUrl(request.id),
-      next: `Give the owner the link: the request waits an hour for them. Then run \`baymutt ask wait ${request.id}\`.`,
+      next: handOver(request.id),
     });
   }, report),
 ).pipe(
   Command.withDescription(
-    'Ask the owner for a new environment. Nothing is created until the owner approves, and it gives nobody access: once it exists, `baymutt ask access` asks for that. It prints a link for the owner and returns at once; the request waits an hour for them. `baymutt ask wait <id>` then says whether the owner created it',
+    'Ask the owner for a new environment. Nothing is created until the owner approves, and it gives nobody access: once it exists, `baymutt ask access` asks for that. It prints a link for the owner and returns at once, and the request waits an hour for them: end your reply to the owner with the link, alone on its last line, since they see only that reply. Run `baymutt ask wait <id>` in the background, or after that reply, never before it: a wait that blocks first hides the link. It says whether the owner created it',
   ),
   Command.provide(ServiceAccount.layer),
 );
@@ -297,61 +294,28 @@ const idArgument = Argument.String('id').pipe(
   ),
 );
 
-/** `id` as typed, refused unless it is an id: it reaches the store's paths and this computer's files. */
-const checkedId = (id: string) =>
-  isId(id)
-    ? Effect.succeed(id)
-    : Effect.fail(usage(`${id} is not an id that \`baymutt ask\` printed: those are UUIDs.`));
-
-/** Nothing this key asked has `id`. A key kept here for it is a request that never reached the store. */
-const notAsked = Effect.fn('ask.notAsked')(function* (id: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const isKept = yield* fs.exists(yield* keyFileOf(id)).pipe(Effect.orDie);
-  if (!isKept) return yield* usage(`Nothing this key asked has the id ${id}.`, 'notFound');
-  yield* forgetRequestKey(id);
-  return yield* usage(
-    `Request ${id} never reached the store, so the owner never saw it. Its key was removed from this computer: run \`baymutt ask access\` again.`,
-    'notFound',
-  );
-});
-
 const waitCommand = Command.make(
   'wait',
   {
-    id: idArgument,
+    ids: idArgument.pipe(
+      Argument.withDescription(
+        'The id or ids `baymutt ask access`, `baymutt ask create-environment` or `baymutt ask paste-link` printed, of any kind, to wait for together',
+      ),
+      Argument.variadic({ min: 1 }),
+    ),
     timeout: Flag.Int('timeout').pipe(
-      Flag.withDescription('Seconds to wait before giving up (what was asked keeps waiting)'),
+      Flag.withDescription(
+        'Seconds to wait before giving up, for all of them together (what was asked keeps waiting)',
+      ),
       Flag.withDefault(900),
     ),
   },
-  Effect.fn('ask.wait')(function* ({ id: typed, timeout }) {
-    const id = yield* checkedId(typed);
-    const { api } = yield* ServiceAccount;
-    const request = yield* api.requests.get({ params: { id } }).pipe(
-      answerFor(id),
-      Effect.asSome,
-      Effect.catchTag('NotFoundError', () => Effect.succeedNone),
-    );
-    if (Option.isSome(request)) return yield* settleRequest(request.value, timeout);
-    const environmentRequest = yield* api.environmentRequests.get({ params: { id } }).pipe(
-      answerFor(id),
-      Effect.asSome,
-      Effect.catchTag('NotFoundError', () => Effect.succeedNone),
-    );
-    if (Option.isSome(environmentRequest)) {
-      return yield* settleEnvironmentRequest(environmentRequest.value, timeout);
-    }
-    const pasteLink = yield* api.pasteLinks.get({ params: { id } }).pipe(
-      answerFor(id),
-      Effect.asSome,
-      Effect.catchTag('NotFoundError', () => Effect.succeedNone),
-    );
-    if (Option.isNone(pasteLink)) return yield* notAsked(id);
-    return yield* settlePasteLink(id, timeout);
+  Effect.fn('ask.wait')(function* ({ ids, timeout }) {
+    return yield* waitForAsks(ids, timeout);
   }, report),
 ).pipe(
   Command.withDescription(
-    'Wait until the owner answers what was asked. Exits 9 on timeout. Access: approved, it prints where the key is, or pipes it to the command it was asked for; rejected, or expired unanswered after an hour, the key is removed and it exits 4. A new environment: created, it prints its address; rejected or expired, it exits 4. A paste link: pasted, it prints `fulfilled`; dismissed, or expired, it exits 4',
+    'Wait until the owner answers what was asked: one id, or several, of any kind, together. Run it in the background, or after the reply that gives the owner the link: a wait that blocks first hides the link. One id: an object, and exit 9 on timeout. Access: approved, it prints where the key is, or pipes it to the command it was asked for; rejected, or expired unanswered after an hour, the key is removed and it exits 4. A new environment: created, it prints its address; rejected or expired, it exits 4. A paste link: pasted, it prints `fulfilled`; dismissed, or expired, it exits 4. Several ids: one JSON line each, as it is answered (the same object, or `{id, status, error}` when it was not granted); exit 0 when every one was granted, else 9 if any is still open (wait again for those), else the code of the first, in the order given, that was not',
   ),
   Command.provide(ServiceAccount.layer),
 );
@@ -408,7 +372,7 @@ const cancelCommand = Command.make(
 
 export const askCommand = Command.make('ask').pipe(
   Command.withDescription(
-    'Ask the owner: for access to environments, for a new environment, or for one value through a paste link. Each prints a link for the owner and returns at once; `baymutt ask wait <id>` follows the answer and `baymutt ask cancel <id>` withdraws it',
+    'Ask the owner: for access to environments, for a new environment, or for one value through a paste link. Each prints a link for the owner and returns at once. The owner sees only your reply to them, so end that reply with the link, alone on its last line, and run `baymutt ask wait <id> [<id>…]` in the background or after that reply: a wait that blocks first hides the link. One wait follows any number of asks together; `baymutt ask cancel <id>` withdraws one',
   ),
   Command.withSubcommands([
     accessCommand,

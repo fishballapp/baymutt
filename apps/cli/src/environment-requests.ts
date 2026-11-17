@@ -8,15 +8,16 @@ import * as Schedule from 'effect/Schedule';
 import { listEnvironments } from './environments.ts';
 import { answerFor, usage } from './errors.ts';
 import { openStoredName } from './names.ts';
-import { print } from './output.ts';
+import type { Outcome } from './outcome.ts';
 import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 
 const POLL_EVERY = Duration.seconds(2);
 
+/** Where the owner answers environment request `id`: the dashboard's page for an `ask create-environment`. */
 export const environmentRequestUrl = Effect.fn('environmentRequests.url')(function* (id: string) {
   const { origin } = yield* Settings;
-  return `${origin}/environment-requests/${id}`;
+  return `${origin}/ask/create-environment/${id}`;
 });
 
 /** The environment a request asks for, as `<org>/<name>`: its name opened with the org's names key. */
@@ -53,36 +54,46 @@ export const settleEnvironmentRequest = Effect.fn('environmentRequests.settle')(
       : Option.some(Option.some(request));
 
   if (Option.isNone(answered)) {
-    yield* print({
-      id: request.id,
-      status: 'pending',
-      url: yield* environmentRequestUrl(request.id),
-      next: `Run \`baymutt ask wait ${request.id}\` to keep waiting.`,
-    });
-    return yield* usage(
-      `The owner has not answered environment request ${request.id} yet. It waits an hour from when it was asked: run \`baymutt ask wait ${request.id}\` to keep waiting.`,
-      'differs',
-    );
+    return {
+      kind: 'unanswered',
+      result: {
+        id: request.id,
+        status: 'pending',
+        url: yield* environmentRequestUrl(request.id),
+        next: `Run \`baymutt ask wait ${request.id}\` to keep waiting.`,
+      },
+      failure: usage(
+        `The owner has not answered environment request ${request.id} yet. It waits an hour from when it was asked: run \`baymutt ask wait ${request.id}\` to keep waiting.`,
+        'differs',
+      ),
+    } satisfies Outcome;
   }
   const current = answered.value;
   if (Option.isNone(current)) {
-    return yield* usage(
-      `Environment request ${request.id} is gone: the store no longer has it. Nothing was created.`,
-      'noAccess',
-    );
+    return {
+      kind: 'refused',
+      status: 'gone',
+      failure: usage(
+        `Environment request ${request.id} is gone: the store no longer has it. Nothing was created.`,
+        'noAccess',
+      ),
+    } satisfies Outcome;
   }
   const { status } = current.value;
   if (status === 'approved') {
-    return yield* print({
-      id: request.id,
-      status,
-      environment: yield* addressOf(current.value),
-    });
+    return {
+      kind: 'granted',
+      result: { id: request.id, status, environment: yield* addressOf(current.value) },
+    } satisfies Outcome;
   }
-  return yield* usage(
-    status === 'expired'
-      ? `Nobody answered environment request ${request.id} within an hour, so it expired and nothing was created. Run \`baymutt ask create-environment\` again when the owner is around.`
-      : `The owner rejected environment request ${request.id}. Nothing was created.`,
-    'noAccess',
-  );
+  return {
+    kind: 'refused',
+    status,
+    failure: usage(
+      status === 'expired'
+        ? `Nobody answered environment request ${request.id} within an hour, so it expired and nothing was created. Run \`baymutt ask create-environment\` again when the owner is around.`
+        : `The owner rejected environment request ${request.id}. Nothing was created.`,
+      'noAccess',
+    ),
+  } satisfies Outcome;
 });

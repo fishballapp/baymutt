@@ -8,10 +8,11 @@ import * as Effect from 'effect/Effect';
 import * as FileSystem from 'effect/FileSystem';
 import * as Stdio from 'effect/Stdio';
 import * as Stream from 'effect/Stream';
+import { handOver } from '../asks.ts';
 import { resolveEnvironment } from '../environments.ts';
 import { report, usage } from '../errors.ts';
 import { sealNewName } from '../names.ts';
-import { print, say } from '../output.ts';
+import { print } from '../output.ts';
 import {
   describeWrite,
   listSecrets,
@@ -276,15 +277,12 @@ export const pasteLinkCommand = Command.make(
     });
     // The link carries nothing but its id: only the owner, signed in with the vault open, answers it.
     const url = `${origin}/paste/${id}`;
-    yield* say(
-      `Ask the owner to open this link and paste ${name}. It works once, for an hour; the owner can also answer it in the dashboard, under Paste links. Then run \`baymutt ask wait ${id}\`.`,
-    );
-    yield* print({ ...link, environment: resolved.address, name, url });
+    yield* print({ ...link, environment: resolved.address, name, url, next: handOver(id) });
   }, report),
 ).pipe(
   Command.provide(ServiceAccount.layer),
   Command.withDescription(
-    'Make a paste link: a single-use link to a page where the owner, signed in, pastes one value into one environment and name. A CLI login can make one',
+    'Make a paste link: a single-use link to a page where the owner, signed in, pastes one value into one environment and name. A CLI login can make one. It prints the link and returns at once, and the link works for an hour: end your reply to the owner with the link, alone on its last line, since they see only that reply. Run `baymutt ask wait <id>` in the background, or after that reply, never before it: a wait that blocks first hides the link',
   ),
 );
 
