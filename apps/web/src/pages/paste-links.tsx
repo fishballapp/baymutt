@@ -1,95 +1,86 @@
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
-import {
-  Code,
-  Empty,
-  Notice,
-  PageHeader,
-  Row,
-  Rows,
-  Skeleton,
-  Time,
-} from '../components/parts.tsx';
-import { Button, buttonStyles } from '../components/ui/button.tsx';
-import {
-  addressOf,
-  cancelPasteLinkAtom,
-  NAME_NOT_OPENED,
-  type OpenedPasteLink,
-  pasteLinksAtom,
-} from '../lib/data.ts';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { buttonClass } from '../components/ui/button.tsx';
+import { EmptyState, Notice, Skeleton } from '../components/ui/list.tsx';
+import { RowMenu } from '../components/ui/menu.tsx';
+import { PageHead, PageTitle } from '../components/ui/page.tsx';
+import { Address, SealedName } from '../components/ui/text.tsx';
+import { WaitingList, WaitingRow } from '../components/waiting.tsx';
+import { cancelPasteLinkAtom, type OpenedPasteLink, pasteLinksAtom } from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-const Reason = ({ children }: { readonly children: string }) =>
-  children === '' ? null : (
-    <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted">{children}</p>
-  );
-
-const PasteRow = ({ link }: { readonly link: OpenedPasteLink }) => {
-  const [cancelling, cancel] = useAtom(cancelPasteLinkAtom(link.id));
+const PasteLinkRow = ({ link }: { readonly link: OpenedPasteLink }) => {
+  const [dismissing, dismiss] = useAtom(cancelPasteLinkAtom(link.id));
   return (
-    <Row>
-      <div className="flex flex-col gap-x-4 gap-y-3 sm:flex-row sm:items-start">
-        <div className="min-w-0 flex-1">
-          <p>
-            <span className="font-medium">{link.createdBy.name}</span> asks you to paste{' '}
-            <Code>{link.openedName ?? NAME_NOT_OPENED}</Code> into{' '}
-            <Code>{addressOf({ orgSlug: link.orgSlug, name: link.openedEnvironmentName })}</Code>
-          </p>
-          <Reason>{link.reason}</Reason>
-          {link.hint !== '' && (
-            <p className="mt-1.5 text-sm">
-              <span className="text-muted">Where to find it:</span> {link.hint}
-            </p>
-          )}
-          <p className="mt-1.5 text-sm text-muted">
-            asked <Time at={link.createdAt} />
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1.5 sm:shrink-0">
-          <Link to="/paste/$id" params={{ id: link.id }} className={buttonStyles()}>
-            Paste value
-          </Link>
-          <Button disabled={cancelling.waiting} onClick={() => cancel()}>
-            {cancelling.waiting ? 'Dismissing…' : 'Dismiss'}
-          </Button>
-        </div>
-      </div>
-      {failureMessage(cancelling) && <Notice className="mt-3">{failureMessage(cancelling)}</Notice>}
-    </Row>
+    <WaitingRow
+      ask={
+        <>
+          <b>{link.createdBy.name}</b> asks you to paste <SealedName name={link.openedName} /> into{' '}
+          <Address orgSlug={link.orgSlug} name={link.openedEnvironmentName} />
+        </>
+      }
+      reason={link.reason === '' ? null : link.reason}
+      about={link.hint === '' ? [] : [`Where to find it: ${link.hint}`]}
+      askedAt={link.createdAt}
+      action={
+        <Link to="/paste/$id" params={{ id: link.id }} className={buttonClass()}>
+          Paste value
+        </Link>
+      }
+      menu={
+        <RowMenu
+          label={`${link.openedName ?? 'this secret'}: dismiss`}
+          isDisabled={dismissing.waiting}
+          items={[{ label: 'Dismiss', onClick: () => dismiss() }]}
+        />
+      }
+      working={dismissing.waiting ? 'Dismissing…' : null}
+      error={failureMessage(dismissing)}
+    />
   );
 };
 
 export const PasteLinksPage = () => {
-  const result = useAtomValue(pasteLinksAtom(useOwner()));
   const org = useOrg();
-  const paste = latest(result)?.filter(link => link.orgId === org.id) ?? null;
+  useTitle('Paste links', org.name);
+  const result = useAtomValue(pasteLinksAtom(useOwner()));
   const failure = failureMessage(result);
+  const links =
+    latest(result)
+      ?.filter(link => link.orgId === org.id)
+      .toSorted((a, b) => b.createdAt - a.createdAt) ?? null;
+  const body = (() => {
+    if (failure !== null) return <Notice tone="danger">{failure}</Notice>;
+    if (links === null) return <Skeleton />;
+    if (links.length === 0) {
+      return (
+        <EmptyState
+          example={{
+            lead: 'An agent asks for one like this:',
+            commands: [
+              `baymutt ask paste-link ${org.slug}/app/production RESEND_API_KEY --reason "send sign-in emails"`,
+            ],
+          }}
+        >
+          When an agent needs a value only you can fetch, its paste link waits here.
+        </EmptyState>
+      );
+    }
+    return (
+      <WaitingList>
+        {links.map(link => (
+          <PasteLinkRow key={link.id} link={link} />
+        ))}
+      </WaitingList>
+    );
+  })();
   return (
     <>
-      <PageHeader
-        title="Paste links"
-        lede={`Values your CLI logins and keys asked you to paste into ${org.name}.`}
-      />
-      {failure && <Notice className="mb-6">{failure}</Notice>}
-      {paste === null && !failure && <Skeleton rows={2} />}
-      {paste?.length === 0 && (
-        <Empty title="Nothing is waiting on you">
-          <p>
-            A paste link from <Code>baymutt ask paste-link</Code> asks for a value only you can
-            fetch. It lands here.
-          </p>
-        </Empty>
-      )}
-      {paste !== null && paste.length > 0 && (
-        <Rows>
-          {paste.map(link => (
-            <PasteRow key={link.id} link={link} />
-          ))}
-        </Rows>
-      )}
+      <PageHead title={<PageTitle>Paste links</PageTitle>} />
+      {body}
     </>
   );
 };

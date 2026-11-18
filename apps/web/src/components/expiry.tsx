@@ -1,11 +1,9 @@
-// When a service account stops working: chosen on the approval page and changed from the list.
+// When a key or a CLI login stops working: chosen on the pairing page and changed from a list.
 // Expiring, like revoking, does not take back what it already read.
 import { useState } from 'react';
-import { exactDay, exactTime } from '../lib/format.ts';
-import { SelectField, TextField } from './ui/field.tsx';
-import type { SelectOption } from './ui/select.tsx';
-
-const DAY_MS = 24 * 3600 * 1000;
+import { DAY_MS, exactDay, exactTime } from '../lib/format.ts';
+import { TextField } from './ui/field.tsx';
+import { Select, type SelectOption } from './ui/select.tsx';
 
 const PRESETS = [
   { choice: '30', label: 'In 30 days', days: 30 },
@@ -15,9 +13,13 @@ const PRESETS = [
 
 type Choice = 'kept' | 'never' | 'date' | (typeof PRESETS)[number]['choice'];
 
-/** The first moment of a local calendar day picked in a date input: `2026-12-01`, or '' before one is. */
+/**
+ * The first moment of a local calendar day picked in a date input (`2026-12-01`), or null while
+ * none is chosen. A day before tomorrow is not a choice: typed by hand it passes the input's `min`,
+ * and would make a key that has already ended (`0002-12-01` included).
+ */
 const startOfDay = (day: string): number | null =>
-  day === ''
+  day === '' || day < tomorrow()
     ? null
     : Temporal.PlainDate.from(day).toZonedDateTime(Temporal.Now.timeZoneId()).epochMilliseconds;
 
@@ -25,15 +27,20 @@ const startOfDay = (day: string): number | null =>
 const tomorrow = () => Temporal.Now.plainDateISO().add({ days: 1 }).toString();
 
 /**
- * A choice of when it expires. `kept` is a time already set or asked for, offered first and
- * labelled `keptLabel`. Reports each change as a time, null for never, or undefined while a
- * date is still missing.
+ * A choice of when a key or CLI login ends. `kept` is a time already set or asked for, offered
+ * first and labelled `keptLabel`. Reports each change as a time, null for never, or undefined
+ * while "On a date…" has no date yet (the save stays disabled then).
+ * - `dialog`: the Expiry dialogs, an "Expires" field, then a "Date" field as the next part of the
+ *   dialog body;
+ * - `decision`: the pairing page, "Ends" beside its select, then `.ends-date`.
  */
 export const ExpiryField = ({
+  placement = 'dialog',
   kept,
   keptLabel,
   onChange,
 }: {
+  readonly placement?: 'dialog' | 'decision';
   readonly kept: number | null;
   readonly keptLabel: (at: number) => string;
   readonly onChange: (expiresAt: number | null | undefined) => void;
@@ -53,35 +60,34 @@ export const ExpiryField = ({
     ...PRESETS.map(({ choice, label }) => ({ value: choice, label })),
     { value: 'date', label: 'On a date…' },
   ];
+  const date = choice === 'date' && (
+    <TextField
+      label="Date"
+      type="date"
+      className={placement === 'decision' ? 'ends-date' : undefined}
+      value={day}
+      min={tomorrow()}
+      max="9999-12-31"
+      onValueChange={nextDay => {
+        setDay(nextDay);
+        report('date', nextDay);
+      }}
+    />
+  );
   return (
-    <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-      <div className="w-full sm:w-72">
-        <SelectField
-          label="Expires"
-          options={options}
-          value={choice}
-          onValueChange={next => {
-            setChoice(next);
-            report(next, day);
-          }}
-        />
-      </div>
-      {choice === 'date' && (
-        <div className="w-full sm:w-48">
-          <TextField
-            label="Date"
-            type="date"
-            value={day}
-            min={tomorrow()}
-            max="9999-12-31"
-            onValueChange={nextDay => {
-              setDay(nextDay);
-              report('date', nextDay);
-            }}
-          />
-        </div>
-      )}
-    </div>
+    <>
+      <Select
+        label={placement === 'decision' ? 'Ends' : 'Expires'}
+        labelPlacement={placement === 'decision' ? 'beside' : 'above'}
+        options={options}
+        value={choice}
+        onValueChange={next => {
+          setChoice(next);
+          report(next, day);
+        }}
+      />
+      {date}
+    </>
   );
 };
 

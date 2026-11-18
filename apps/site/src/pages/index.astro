@@ -1,15 +1,18 @@
 ---
 import shore from '../assets/shore.webp';
 import shoreDusk from '../assets/shore-dusk.webp';
-import Mark from '../components/Mark.astro';
+import ApprovedScreen from '../components/ApprovedScreen.astro';
+import AskAccessScreen from '../components/AskAccessScreen.astro';
+import Command from '../components/Command.astro';
+import PasteScreen from '../components/PasteScreen.astro';
+import Point from '../components/Point.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
-import Terminal from '../components/Terminal.astro';
-import { ASK, CI_KEY, LOAD, PASTE_LINK, SCHEMA_FILE, START } from '../example.ts';
 import Layout from '../layouts/Layout.astro';
+import copy from '../landing-copy.json';
 
-const DESCRIPTION =
-  'baymutt is a secret manager for coding agents. An agent asks for the environments it needs and says why; you approve on one screen, and its own key works until it ends. No command prints a value. Free while in beta.';
+const REPO = 'https://github.com/fishballapp/baymutt';
+const HEADLINE = ['Know why your agent wants it.', 'Hand it over in one paste.'] as const;
 
 const softwareApplication = {
   '@context': 'https://schema.org',
@@ -17,412 +20,64 @@ const softwareApplication = {
   name: 'baymutt',
   applicationCategory: 'DeveloperApplication',
   url: 'https://baymutt.fsh.ba/',
-  description: DESCRIPTION,
-  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', description: 'Free in beta' },
+  description: copy.c2,
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD', description: copy.c8 },
   publisher: { '@type': 'Organization', name: 'Fishball Ltd', url: 'https://fishball.ltd' },
 };
 ---
 
 <Layout
-  title="baymutt: your agents ask for secrets, and you answer on one screen"
-  description={DESCRIPTION}
+  title={copy.c1}
+  description={copy.c2}
+  ogImageAlt={HEADLINE.join(' ')}
   structuredData={softwareApplication}
 >
-  <div class="wrap">
-    <SiteHeader />
-  </div>
-
+  <SiteHeader />
   <main>
-    <section class="wrap hero" aria-labelledby="hero-title">
+    <section class="l-hero l-wrap" aria-labelledby="hero-title">
+      <picture class="l-mutt">
+        <source srcset={shoreDusk.src} media="(prefers-color-scheme: dark)" />
+        <img src={shore.src} width={shore.width} height={shore.height} alt={copy.c5} />
+      </picture>
       <div>
-        <h1 id="hero-title">
-          Your agents ask for secrets. <span>You answer on one screen.</span>
-        </h1>
-        <p class="lede">
-          baymutt is a secret manager for coding agents. An agent names the environments it needs
-          and why; you approve, and its own key works until it ends. <strong>No command prints a
-          value</strong>.
-        </p>
-        <div class="act">
-          <a class="go" href="/signup">Create an account</a>
-          <span class="offer">Free while baymutt is in beta.</span>
+        <h1 id="hero-title">{HEADLINE[0]} <span class="muted">{HEADLINE[1]}</span></h1>
+        <p class="l-lede">{copy.c6}</p>
+        <a class="btn lg primary" href="/signup">{copy.c7}</a>
+        <p class="l-offer">{copy.c8}</p>
+      </div>
+    </section>
+
+    <section class="l-section l-wrap" aria-label={copy.c9}>
+      <Point title={copy.c10} say={copy.c11}><AskAccessScreen /></Point>
+      <Point title={copy.c12} say={copy.c13}><PasteScreen /></Point>
+      <Point title={copy.c14} say={copy.c15}><ApprovedScreen /></Point>
+    </section>
+
+    <section class="l-section l-wrap" aria-labelledby="promises-title">
+      <h2 id="promises-title" class="l-h2">{copy.c16}</h2>
+      <div class="l-promises">
+        <div>
+          <h3>{copy.c17}</h3>
+          <p>{copy.c18}</p>
+          <p><a class="link" href={`${REPO}#how-it-keeps-values-from-the-host`}>{copy.c19}</a></p>
+        </div>
+        <div>
+          <h3>{copy.c20}</h3>
+          <p>{copy.c21}</p>
+          <p><a class="link" href={REPO}>{copy.c22}</a></p>
         </div>
       </div>
-      <div class="stage">
-        <picture>
-          <source srcset={shoreDusk.src} media="(prefers-color-scheme: dark)" />
-          <img
-            src={shore.src}
-            width={shore.width}
-            height={shore.height}
-            alt="baymutt’s mutt sitting on the shore of a bay, a key hanging from its mouth"
-          />
-        </picture>
-      </div>
     </section>
 
-    <section class="sec bay" aria-labelledby="then-title">
-      <div class="wrap">
-        <h2 id="then-title">Then your agents get on with it.</h2>
-        <p class="say">Each agent asks once per task. Until its key ends, nothing asks you again.</p>
-
-        <ol class="rows">
-          <li class="row">
-            <div>
-              <h3>Ask for what the task needs</h3>
-              <p>
-                A CLI login lists names and opens nothing. The agent asks for whole environments,
-                read or write, and why. You see the request and choose when its key ends.
-              </p>
-            </div>
-            <Terminal label="A terminal" lines={[...START, ...ASK]} />
-          </li>
-          <li class="row">
-            <div>
-              <h3>Load values into any command</h3>
-              <p>
-                Three lines in <code>.env.schema</code> name the environment. <code>varlock run</code>{' '}
-                loads it into the process with the approved key.
-              </p>
-            </div>
-            <div class="stack">
-              <figure class="file" aria-label="An .env.schema file">
-                <figcaption>.env.schema</figcaption>
-                <pre>{SCHEMA_FILE.map(line => (
-                  <span class:list={['line', { comment: line.startsWith('#') }]}>{line}</span>
-                ))}</pre>
-              </figure>
-              <Terminal label="A terminal" lines={LOAD} />
-            </div>
-          </li>
-          <li class="row">
-            <div>
-              <h3>Ask you for what only you can fetch</h3>
-              <p>
-                The agent makes a paste link for one name. You open it signed in, paste the value,
-                and your browser seals it before it is sent.
-              </p>
-            </div>
-            <Terminal label="A terminal" lines={PASTE_LINK} />
-          </li>
-          <li class="row">
-            <div>
-              <h3>Give CI a key that stays</h3>
-              <p>
-                A request with a command after <code>--</code>: once you approve, its key goes to
-                that command, never to the screen. It holds exactly what was asked for, and cannot
-                widen its own access.
-              </p>
-            </div>
-            <Terminal label="A terminal" lines={CI_KEY} />
-          </li>
-        </ol>
-      </div>
-    </section>
-
-    <section class="sec limits" aria-labelledby="read-title">
-      <div class="wrap">
-        <h2 id="read-title">Sealed on your side. Unreadable on ours.</h2>
-        <p class="say">
-          Values, and the names of environments and secrets, are sealed on your computer or in your
-          browser, to keys baymutt never holds, so baymutt cannot read them. <strong>It still sees
-          org names, sizes, times, reasons and who did what.</strong>
-        </p>
-        <p class="more">
-          <a href="https://github.com/fishballapp/baymutt#how-it-keeps-values-from-the-host">
-            How it works, and what it does not hide
-          </a>
-        </p>
-      </div>
-    </section>
-
-    <section class="close" aria-label="Create an account">
-      <div class="wrap">
-        <Mark size={80} class="close-mark" />
-        <div class="act">
-          <a class="go" href="/signup">Create an account</a>
-          <span class="offer">Free while baymutt is in beta.</span>
-        </div>
+    <section class="l-section l-close l-wrap" aria-label={copy.c23}>
+      <a class="btn lg primary" href="/signup">{copy.c24}</a>
+      <p class="l-offer">{copy.c25}</p>
+      <div class="l-start">
+        <p>{copy.c26}</p>
+        <Command command="npm install -g baymutt" />
+        <Command command="baymutt auth login" />
       </div>
     </section>
   </main>
-
-  <div class="wrap">
-    <SiteFooter />
-  </div>
+  <SiteFooter />
 </Layout>
-
-<style>
-  .wrap {
-    --gutter: clamp(1.25rem, 4vw, 3rem);
-    width: 100%;
-    max-width: 74rem;
-    margin-inline: auto;
-    padding-inline: var(--gutter);
-  }
-
-  h1,
-  h2,
-  h3,
-  p,
-  ul,
-  ol,
-  figure {
-    margin: 0;
-  }
-
-  ul,
-  ol {
-    padding: 0;
-    list-style: none;
-  }
-
-  h1,
-  h2,
-  h3 {
-    font-weight: 650;
-    letter-spacing: -0.02em;
-    text-wrap: balance;
-  }
-
-  p code,
-  li code {
-    font-size: 0.9em;
-  }
-
-  main a:not(.go) {
-    color: inherit;
-  }
-
-  /* The page's one action. */
-  .go {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 3.25rem;
-    padding: 0 1.5rem;
-    border-radius: var(--radius-control);
-    background: var(--accent);
-    color: var(--accent-foreground);
-    font-size: 1.0625rem;
-    font-weight: 600;
-    text-decoration: none;
-    transition: background-color 150ms ease-out;
-  }
-
-  .go:hover {
-    background: color-mix(in oklch, var(--accent) 88%, var(--foreground));
-  }
-
-  .offer {
-    color: var(--muted);
-    font-size: 0.9375rem;
-  }
-
-  .act {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem 1.25rem;
-    margin-top: 2rem;
-  }
-
-  /* The first screen: the headline and the action, beside the mutt on its shore. */
-  .hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-    align-items: center;
-    gap: clamp(2rem, 5vw, 4.5rem);
-    min-height: min(calc(100svh - 4.75rem), 52rem);
-    padding-block: 1rem 4rem;
-  }
-
-  h1 {
-    font-size: clamp(2.375rem, 1.1rem + 3.7vw, 4.25rem);
-    line-height: 1.02;
-    letter-spacing: -0.038em;
-  }
-
-  h1 span {
-    display: block;
-    color: var(--muted);
-  }
-
-  .lede {
-    max-width: 31rem;
-    margin-top: 1.5rem;
-    color: var(--muted);
-    font-size: 1.1875rem;
-    line-height: 1.5;
-  }
-
-  .lede strong,
-  .say strong {
-    color: var(--foreground);
-    font-weight: 500;
-  }
-
-  .stage img {
-    display: block;
-    width: min(100%, 33rem);
-    height: auto;
-    margin-left: auto;
-  }
-
-  /* Sections */
-  .sec {
-    padding-block: clamp(5rem, 10vw, 8rem);
-  }
-
-  h2 {
-    font-size: clamp(2rem, 1.1rem + 2.6vw, 3.25rem);
-    line-height: 1.05;
-    letter-spacing: -0.032em;
-  }
-
-  .say {
-    max-width: 34rem;
-    margin-top: 1.25rem;
-    color: var(--muted);
-    font-size: 1.1875rem;
-  }
-
-  /* The bay: where the agents work. */
-  .bay {
-    background: var(--bay);
-    color: var(--fog);
-  }
-
-  .bay h2,
-  .bay h3 {
-    color: var(--fog);
-  }
-
-  .bay .say,
-  .row > div > p {
-    color: var(--fog-dim);
-  }
-
-  .bay :focus-visible {
-    outline-color: var(--bay-accent);
-  }
-
-  .rows {
-    margin-top: clamp(3rem, 6vw, 4.5rem);
-    border-top: 2px solid var(--fog-dim);
-  }
-
-  .row {
-    display: grid;
-    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-    gap: clamp(1.5rem, 4vw, 4rem);
-    padding-block: clamp(2rem, 4vw, 3rem);
-    border-bottom: 1px solid var(--bay-line);
-  }
-
-  .row h3 {
-    font-size: 1.375rem;
-    line-height: 1.25;
-  }
-
-  .row > div > p {
-    max-width: 26rem;
-    margin-top: 0.625rem;
-  }
-
-  .row > div > p code {
-    color: var(--fog);
-  }
-
-  .stack {
-    display: grid;
-    align-content: start;
-    gap: 0.75rem;
-  }
-
-  .file {
-    overflow: hidden;
-    border: 1px solid var(--bay-line);
-    border-radius: 12px;
-    background: var(--bay-terminal);
-    color: var(--fog);
-  }
-
-  .file figcaption {
-    padding: 0.5rem 1rem;
-    border-bottom: 1px solid var(--bay-line);
-    color: var(--fog-dim);
-    font-size: 0.75rem;
-  }
-
-  .file pre {
-    margin: 0;
-    padding: 0.875rem 1.125rem 1.125rem;
-    font-size: 0.8125rem;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .file .line {
-    display: block;
-  }
-
-  .file .comment {
-    color: var(--fog-dim);
-  }
-
-  /* The limits */
-  .limits {
-    border-top: 1px solid var(--line);
-  }
-
-  .more {
-    margin-top: 1.25rem;
-  }
-
-  .more a {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
-  /* The close: the same action, nothing else to read. */
-  .close {
-    padding-block: clamp(4rem, 9vw, 7rem);
-    border-top: 1px solid var(--line);
-    text-align: center;
-  }
-
-  .close :global(.close-mark) {
-    margin: 0 auto 1.75rem;
-  }
-
-  .close .act {
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.875rem;
-    margin-top: 0;
-  }
-
-  @media (width < 60rem) {
-    .hero,
-    .row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .hero {
-      min-height: 0;
-      padding-block: 1.25rem 4rem;
-    }
-
-    .stage img {
-      margin-inline: auto;
-    }
-  }
-
-  @media (width < 40rem) {
-    .hero .go {
-      width: 100%;
-    }
-  }
-</style>

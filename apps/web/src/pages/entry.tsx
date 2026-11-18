@@ -6,8 +6,10 @@ import { MIN_PASSWORD_LENGTH } from '@baymutt/keys';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
-import { type ReactNode, useState } from 'react';
-import { Notice, Wordmark } from '../components/parts.tsx';
+import * as Atom from 'effect/reactivity/Atom';
+import { type ReactNode, useLayoutEffect, useState } from 'react';
+import mark from '../assets/mark.svg';
+import { useTitle } from '../components/shell.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Form, TextField } from '../components/ui/field.tsx';
 import {
@@ -20,70 +22,40 @@ import {
   unlockWithPasswordAtom,
 } from '../lib/data.ts';
 import type { FirstUnlock } from '../lib/owner.ts';
-import { failureMessage, latest } from '../lib/result.ts';
+import { clearsFailure, failureMessage, latest } from '../lib/result.ts';
 
 /**
- * A page outside the dashboard: one panel under the wordmark, which leads home. The panel's top
- * sits at the same height on every such page, so moving between them nothing jumps.
+ * `main.entry`: a page outside the app, under the mark that leads home. Its parts follow in
+ * `children`, each setting the gap above itself.
  */
-export const Standalone = ({
-  hasBetaNote = false,
-  children,
-}: {
-  /** For the pages an account holder signs in or up on. */
-  readonly hasBetaNote?: boolean;
-  readonly children: ReactNode;
-}) => (
-  <div className="flex min-h-dvh flex-col items-center px-4 pt-6 pb-10 sm:px-6 sm:pt-[max(2.5rem,10vh)]">
-    <div className="w-full max-w-[30rem]">
-      <a href="/" className="-mx-1 inline-flex rounded-control px-1 py-1">
-        <Wordmark />
-      </a>
-      <main className="mt-5 rounded-panel border border-line bg-surface px-5 py-7 sm:px-8 sm:py-8">
-        {children}
-      </main>
-      {hasBetaNote && (
-        <p className="mt-5 px-1 text-sm text-muted">Free while baymutt is in beta.</p>
-      )}
-    </div>
-  </div>
-);
-
-/** A standalone page's heading, what it is for, and its one task. */
-export const Frame = ({
-  title,
-  lede,
-  children,
-}: {
-  readonly title: ReactNode;
-  readonly lede?: ReactNode;
-  readonly children: ReactNode;
-}) => (
-  <>
-    <h1 className="text-xl leading-tight">{title}</h1>
-    {lede && <p className="mt-2 text-muted">{lede}</p>}
-    <div className="mt-7 space-y-6">{children}</div>
-  </>
-);
-
-/** The links under a standalone page's task, to the other ways in. */
-export const Elsewhere = ({ children }: { readonly children: ReactNode }) => (
-  <div className="space-y-1.5 border-line border-t pt-5 text-muted">{children}</div>
-);
-
-const Or = ({ children }: { readonly children: string }) => (
-  <p className="flex items-center gap-3 text-sm text-muted before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line">
+export const Standalone = ({ children }: { readonly children: ReactNode }) => (
+  <main className="entry">
+    <a className="entry-brand" href="/">
+      <img src={mark} alt="" />
+      baymutt
+    </a>
     {children}
-  </p>
+  </main>
 );
+
+/** The price, where the reader decides on it: the last part of sign in, sign up and recover. */
+export const BetaLine = () => <p className="entry-beta">Free while in beta</p>;
+
+/** A store or passkey failure under the button that was used. */
+const EntryError = ({ message }: { readonly message: string | null }) =>
+  message !== null && (
+    <p role="alert" className="error">
+      {message}
+    </p>
+  );
 
 const PASSWORD_HINT = `At least ${MIN_PASSWORD_LENGTH} characters. It opens your vault, and baymutt never receives it, so it cannot be reset: only your recovery key replaces it.`;
 
 const isEmail = (text: string) => /^\S+@\S+\.\S+$/.test(text.trim());
 
 /**
- * One email field and one button that sends a sign-in link, then says to check the inbox. It is
- * how an account starts and how a lost one is recovered.
+ * One email field and one button that sends a sign-in link, then `.entry-sent` in their place. It
+ * is how an account starts and how a lost one is recovered.
  */
 export const LinkByEmail = ({
   landOn,
@@ -92,31 +64,33 @@ export const LinkByEmail = ({
 }: {
   readonly landOn: '/orgs' | '/recover';
   readonly action: string;
-  /** What to tell them once the link is on its way. */
+  /** The last sentence once the link is on its way. */
   readonly sent: string;
 }) => {
   const [link, sendLink] = useAtom(sendLinkAtom);
   const [email, setEmail] = useState('');
+  // One atom serves sign-up and recovery: a link sent from the other page is not this one's.
+  useLayoutEffect(() => {
+    sendLink(Atom.Reset);
+  }, [sendLink]);
+  const clearing = clearsFailure(link, sendLink);
   if (AsyncResult.isSuccess(link)) {
     return (
-      <div
-        className="space-y-2 rounded-control border border-line bg-sunken px-4 py-3.5"
-        role="status"
-      >
-        <h2 className="text-md">Check your inbox</h2>
-        <p className="text-muted">
-          We sent a link to <span className="text-foreground">{email.trim()}</span>. It works once,
-          for 10 minutes. Open it in this browser. {sent}
+      <div className="entry-sent" role="status">
+        <h2>Check your inbox</h2>
+        <p>
+          We sent a link to <b>{email.trim()}</b>. It works once, for 10 minutes. Open it in this
+          browser. {sent}
         </p>
       </div>
     );
   }
   return (
     <Form
-      className="space-y-3"
+      className="entry-body"
       onSubmit={event => {
         event.preventDefault();
-        sendLink({ email: email.trim(), landOn });
+        if (isEmail(email) && !link.waiting) sendLink({ email: email.trim(), landOn });
       }}
     >
       <TextField
@@ -124,42 +98,57 @@ export const LinkByEmail = ({
         type="email"
         autoComplete="email"
         autoFocus
-        error={failureMessage(link)}
+        failure={failureMessage(link)}
         value={email}
-        onValueChange={setEmail}
+        onValueChange={clearing(setEmail)}
       />
       <Button
         type="submit"
-        intent="primary"
-        className="w-full"
-        disabled={!isEmail(email) || link.waiting}
+        kind="primary"
+        size="lg"
+        isWide
+        isPending={link.waiting}
+        pendingLabel="Sending…"
+        disabled={!isEmail(email)}
       >
-        {link.waiting ? 'Sending…' : action}
+        {action}
       </Button>
     </Form>
   );
 };
 
 const SignedOut = () => {
+  useTitle('Sign in');
   const [passkey, withPasskey] = useAtom(signInWithPasskeyAtom);
   const [password, withPassword] = useAtom(signInWithPasswordAtom);
   const [email, setEmail] = useState('');
   const [secret, setSecret] = useState('');
-  const isBusy = passkey.waiting || password.waiting;
+  const clearing = clearsFailure(password, withPassword);
+  // The email must look like one: the browser would otherwise refuse the submit with no words.
+  const isFilled = isEmail(email) && secret !== '';
   return (
-    <Frame title="Sign in to baymutt" lede="Use your passkey, or your email and password.">
-      <div className="space-y-3">
-        <Button intent="primary" className="w-full" disabled={isBusy} onClick={() => withPasskey()}>
-          {passkey.waiting ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
+    <>
+      <h1>Sign in</h1>
+      <div className="entry-body">
+        <Button
+          kind="primary"
+          size="lg"
+          isWide
+          isPending={passkey.waiting}
+          pendingLabel="Waiting for your passkey…"
+          disabled={password.waiting}
+          onClick={() => withPasskey()}
+        >
+          Sign in with a passkey
         </Button>
-        {failureMessage(passkey) && <Notice>{failureMessage(passkey)}</Notice>}
+        <EntryError message={failureMessage(passkey)} />
       </div>
-      <Or>or</Or>
+      <p className="entry-or">Or with your email and password</p>
       <Form
-        className="space-y-3"
+        className="entry-body"
         onSubmit={event => {
           event.preventDefault();
-          withPassword({ email: email.trim(), password: secret });
+          if (isFilled) withPassword({ email: email.trim(), password: secret });
         }}
       >
         <TextField
@@ -167,38 +156,42 @@ const SignedOut = () => {
           type="email"
           autoComplete="username"
           value={email}
-          onValueChange={setEmail}
+          onValueChange={clearing(setEmail)}
         />
         <TextField
           label="Password"
           type="password"
           autoComplete="current-password"
+          failure={failureMessage(password)}
           value={secret}
-          onValueChange={setSecret}
+          onValueChange={clearing(setSecret)}
         />
         <Button
           type="submit"
-          className="w-full"
-          disabled={isBusy || !isEmail(email) || secret === ''}
+          size="lg"
+          isWide
+          isPending={password.waiting}
+          pendingLabel="Signing in…"
+          disabled={passkey.waiting || !isFilled}
         >
-          {password.waiting ? 'Signing in…' : 'Sign in'}
+          Sign in
         </Button>
-        {failureMessage(password) && <Notice>{failureMessage(password)}</Notice>}
       </Form>
-      <Elsewhere>
+      <div className="entry-links">
         <p>
-          New here?{' '}
-          <Link to="/signup" className="text-foreground underline">
-            Create an account
-          </Link>
-        </p>
-        <p>
-          <Link to="/recover" className="text-foreground underline">
+          <Link to="/recover" className="link">
             Lost your password or passkey?
           </Link>
         </p>
-      </Elsewhere>
-    </Frame>
+        <p>
+          New to baymutt?&nbsp;
+          <Link to="/signup" className="link">
+            Create an account
+          </Link>
+        </p>
+      </div>
+      <BetaLine />
+    </>
   );
 };
 
@@ -210,14 +203,17 @@ const SetUp = ({
   readonly email: string;
   readonly onRecoveryKey: (recoveryKey: string) => void;
 }) => {
+  useTitle('Set up your vault');
   const [setting, setUp] = useAtom(setUpAtom, { mode: 'promiseExit' });
   const [method, setMethod] = useState<FirstUnlock['_tag'] | null>(null);
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [again, setAgain] = useState('');
   const hasName = name.trim() !== '';
-  const mismatch = again !== '' && again !== password;
+  const isPasswordShort = password !== '' && password.length < MIN_PASSWORD_LENGTH;
+  const isMismatch = again !== '' && again !== password;
   const isPasswordReady = password.length >= MIN_PASSWORD_LENGTH && again === password;
+  const failure = failureMessage(setting);
 
   const start = async (unlock: FirstUnlock) => {
     setMethod(unlock._tag);
@@ -226,43 +222,45 @@ const SetUp = ({
   };
 
   return (
-    <Frame
-      title="Set up your vault"
-      lede={
-        <>
-          <span className="text-foreground">{email}</span> is verified. Your vault is opened by
-          something only you have: a passkey or a password. You can add the other later.
-        </>
-      }
-    >
-      <TextField
-        label="Your name"
-        hint="What the dashboard and your agents call this account."
-        value={name}
-        onValueChange={setName}
-        maxLength={60}
-        autoFocus
-      />
-      <div className="space-y-2">
+    <>
+      <h1>Set up your vault</h1>
+      <p className="entry-lede">
+        <b>{email}</b> is verified. Your vault is opened by something only you have: a passkey or a
+        password. You can add the other later.
+      </p>
+      <div className="entry-body">
+        <TextField
+          label="Your name"
+          hint="What the dashboard and your agents call this account."
+          value={name}
+          onValueChange={setName}
+          maxLength={60}
+          autoComplete="name"
+          autoFocus
+        />
         <Button
-          intent="primary"
-          className="w-full"
+          kind="primary"
+          size="lg"
+          isWide
+          isPending={setting.waiting && method === 'Passkey'}
+          pendingLabel="Waiting for your passkey…"
           disabled={!hasName || setting.waiting}
-          onClick={() => start({ _tag: 'Passkey' })}
+          onClick={() => void start({ _tag: 'Passkey' })}
         >
-          {setting.waiting && method === 'Passkey' ? 'Waiting for your passkey…' : 'Use a passkey'}
+          Use a passkey
         </Button>
-        <p className="text-sm text-muted">
+        <EntryError message={method === 'Passkey' ? failure : null} />
+        <p className="entry-note">
           Recommended: nothing to remember and nothing to guess. Your browser will ask twice, once
-          to make it and once to open the vault with it.
+          to make it and once to unlock with it.
         </p>
       </div>
-      <Or>or</Or>
+      <p className="entry-or">Or a password</p>
       <Form
-        className="space-y-3"
+        className="entry-body"
         onSubmit={event => {
           event.preventDefault();
-          void start({ _tag: 'Password', password });
+          if (hasName && isPasswordReady) void start({ _tag: 'Password', password });
         }}
       >
         <TextField
@@ -270,6 +268,7 @@ const SetUp = ({
           type="password"
           autoComplete="new-password"
           hint={PASSWORD_HINT}
+          error={isPasswordShort ? `At least ${MIN_PASSWORD_LENGTH} characters.` : null}
           value={password}
           onValueChange={setPassword}
         />
@@ -277,89 +276,99 @@ const SetUp = ({
           label="Password again"
           type="password"
           autoComplete="new-password"
-          error={mismatch ? 'The two do not match.' : null}
+          error={isMismatch ? 'The two do not match.' : null}
           value={again}
           onValueChange={setAgain}
         />
         <Button
           type="submit"
-          className="w-full"
+          size="lg"
+          isWide
+          isPending={setting.waiting && method === 'Password'}
+          pendingLabel="Setting up your vault…"
           disabled={!hasName || !isPasswordReady || setting.waiting}
         >
-          {setting.waiting && method === 'Password'
-            ? 'Setting up your vault…'
-            : 'Use this password'}
+          Use this password
         </Button>
+        <EntryError message={method === 'Password' ? failure : null} />
       </Form>
-      {failureMessage(setting) && <Notice>{failureMessage(setting)}</Notice>}
-    </Frame>
+    </>
   );
 };
 
 /** Signed in, vault locked: after a magic link, or in a browser that has not opened it yet. */
 const Unlock = ({ account }: { readonly account: Account }) => {
+  useTitle(`Unlock ${account.name}`);
   const [passkey, withPasskey] = useAtom(signInWithPasskeyAtom);
   const [unlocking, withPassword] = useAtom(unlockWithPasswordAtom);
   const signOut = useAtomSet(signOutAtom);
   const [password, setPassword] = useState('');
   const hasPasskey = account.passkeys.some(({ hasWrap }) => hasWrap);
-  const isBusy = passkey.waiting || unlocking.waiting;
   return (
-    <Frame
-      title={`Unlock ${account.name}`}
-      lede="You are signed in, and your vault is locked. Until you open it, you can look and change nothing. It then stays open in this browser until you sign out."
-    >
+    <>
+      <h1>Unlock {account.name}</h1>
+      <p className="entry-lede">
+        You are signed in, and your vault is locked. It stays unlocked in this browser until you
+        sign out.
+      </p>
       {hasPasskey && (
-        <div className="space-y-3">
+        <div className="entry-body">
           <Button
-            intent="primary"
-            className="w-full"
-            disabled={isBusy}
+            kind="primary"
+            size="lg"
+            isWide
+            isPending={passkey.waiting}
+            pendingLabel="Waiting for your passkey…"
+            disabled={unlocking.waiting}
             onClick={() => withPasskey()}
           >
-            {passkey.waiting ? 'Waiting for your passkey…' : 'Unlock with a passkey'}
+            Unlock with a passkey
           </Button>
-          {failureMessage(passkey) && <Notice>{failureMessage(passkey)}</Notice>}
+          <EntryError message={failureMessage(passkey)} />
         </div>
       )}
+      {hasPasskey && account.hasPassword && <p className="entry-or">Or with your password</p>}
       {account.hasPassword && (
         <Form
-          className="space-y-3"
+          className="entry-body"
           onSubmit={event => {
             event.preventDefault();
-            withPassword(password);
+            if (password !== '') withPassword(password);
           }}
         >
           <TextField
             label="Password"
             type="password"
             autoComplete="current-password"
-            error={failureMessage(unlocking)}
+            failure={failureMessage(unlocking)}
             value={password}
-            onValueChange={setPassword}
+            onValueChange={clearsFailure(unlocking, withPassword)(setPassword)}
           />
           <Button
             type="submit"
-            intent={hasPasskey ? 'plain' : 'primary'}
-            className="w-full"
-            disabled={isBusy || password === ''}
+            kind={hasPasskey ? 'secondary' : 'primary'}
+            size="lg"
+            isWide
+            isPending={unlocking.waiting}
+            pendingLabel="Unlocking…"
+            disabled={passkey.waiting || password === ''}
           >
-            {unlocking.waiting ? 'Unlocking…' : 'Unlock with your password'}
+            Unlock with your password
           </Button>
         </Form>
       )}
-      <p className="border-line border-t pt-5 text-muted">
+      <p className="entry-line">
         Lost them?{' '}
-        <Link to="/recover" className="text-foreground underline">
+        <Link to="/recover" className="link">
           Use your recovery key
         </Link>
         . Or{' '}
-        <button type="button" className="text-foreground underline" onClick={() => signOut()}>
+        <button type="button" className="link" onClick={() => signOut()}>
           sign out
         </button>
         .
       </p>
-    </Frame>
+    </>
   );
 };
 

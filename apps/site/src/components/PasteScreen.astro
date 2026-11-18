@@ -1,0 +1,13 @@
+---
+// The paste page's parts, drawn static and inert.
+import Address from './Address.astro';
+---
+
+<div class="screen" aria-hidden="true" inert>
+  <p class="ask"><b>Work laptop</b> asks for it in <Address org="acme" path="app/production" /></p>
+  <p class="claim t-title">Paste <span class="code">RESEND_API_KEY</span></p>
+  <p class="paste-why">“to send sign-in emails”</p>
+  <p class="paste-hint">Where to find it: Resend dashboard, API Keys</p>
+  <div class="field decide-field"><span class="label">Value</span><span class="input paste-box"></span></div>
+  <div class="answer single"><span class="btn lg primary">Seal and save</span></div>
+</div>

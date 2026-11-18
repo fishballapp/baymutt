@@ -1,479 +1,182 @@
-import { type Grant, SecretNameSchema } from '@baymutt/api';
+import { SecretNameSchema } from '@baymutt/api';
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
-import { CaretLeftIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from '@tanstack/react-router';
+import { cn } from 'cn';
+import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import * as Atom from 'effect/reactivity/Atom';
 import * as Schema from 'effect/Schema';
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
+import { useJustWritten } from '../components/environment/just-written.ts';
+import { KeysThatReach } from '../components/environment/keys-that-reach.tsx';
+import { SecretRow } from '../components/environment/secret-row.tsx';
+import { ValueField } from '../components/environment/value-field.tsx';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
-import {
-  Code,
-  CommandLine,
-  Empty,
-  grantWords,
-  Notice,
-  PageHeader,
-  Row,
-  RowActions,
-  Rows,
-  Section,
-  Skeleton,
-  Tag,
-  Time,
-} from '../components/parts.tsx';
-import { Button } from '../components/ui/button.tsx';
-import { Confirm } from '../components/ui/confirm.tsx';
-import { Form, TextArea, TextField } from '../components/ui/field.tsx';
-import { ToggleButton, ToggleGroup } from '../components/ui/toggle.tsx';
-import { copyWhenReady } from '../lib/clipboard.ts';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { Button, buttonClass } from '../components/ui/button.tsx';
+import { Confirm } from '../components/ui/dialog.tsx';
+import { TextField } from '../components/ui/field.tsx';
+import { ActionForm, useInlineForm } from '../components/ui/form.tsx';
+import { EmptyState, List, Missing, Notice, Rows, Skeleton } from '../components/ui/list.tsx';
+import { PageHead } from '../components/ui/page.tsx';
+import { Address } from '../components/ui/text.tsx';
 import {
   addressOf,
   deleteEnvironmentAtom,
   environmentAtom,
-  grantsAtom,
   NAME_NOT_OPENED,
   type OpenedEnvironment,
-  type OpenedSecret,
-  removeGrantAtom,
-  removeSecretAtom,
-  revealSecretAtom,
-  rollbackSecretAtom,
   secretsAtom,
-  versionsAtom,
   writeSecretAtom,
 } from '../lib/data.ts';
-import { bytes, exactTime } from '../lib/format.ts';
-import { failureMessage, latest } from '../lib/result.ts';
+import { clearsFailure, failureMessage, latest } from '../lib/result.ts';
 
 const isSecretName = Schema.is(SecretNameSchema);
 
-const SEALED_NOTE = 'Sealed in this browser to the environment’s key: baymutt cannot read it.';
+const ADD_SECRET = 'add-secret';
 
-const OPEN_FAILED = 'Couldn’t open this value. Try again.';
-
-/** An environment as the page shows it: by its address, its name opened here. */
-const addressOfEnvironment = (environment: OpenedEnvironment) =>
-  addressOf({ orgSlug: environment.orgSlug, name: environment.openedName });
-
-/** Name and value in; a sealed version out. `name` fixed means replacing that secret. */
-const ValueForm = ({
-  environment,
-  name: fixedName,
-  onDone,
-}: {
-  readonly environment: OpenedEnvironment;
-  readonly name?: string;
-  readonly onDone?: () => void;
-}) => {
+/** The first row of Secrets: a name and its value, sealed here. It closes once saved. */
+const AddSecretForm = ({ environment }: { readonly environment: OpenedEnvironment }) => {
   const owner = useOwner();
+  const form = useInlineForm(ADD_SECRET);
   const [writing, write] = useAtom(writeSecretAtom, { mode: 'promiseExit' });
-  const [name, setName] = useState(fixedName ?? '');
+  const forget = useAtomSet(writeSecretAtom);
+  // One atom serves Add a secret and every Replace: another form's failure is not this one's.
+  useLayoutEffect(() => {
+    forget(Atom.Reset);
+  }, [forget]);
+  const clearing = clearsFailure(writing, forget);
+  const [name, setName] = useState('');
   const [value, setValue] = useState('');
-  const isValid = isSecretName(name) && value !== '';
   return (
-    <Form
-      className="space-y-3"
-      onSubmit={async event => {
-        event.preventDefault();
+    <ActionForm
+      placement="row"
+      label="Add a secret"
+      submitLabel="Seal and save"
+      pendingLabel="Sealing…"
+      isPending={writing.waiting}
+      isSubmitDisabled={!isSecretName(name) || value === ''}
+      onSubmit={async () => {
         const exit = await write({ owner, environment, name, value });
-        if (exit._tag !== 'Success') return;
-        setValue('');
-        if (fixedName === undefined) setName('');
-        onDone?.();
+        if (exit._tag === 'Success') form.close();
       }}
+      onCancel={form.close}
     >
-      {fixedName === undefined && (
-        <TextField
-          label="Name"
-          isCode
-          placeholder="STRIPE_SECRET_KEY"
-          error={
-            name !== '' && !isSecretName(name)
-              ? 'Letters, digits and underscores, not starting with a digit.'
-              : null
-          }
-          value={name}
-          onValueChange={setName}
-        />
-      )}
-      <TextArea
-        label={fixedName === undefined ? 'Value' : `New value for ${fixedName}`}
+      <TextField
+        label="Name"
         isCode
-        hint={SEALED_NOTE}
-        error={failureMessage(writing)}
-        value={value}
-        onValueChange={setValue}
+        placeholder="STRIPE_SECRET_KEY"
+        error={
+          name !== '' && !isSecretName(name)
+            ? 'Letters, digits and underscores, not starting with a digit.'
+            : null
+        }
+        value={name}
+        onValueChange={clearing(setName)}
       />
-      <div className="flex gap-2">
-        <Button type="submit" intent="primary" disabled={!isValid || writing.waiting}>
-          {writing.waiting ? 'Sealing…' : 'Seal and save'}
-        </Button>
-        {onDone && <Button onClick={onDone}>Cancel</Button>}
-      </div>
-    </Form>
-  );
-};
-
-const History = ({
-  environmentId,
-  name,
-}: {
-  readonly environmentId: string;
-  readonly name: string;
-}) => {
-  const versions = latest(useAtomValue(versionsAtom({ environmentId, name })));
-  const [rolling, rollback] = useAtom(rollbackSecretAtom);
-  if (versions === null) return <p className="text-sm text-muted">Loading its versions…</p>;
-  return (
-    <div className="space-y-2">
-      <ul className="divide-y divide-line rounded-control border border-line bg-background">
-        {versions.map(version => (
-          <li
-            key={version.version}
-            className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 text-sm"
-          >
-            <span className="w-8 font-medium tabular-nums">v{version.version}</span>
-            <span className="text-muted">
-              {bytes(version.size)} · {version.createdBy.name} · <Time at={version.createdAt} />
-            </span>
-            <span className="ml-auto">
-              {version.isCurrent ? (
-                <Tag tone="accent">current</Tag>
-              ) : (
-                <Button
-                  size="sm"
-                  intent="subtle"
-                  disabled={rolling.waiting}
-                  onClick={() => rollback({ environmentId, name, version: version.version })}
-                >
-                  Make v{version.version} current
-                </Button>
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {failureMessage(rolling) && <Notice>{failureMessage(rolling)}</Notice>}
-    </div>
-  );
-};
-
-/**
- * The current value, masked. Reveal opens it in this browser and Copy copies it without showing
- * it; either is logged. Nothing keeps it: Hide, leaving the page and locking the vault drop it.
- */
-const SecretValue = ({
-  environment,
-  name,
-  openedName,
-  version,
-}: {
-  readonly environment: OpenedEnvironment;
-  /** As the store keeps it. */
-  readonly name: string;
-  readonly openedName: string;
-  readonly version: number;
-}) => {
-  const owner = useOwner();
-  // The version is part of the slot, so a replaced value never shows under the new version.
-  const slot = `${environment.id}/${name}/${version}`;
-  const [shown, reveal] = useAtom(revealSecretAtom(`${slot}:show`));
-  const [copying, open] = useAtom(revealSecretAtom(`${slot}:copy`), { mode: 'promiseExit' });
-  // A plain setter for resets: in `promiseExit` mode a reset would wait on a result that never comes.
-  const forgetCopy = useAtomSet(revealSecretAtom(`${slot}:copy`));
-  const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
-  useEffect(
-    () => () => {
-      reveal(Atom.Reset);
-      forgetCopy(Atom.Reset);
-    },
-    [reveal, forgetCopy],
-  );
-  const value = AsyncResult.isSuccess(shown) ? shown.value : null;
-  const request = { owner, environmentId: environment.id, name, openedName, version };
-  const revealLabel = value === null ? 'Reveal' : 'Hide';
-
-  const copy = async () => {
-    setCopied('idle');
-    if (value !== null) {
-      setCopied(await copyWhenReady(Promise.resolve(value)));
-      return;
-    }
-    const opening = open(request);
-    const text = opening.then(exit =>
-      exit._tag === 'Success' ? exit.value : Promise.reject(exit.cause),
-    );
-    // The clipboard may refuse before the value arrives, and nothing else would hear this fail.
-    text.catch(() => undefined);
-    const outcome = await copyWhenReady(text);
-    // A failure stays, to say why; a copied value goes.
-    if ((await opening)._tag !== 'Success') return;
-    forgetCopy(Atom.Reset);
-    setCopied(outcome);
-  };
-
-  return (
-    <div className="mt-2">
-      <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
-        <pre className="max-h-48 min-w-0 flex-1 basis-60 overflow-auto whitespace-pre-wrap rounded-control border border-line bg-sunken px-3 py-1 font-mono text-sm [overflow-wrap:anywhere]">
-          {value ?? (
-            <>
-              <span aria-hidden="true">••••••••••••</span>
-              <span className="sr-only">Value hidden</span>
-            </>
-          )}
-        </pre>
-        <div className="-mx-2.5 flex gap-0.5 sm:mx-0">
-          <Button
-            size="sm"
-            intent="subtle"
-            disabled={shown.waiting}
-            onClick={() => (value === null ? reveal(request) : reveal(Atom.Reset))}
-          >
-            {shown.waiting ? 'Revealing…' : revealLabel}
-          </Button>
-          <Button size="sm" intent="subtle" disabled={copying.waiting} onClick={copy}>
-            {copied === 'copied' ? 'Copied' : 'Copy'}
-          </Button>
-        </div>
-      </div>
-      <p aria-live="polite" className="sr-only">
-        {copied === 'copied' ? `${openedName} copied` : ''}
-      </p>
-      {(failureMessage(shown, OPEN_FAILED) ?? failureMessage(copying, OPEN_FAILED)) && (
-        <Notice className="mt-2">
-          {failureMessage(shown, OPEN_FAILED) ?? failureMessage(copying, OPEN_FAILED)}
-        </Notice>
-      )}
-      {copied === 'failed' && (
-        <Notice className="mt-2">
-          This browser refused the clipboard. Reveal it to select it.
-        </Notice>
-      )}
-    </div>
-  );
-};
-
-/** What a secret's row shows under it: a new value, or its versions. */
-type Panel = 'replace' | 'history';
-
-const SecretRow = ({
-  environment,
-  secret,
-}: {
-  readonly environment: OpenedEnvironment;
-  readonly secret: OpenedSecret;
-}) => {
-  const [panel, setPanel] = useState<Panel | null>(null);
-  const [removing, remove] = useAtom(removeSecretAtom, { mode: 'promiseExit' });
-  const [isConfirming, setIsConfirming] = useState(false);
-  return (
-    // A row written in the last few seconds says so once: it is the only motion on the page.
-    <Row className={Date.now() - secret.updatedAt < 3000 ? 'animate-written' : undefined}>
-      <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
-        <div className="min-w-0 flex-1">
-          <Code className="text-base font-medium">{secret.openedName ?? NAME_NOT_OPENED}</Code>
-          <p className="mt-0.5 text-sm text-muted">
-            sealed · {bytes(secret.size ?? 0)} · v{secret.currentVersion} · {secret.updatedBy.name},{' '}
-            <Time at={secret.updatedAt} />
-          </p>
-        </div>
-        <RowActions>
-          <ToggleGroup
-            value={panel === null ? [] : [panel]}
-            onValueChange={([next]) => setPanel(next === undefined ? null : (next as Panel))}
-            className="flex gap-0.5"
-          >
-            {secret.openedName !== null && <ToggleButton value="replace">Replace</ToggleButton>}
-            <ToggleButton value="history">History</ToggleButton>
-          </ToggleGroup>
-          <Confirm
-            open={isConfirming}
-            onOpenChange={setIsConfirming}
-            trigger={
-              <Button size="sm" intent="subtleDanger">
-                Delete
-              </Button>
-            }
-            title={`Delete ${secret.openedName ?? 'this secret'}?`}
-            keepLabel="Keep it"
-            confirmLabel="Delete secret"
-            pendingLabel="Deleting…"
-            isDangerous
-            isPending={removing.waiting}
-            error={failureMessage(removing)}
-            onConfirm={async () => {
-              const exit = await remove({ environmentId: environment.id, name: secret.name });
-              if (exit._tag === 'Success') setIsConfirming(false);
-            }}
-          >
-            <p>
-              Keys stop receiving it on their next load. It stays in the Bin for 30 days, where you
-              can restore it.
-            </p>
-          </Confirm>
-        </RowActions>
-      </div>
-      {secret.currentVersion !== null && secret.openedName !== null && (
-        <SecretValue
-          environment={environment}
-          name={secret.name}
-          openedName={secret.openedName}
-          version={secret.currentVersion}
-        />
-      )}
-      {panel !== null && (
-        <div className="mt-3 border-line border-t pt-3">
-          {panel === 'replace' && secret.openedName !== null ? (
-            <ValueForm
-              environment={environment}
-              name={secret.openedName}
-              onDone={() => setPanel(null)}
-            />
-          ) : (
-            <History environmentId={environment.id} name={secret.name} />
-          )}
-        </div>
-      )}
-    </Row>
+      <ValueField
+        label="Value"
+        failure={failureMessage(writing)}
+        value={value}
+        onValueChange={clearing(setValue)}
+      />
+    </ActionForm>
   );
 };
 
 const Secrets = ({ environment }: { readonly environment: OpenedEnvironment }) => {
   const result = useAtomValue(secretsAtom(useOwner())(environment.id));
   // A deleted secret is in the Bin, not here.
-  const secrets = latest(result)?.filter(secret => secret.currentVersion !== null) ?? null;
-  const [isAdding, setIsAdding] = useState(false);
+  const secrets =
+    latest(result)?.flatMap(secret =>
+      secret.currentVersion === null ? [] : [{ secret, version: secret.currentVersion }],
+    ) ?? null;
+  const adding = useInlineForm(ADD_SECRET);
+  const justWritten = useJustWritten(
+    secrets?.map(({ secret, version }) => ({ id: secret.name, stamp: String(version) })) ?? null,
+  );
+  const failure = failureMessage(result);
   return (
-    <Section
+    <List
       title="Secrets"
-      lede="Reveal and Copy open a value in this browser, and Activity records each time."
-      action={
-        !isAdding && (
-          <Button intent="primary" onClick={() => setIsAdding(true)}>
-            Add a secret
-          </Button>
-        )
+      note={
+        secrets !== null &&
+        secrets.length > 0 &&
+        'Revealing or copying a value opens it in this browser, and Activity records it.'
       }
     >
-      {isAdding && (
-        <div className="mb-4 rounded-panel border border-line bg-surface p-4">
-          <ValueForm environment={environment} onDone={() => setIsAdding(false)} />
-        </div>
-      )}
-      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {secrets === null && !failureMessage(result) && <Skeleton />}
-      {secrets?.length === 0 && !isAdding && (
-        <Empty title="No secrets yet">
-          <p>Add one here, or from a key that can write here, with the value on stdin:</p>
-          <CommandLine>{`baymutt secret set ${addressOfEnvironment(environment)} NAME < file`}</CommandLine>
-          <p>
-            For a value only you can fetch, a CLI login runs <Code>baymutt ask paste-link</Code>: it
-            waits under Paste links.
-          </p>
-        </Empty>
-      )}
-      {secrets !== null && secrets.length > 0 && (
-        <Rows>
-          {secrets.map(secret => (
-            <SecretRow
-              key={`${secret.name}:${secret.updatedAt}`}
-              environment={environment}
-              secret={secret}
-            />
-          ))}
-        </Rows>
-      )}
-    </Section>
-  );
-};
-
-const GrantRow = ({
-  environment,
-  grant,
-}: {
-  readonly environment: OpenedEnvironment;
-  readonly grant: Grant;
-}) => {
-  const [removing, remove] = useAtom(removeGrantAtom);
-  return (
-    <Row>
-      <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
-        <div className="min-w-0 flex-1">
-          <p className="font-medium">{grant.credentialName}</p>
-          <p className="mt-0.5 text-sm text-muted">can {grantWords(grant)}</p>
-        </div>
-        <RowActions>
-          <Button
-            size="sm"
-            intent="subtleDanger"
-            disabled={removing.waiting}
-            onClick={() => remove({ id: environment.id, credentialId: grant.credentialId })}
-          >
-            {removing.waiting ? 'Removing…' : 'Remove'}
-          </Button>
-        </RowActions>
-      </div>
-      {failureMessage(removing) && <Notice className="mt-2">{failureMessage(removing)}</Notice>}
-    </Row>
-  );
-};
-
-const Access = ({ environment }: { readonly environment: OpenedEnvironment }) => {
-  const grants = latest(useAtomValue(grantsAtom(environment.id)));
-  return (
-    <Section
-      title="Who can reach it"
-      lede="You can read and write it. A key reaches it when a request you approved named it, or you gave it access. One that reads keeps what it read: taking access away stops the next load, not the last one."
-    >
-      {grants === null && <Skeleton rows={2} />}
-      {grants?.length === 0 && (
-        <Empty title="Only you, so far">
-          <p>
-            A CLI login asks for it with <Code>baymutt ask access</Code>. Approving the request
-            gives its key what it asked for here.
-          </p>
-        </Empty>
-      )}
-      {grants !== null && grants.length > 0 && (
-        <Rows>
-          {grants.map(grant => (
-            <GrantRow key={grant.credentialId} environment={environment} grant={grant} />
-          ))}
-        </Rows>
-      )}
-    </Section>
+      {(() => {
+        if (secrets === null && failure !== null) return <Notice tone="danger">{failure}</Notice>;
+        if (secrets === null) return <Skeleton />;
+        if (secrets.length === 0 && !adding.isOpen) {
+          return (
+            <EmptyState
+              example={{
+                lead: 'A key that can write here sets one like this:',
+                commands: [
+                  `baymutt secret set ${addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })} STRIPE_SECRET_KEY < stripe.key`,
+                ],
+              }}
+            >
+              Its secrets show here. Add a secret seals the first in this browser.
+            </EmptyState>
+          );
+        }
+        return (
+          <Rows>
+            {adding.isOpen && <AddSecretForm environment={environment} />}
+            {secrets.map(({ secret, version }) => (
+              <SecretRow
+                key={secret.name}
+                environment={environment}
+                secret={secret}
+                version={version}
+                flash={justWritten(secret.name)}
+              />
+            ))}
+          </Rows>
+        );
+      })()}
+    </List>
   );
 };
 
 const DeleteEnvironment = ({ environment }: { readonly environment: OpenedEnvironment }) => {
   const navigate = useNavigate();
   const [deleting, remove] = useAtom(deleteEnvironmentAtom, { mode: 'promiseExit' });
+  const forget = useAtomSet(deleteEnvironmentAtom);
   return (
-    <Section
-      title="Delete"
-      lede="Moves it to the Bin, which stops every load and write of it. Its name stays taken. You can restore it for 30 days; then it is removed for good."
-      className="border-line border-t pt-8"
-      action={
+    <List title="Delete this environment" isDanger>
+      <p className="muted">
+        It goes to the Bin, and every load and write of it stops. You can restore it for 30 days.
+        Its name stays taken until it is removed for good.
+      </p>
+      <p className="btn-row">
         <Confirm
-          trigger={<Button intent="danger">Delete environment</Button>}
-          title={`Delete ${addressOfEnvironment(environment)}?`}
+          trigger={<Button kind="danger">Delete environment</Button>}
+          onOpen={() => forget(Atom.Reset)}
+          title={
+            environment.openedName === null ? (
+              'Delete this environment?'
+            ) : (
+              <>
+                Delete <Address orgSlug={environment.orgSlug} name={environment.openedName} />?
+              </>
+            )
+          }
           keepLabel="Keep environment"
           confirmLabel="Delete environment"
           pendingLabel="Deleting…"
-          isDangerous
           isPending={deleting.waiting}
           error={failureMessage(deleting)}
           onConfirm={async () => {
             const exit = await remove(environment.id);
-            if (exit._tag === 'Success') {
-              await navigate({
-                to: '/orgs/$slug/environments',
-                params: { slug: environment.orgSlug },
-              });
-            }
+            if (exit._tag !== 'Success') return;
+            await navigate({
+              to: '/orgs/$slug/environments',
+              params: { slug: environment.orgSlug },
+            });
           }}
         >
           <p>
@@ -481,8 +184,61 @@ const DeleteEnvironment = ({ environment }: { readonly environment: OpenedEnviro
             for 30 days, where you can restore it.
           </p>
         </Confirm>
+      </p>
+    </List>
+  );
+};
+
+/** Not found here, or failed to load: in the page's place, with a way back. */
+const EnvironmentMissing = ({ failure }: { readonly failure: string | null }) => {
+  const org = useOrg();
+  const title = failure === null ? 'No environment here' : 'Couldn’t load this environment';
+  useTitle(title, org.name);
+  return (
+    <Missing
+      title={title}
+      isFailure={failure !== null}
+      action={
+        failure === null && (
+          <Link to="/orgs/$slug/environments" params={{ slug: org.slug }} className={buttonClass()}>
+            See environments
+          </Link>
+        )
       }
-    />
+    >
+      {failure ?? `${org.name} has no environment with this id.`}
+    </Missing>
+  );
+};
+
+const Environment = ({ environment }: { readonly environment: OpenedEnvironment }) => {
+  const address = addressOf({ orgSlug: environment.orgSlug, name: environment.openedName });
+  useTitle(address);
+  const adding = useInlineForm(ADD_SECRET);
+  // The head's primary hides while a form is open (Add a secret, a Replace), not while History is.
+  const isReplacing = adding.openId?.startsWith('replace:') ?? false;
+  return (
+    <>
+      <PageHead
+        title={
+          <h1 className={cn('code-title addr', environment.openedName === null && 'unopened')}>
+            <span className="org">{environment.orgSlug}/</span>
+            {environment.openedName ?? NAME_NOT_OPENED}
+          </h1>
+        }
+        primary={
+          !adding.isOpen &&
+          !isReplacing && (
+            <Button kind="primary" onClick={adding.open}>
+              Add a secret
+            </Button>
+          )
+        }
+      />
+      <Secrets environment={environment} />
+      <KeysThatReach environment={environment} />
+      <DeleteEnvironment environment={environment} />
+    </>
   );
 };
 
@@ -491,44 +247,15 @@ export const EnvironmentPage = ({ id }: { readonly id: string }) => {
   const result = useAtomValue(environmentAtom(useOwner())(id));
   const found = latest(result);
   // Only an environment of the org the address names: one of another org is not found here.
-  const environment = found?.orgId === org.id ? found : null;
-  if (environment === null) {
-    const failure =
-      found === null ? failureMessage(result) : `${org.name} has no environment with this id.`;
-    return failure ? (
-      <>
-        <Notice>{failure}</Notice>
-        <p className="mt-4">
-          <Link to="/orgs/$slug/environments" params={{ slug: org.slug }} className="underline">
-            Back to the environments of {org.name}
-          </Link>
-        </p>
-      </>
-    ) : (
-      <Skeleton />
-    );
-  }
-  return (
-    <>
-      <Link
-        to="/orgs/$slug/environments"
-        params={{ slug: org.slug }}
-        className="-ml-1 mb-3 inline-flex items-center gap-1 rounded-control px-1 text-sm text-muted transition-colors duration-150 ease-out hover:text-foreground"
-      >
-        <CaretLeftIcon aria-hidden="true" className="size-3.5" />
-        Environments
-      </Link>
-      <PageHeader
-        title={
-          <Code className="text-xl font-[650] tracking-tight">
-            {addressOfEnvironment(environment)}
-          </Code>
-        }
-        lede={`Made by ${environment.createdBy.name} on ${exactTime(environment.createdAt)}.`}
-      />
-      <Secrets environment={environment} />
-      <Access environment={environment} />
-      <DeleteEnvironment environment={environment} />
-    </>
-  );
+  if (found !== null && found.orgId !== org.id) return <EnvironmentMissing failure={null} />;
+  if (found !== null) return <Environment environment={found} />;
+  const failure = failureMessage(result);
+  if (failure === null) return <Skeleton hasTitle />;
+  const isNotFound =
+    AsyncResult.isFailure(result) &&
+    Option.match(AsyncResult.error(result), {
+      onNone: () => false,
+      onSome: error => error._tag === 'NotFoundError',
+    });
+  return <EnvironmentMissing failure={isNotFound ? null : failure} />;
 };

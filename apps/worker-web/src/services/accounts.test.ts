@@ -75,7 +75,7 @@ describe('the account', () => {
     // A session alone is not enough: the wrap goes to whoever knows the password.
     expect(await wrapFor('z')).toMatchObject({
       status: 403,
-      body: { code: 'WrongPasswordError' },
+      body: { code: 'WrongPasswordError', message: 'That password does not unlock this vault.' },
     });
     // Better Auth's own credential row, written in the same batch: only a hash of the login value.
     expect(w.sqlite.prepare('SELECT providerId, accountId, password FROM account').all()).toEqual([
@@ -288,10 +288,17 @@ describe('what opens the vault', () => {
     const { w, user, owner } = await storeWorld();
     const second = user.passkey('second');
 
-    // The second signs in but holds no wrap, so the first is still the only thing that opens the vault.
+    // The second signs in but holds no wrap, so the first is still the only thing that unlocks the vault.
     expect(
       await call(w, 'DELETE', `/account/passkeys/${user.first.passkeyId}`, owner),
-    ).toMatchObject({ status: 409, body: { code: 'LastUnlockError' } });
+    ).toMatchObject({
+      status: 409,
+      body: {
+        code: 'LastUnlockError',
+        message:
+          'This passkey is the only thing that unlocks the vault. Add another, or set a password, before removing it.',
+      },
+    });
 
     await ok(w, 'PUT', '/account/password', owner, {
       authValue: authValue('a'),
@@ -302,7 +309,11 @@ describe('what opens the vault', () => {
     // Now the password is the last way in.
     expect(await call(w, 'DELETE', '/account/password', owner)).toMatchObject({
       status: 409,
-      body: { code: 'LastUnlockError' },
+      body: {
+        code: 'LastUnlockError',
+        message:
+          'The password is the only thing that unlocks the vault. Add a passkey before removing it.',
+      },
     });
     expect(w.sqlite.prepare('SELECT passkey_id FROM passkey_wrap').all()).toEqual([]);
     expect(await call(w, 'DELETE', '/account/passkeys/nope', owner)).toMatchObject({ status: 404 });

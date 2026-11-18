@@ -3,7 +3,8 @@
 //
 // - public/favicon.png: the mark.
 // - public/apple-touch-icon.png: the mark on paper.
-// - public/og.png: 1200×630, rendered from scripts/og.html by the pinned headless shell at 2x.
+// - public/og.png: 1200×630, the stylesheet's `.og` in scripts/og.html, rendered by the pinned
+//   headless shell at 2x.
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +17,7 @@ const siteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const mark = path.resolve(siteRoot, '../web/src/assets/mark.svg');
 
 // The light scheme's paper (`--background`), for the icon iOS insists is opaque.
-const PAPER = '#f8f5ee';
+const PAPER = '#f8f5f0';
 
 await sharp(mark, { density: 72 })
   .resize(96, 96)
@@ -37,7 +38,10 @@ const tmp = mkdtempSync(path.join(tmpdir(), 'baymutt-og-'));
 try {
   const html = readFileSync(path.join(siteRoot, 'scripts/og.html'), 'utf8')
     .replaceAll('{{sans}}', font('schibsted-grotesk', 'schibsted-grotesk-latin-wght-normal.woff2'))
-    .replaceAll('{{mark}}', pathToFileURL(mark).href)
+    .replaceAll(
+      '{{stylesheet}}',
+      pathToFileURL(path.resolve(siteRoot, '../web/src/styles/baymutt.css')).href,
+    )
     .replaceAll('{{scene}}', pathToFileURL(path.join(siteRoot, 'src/assets/shore.webp')).href);
   const htmlPath = path.join(tmp, 'og.html');
   writeFileSync(htmlPath, html);

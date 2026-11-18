@@ -1,71 +1,75 @@
 import { Select as BaseSelect } from '@base-ui/react/select';
 import { CaretDownIcon, CheckIcon } from '@phosphor-icons/react';
-import { cn } from 'cn';
-import type { ComponentProps } from 'react';
-import { controlStyles } from './control.ts';
+import type { ReactNode } from 'react';
+import { POPUP_OFFSET } from './menu.tsx';
 
 export type SelectOption<Value extends string> = {
   readonly value: Value;
   readonly label: string;
 };
 
-/** The closed select: what is chosen, and a caret. */
-const SelectTrigger = ({ className, ...props }: ComponentProps<typeof BaseSelect.Trigger>) => (
-  <BaseSelect.Trigger
-    className={cn(
-      controlStyles,
-      'flex h-9 cursor-pointer items-center justify-between gap-2 pr-3 text-left data-popup-open:border-accent',
-      className,
-    )}
-    {...props}
-  >
-    <BaseSelect.Value className="min-w-0 truncate" />
-    <BaseSelect.Icon className="shrink-0 text-muted">
-      <CaretDownIcon aria-hidden="true" className="size-3.5" />
-    </BaseSelect.Icon>
-  </BaseSelect.Trigger>
-);
-
-/** The open list, drawn like the page: a hairline edge, no shadow, the chosen option checked. */
-const SelectPopup = <Value extends string>({
-  options,
-}: {
-  readonly options: ReadonlyArray<SelectOption<Value>>;
-}) => (
-  <BaseSelect.Portal>
-    <BaseSelect.Positioner
-      align="start"
-      alignItemWithTrigger={false}
-      sideOffset={4}
-      className="z-50 outline-none"
-    >
-      <BaseSelect.Popup className="min-w-(--anchor-width) overflow-hidden rounded-control border border-line bg-surface text-base text-foreground outline-none transition-opacity duration-150 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0">
-        <BaseSelect.List className="max-h-(--available-height) overflow-y-auto py-1 outline-none">
-          {options.map(({ value, label }) => (
-            <BaseSelect.Item
-              key={value}
-              value={value}
-              className="grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 py-2 pr-4 pl-2.5 outline-none select-none data-highlighted:bg-sunken sm:py-1.5"
-            >
-              <BaseSelect.ItemIndicator className="col-start-1">
-                <CheckIcon aria-hidden="true" className="size-4 text-accent" />
-              </BaseSelect.ItemIndicator>
-              <BaseSelect.ItemText className="col-start-2">{label}</BaseSelect.ItemText>
-            </BaseSelect.Item>
-          ))}
-        </BaseSelect.List>
-      </BaseSelect.Popup>
-    </BaseSelect.Positioner>
-  </BaseSelect.Portal>
-);
-
 /**
- * A select, drawn like every other control: `Select.Root` takes the `options` as `items`, and
- * `Select.Popup` lists the same ones.
+ * `.select` with its label. `above` is a `.field` (a dialog's Expires); `beside` is `.ends` (a
+ * decision page's Ends), which on a phone puts the label above and lets a long choice wrap. The
+ * popup is a portaled `.menu` at least the trigger's width, so every option shows in full, above a
+ * dialog by layer.
  */
-export const Select = {
-  Root: BaseSelect.Root,
-  Label: BaseSelect.Label,
-  Trigger: SelectTrigger,
-  Popup: SelectPopup,
-};
+export const Select = <Value extends string>({
+  label,
+  labelPlacement = 'above',
+  hint,
+  options,
+  value,
+  onValueChange,
+  isDisabled = false,
+}: {
+  readonly label: string;
+  readonly labelPlacement?: 'above' | 'beside';
+  /** Under an `above` select. */
+  readonly hint?: ReactNode;
+  readonly options: ReadonlyArray<SelectOption<Value>>;
+  readonly value: Value;
+  readonly onValueChange: (value: Value) => void;
+  readonly isDisabled?: boolean;
+}) => (
+  <BaseSelect.Root
+    items={options}
+    value={value}
+    disabled={isDisabled}
+    onValueChange={chosen => {
+      if (chosen !== null) onValueChange(chosen);
+    }}
+  >
+    <div className={labelPlacement === 'above' ? 'field' : 'ends'}>
+      <BaseSelect.Label className="label">{label}</BaseSelect.Label>
+      <BaseSelect.Trigger className="select">
+        <BaseSelect.Value />
+        <BaseSelect.Icon render={<CaretDownIcon aria-hidden="true" className="gl" />} />
+      </BaseSelect.Trigger>
+      {labelPlacement === 'above' && hint && <p className="hint">{hint}</p>}
+    </div>
+    <BaseSelect.Portal>
+      <BaseSelect.Positioner
+        align="start"
+        alignItemWithTrigger={false}
+        sideOffset={POPUP_OFFSET}
+        className="positioner"
+      >
+        <BaseSelect.Popup className="menu">
+          <BaseSelect.List>
+            {options.map(option => (
+              <BaseSelect.Item key={option.value} value={option.value} className="menu-item">
+                <span className="tick">
+                  <BaseSelect.ItemIndicator>
+                    <CheckIcon aria-hidden="true" className="gl" />
+                  </BaseSelect.ItemIndicator>
+                </span>
+                <BaseSelect.ItemText className="t">{option.label}</BaseSelect.ItemText>
+              </BaseSelect.Item>
+            ))}
+          </BaseSelect.List>
+        </BaseSelect.Popup>
+      </BaseSelect.Positioner>
+    </BaseSelect.Portal>
+  </BaseSelect.Root>
+);

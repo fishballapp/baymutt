@@ -1,34 +1,31 @@
 ---
-import MarketingLayout from '@internal/marketing/Layout.astro';
+import PageShell from '@internal/marketing/PageShell.astro';
 import '../styles/global.css';
 
 type Props = {
   title: string;
   description: string;
+  ogImageAlt: string;
   structuredData?: Record<string, unknown>;
 };
 
-const { title, description, structuredData } = Astro.props;
+const { title, description, ogImageAlt, structuredData } = Astro.props;
 ---
 
-<MarketingLayout
+<PageShell
   title={title}
   description={description}
   ogSiteName="baymutt"
   ogLocale="en_GB"
-  ogImage={{
-    path: '/og.png',
-    alt: 'baymutt: your agents ask for secrets. You answer on one screen.',
-    width: 1200,
-    height: 630,
-  }}
+  ogImage={{ path: '/og.png', alt: ogImageAlt, width: 1200, height: 630 }}
   themeColor={[
-    { media: '(prefers-color-scheme: light)', content: '#f8f5ee' },
-    { media: '(prefers-color-scheme: dark)', content: '#12181c' },
+    { media: '(prefers-color-scheme: light)', content: '#f8f5f0' },
+    { media: '(prefers-color-scheme: dark)', content: '#10171c' },
   ]}
   htmlLang="en"
   fontHref={null}
   structuredData={structuredData}
 >
-  <slot />
-</MarketingLayout>
+  <!-- The stylesheet sets the landing's type on `.l-body`, and the shared shell owns the body's classes. -->
+  <div class="l-body"><slot /></div>
+</PageShell>

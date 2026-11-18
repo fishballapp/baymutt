@@ -66,8 +66,9 @@ export const bytes = (count: number): string =>
 export const counted = (count: number, one: string, many = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
-const HOUR_MS = 3600 * 1000;
-const DAY_MS = 24 * HOUR_MS;
+export const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+export const DAY_MS = 24 * HOUR_MS;
 
 /** "never expires", "expires in 12 days", "expires in 5 hours", "expires in 14 minutes", "expired". */
 export const expiryWords = (expiresAt: number | null, nowMs: number): string => {
@@ -91,3 +92,11 @@ export const durationWords = (ms: number): string => {
 /** "Dec 1, 2026", for a day the owner picks or reads. */
 export const exactDay = (atMs: number): string =>
   Temporal.Instant.fromEpochMilliseconds(atMs).toLocaleString('en', { dateStyle: 'medium' });
+
+/** "removed for good in 27 days", in the largest whole unit left: what a Bin item says of its end. */
+export const removedForGoodWords = (atMs: number, nowMs: number): string => {
+  const left = Math.max(atMs - nowMs, MINUTE_MS);
+  if (left >= DAY_MS) return `removed for good in ${counted(Math.round(left / DAY_MS), 'day')}`;
+  if (left >= HOUR_MS) return `removed for good in ${counted(Math.round(left / HOUR_MS), 'hour')}`;
+  return `removed for good in ${counted(Math.round(left / MINUTE_MS), 'minute')}`;
+};

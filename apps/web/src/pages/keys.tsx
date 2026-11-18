@@ -1,206 +1,221 @@
 import { useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
+import type { ReactNode } from 'react';
+import { useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { EndedKeys, KeyRows } from '../components/keys.tsx';
-import { useOrg } from '../components/orgs.tsx';
+import { KeyRow, keyWords } from '../components/keys.tsx';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { buttonClass } from '../components/ui/button.tsx';
+import { Filter, NoMatch, useFilter } from '../components/ui/filter.tsx';
+import { EmptyState, Ended, List, Notice, Rows, Skeleton } from '../components/ui/list.tsx';
+import { PageHead, PageTitle } from '../components/ui/page.tsx';
+import { AccessWords, Address, accessText, Code } from '../components/ui/text.tsx';
+import { WaitingList, WaitingRow } from '../components/waiting.tsx';
 import {
-  Code,
-  CommandLine,
-  Empty,
-  grantWords,
-  Notice,
-  PageHeader,
-  Row,
-  Rows,
-  Section,
-  Skeleton,
-  Time,
-} from '../components/parts.tsx';
-import { buttonStyles } from '../components/ui/button.tsx';
-import {
-  addressOf,
   hasEnded,
   keyChangesAtom,
   kindOf,
   type OpenedKeyChange,
   type OpenedRequest,
+  type OpenedRequestItem,
+  type OpenedServiceAccount,
   requestsAtom,
   serviceAccountsAtom,
 } from '../lib/data.ts';
+import { counted } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-/** One request waiting for the owner, as a sentence: who asks for what. Its decision is on its own page. */
+/** An environment a request or key change names, by its address. */
+const ItemAddress = ({ item }: { readonly item: OpenedRequestItem }) => (
+  <Address orgSlug={item.orgSlug} name={item.openedEnvironmentName} />
+);
+
 const RequestRow = ({ request }: { readonly request: OpenedRequest }) => (
-  <Row>
-    <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
-      <div className="min-w-0 flex-1">
-        <p>
-          <span className="font-medium">{request.maker.name}</span> asks for{' '}
-          {request.items.map((item, index) => (
-            <span key={item.environmentId}>
-              {index > 0 && ', '}
-              <Code>{addressOf({ orgSlug: item.orgSlug, name: item.openedEnvironmentName })}</Code>{' '}
-              <span className="text-muted">({grantWords(item)})</span>
-            </span>
-          ))}
-        </p>
-        <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted [overflow-wrap:anywhere]">
-          {request.reason}
-        </p>
-        <p className="mt-1.5 text-sm text-muted">
-          asked <Time at={request.createdAt} />
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-1.5 sm:shrink-0">
-        <Link
-          to="/orgs/$slug/ask/access/$id"
-          params={{ slug: request.org.slug, id: request.id }}
-          className={buttonStyles()}
-        >
-          Review
-        </Link>
-      </div>
-    </div>
-  </Row>
+  <WaitingRow
+    ask={
+      <>
+        <b>{request.maker.name}</b> asks for a key it calls <b>{request.name}</b>
+      </>
+    }
+    reason={request.reason}
+    about={[
+      ...request.items.map(item => (
+        <>
+          <ItemAddress item={item} />{' '}
+          <AccessWords canRead={item.canRead} canWrite={item.canWrite} />
+        </>
+      )),
+      ...(request.command === null
+        ? []
+        : [
+            <>
+              Its key goes into <Code>{request.command}</Code>
+            </>,
+          ]),
+    ]}
+    askedAt={request.createdAt}
+    action={
+      <Link
+        to="/orgs/$slug/ask/access/$id"
+        params={{ slug: request.org.slug, id: request.id }}
+        className={buttonClass()}
+      >
+        Review
+      </Link>
+    }
+  />
 );
 
-/** An environment of a change, by its address, with what the line says of it. */
-const Changed = ({
-  items,
-  sign,
-}: {
-  readonly items: OpenedKeyChange['add'];
-  readonly sign: string;
-}) =>
-  items.map((item, index) => (
-    <span key={item.environmentId}>
-      {index > 0 && ', '}
-      <Code>{addressOf({ orgSlug: item.orgSlug, name: item.openedEnvironmentName })}</Code>{' '}
-      <span className="text-muted">
-        ({sign} {grantWords(item)})
-      </span>
-    </span>
-  ));
-
-/** One change to a key, waiting for the owner, as a sentence: who asks to change which key, and how. */
+/** A key change waiting: what it adds (what it holds there in brackets) and what it gives back. */
 const KeyChangeRow = ({ change }: { readonly change: OpenedKeyChange }) => (
-  <Row>
-    <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
-      <div className="min-w-0 flex-1">
-        <p>
-          <span className="font-medium">{change.maker.name}</span> asks to change{' '}
-          <span className="font-medium">{change.key.name}</span>
-          {change.add.length > 0 && (
-            <>
-              : adds <Changed items={change.add} sign="+" />
-            </>
-          )}
-          {change.giveBack.length > 0 && (
-            <>
-              {change.add.length > 0 ? '; gives back ' : ': gives back '}
-              <Changed items={change.giveBack} sign="−" />
-            </>
-          )}
-          {change.lifetime !== null && (
-            <span className="text-muted">
-              {change.add.length + change.giveBack.length > 0 ? '; ' : ': '}a new end
-            </span>
-          )}
-        </p>
-        <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted [overflow-wrap:anywhere]">
-          {change.reason}
-        </p>
-        <p className="mt-1.5 text-sm text-muted">
-          asked <Time at={change.createdAt} />
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-1.5 sm:shrink-0">
-        <Link
-          to="/orgs/$slug/ask/change/$id"
-          params={{ slug: change.org.slug, id: change.id }}
-          className={buttonStyles()}
-        >
-          Review
-        </Link>
-      </div>
-    </div>
-  </Row>
+  <WaitingRow
+    ask={
+      <>
+        <b>{change.maker.name}</b> asks to change <b>{change.key.name}</b>
+      </>
+    }
+    reason={change.reason}
+    about={[
+      ...change.add.map(item => {
+        const held = change.holds.find(({ environmentId }) => environmentId === item.environmentId);
+        return (
+          <>
+            adds <ItemAddress item={item} />{' '}
+            <AccessWords canRead={item.canRead} canWrite={item.canWrite} />
+            {held !== undefined && ` (holds ${accessText(held)})`}
+          </>
+        );
+      }),
+      ...change.giveBack.map(item => (
+        <>
+          gives back <ItemAddress item={item} />{' '}
+          <AccessWords canRead={item.canRead} canWrite={item.canWrite} />
+        </>
+      )),
+      ...(change.lifetime === null ? [] : ['asks for a new end']),
+    ]}
+    askedAt={change.createdAt}
+    action={
+      <Link
+        to="/orgs/$slug/ask/change/$id"
+        params={{ slug: change.org.slug, id: change.id }}
+        className={buttonClass()}
+      >
+        Review
+      </Link>
+    }
+  />
 );
 
-/** What waits for the owner in the org: requests for a new key, and changes to one. */
-const Requests = () => {
+/** Requests for a new key and changes to one, newest first: what waits on the owner under Keys. */
+const useWaitingRows = (): ReadonlyArray<ReactNode> => {
   const owner = useOwner();
   const org = useOrg();
-  const requests = (latest(useAtomValue(requestsAtom(owner))) ?? []).filter(
-    request => request.org.id === org.id,
-  );
-  const changes = (latest(useAtomValue(keyChangesAtom(owner))) ?? []).filter(
-    change => change.org.id === org.id,
-  );
-  if (requests.length === 0 && changes.length === 0) return null;
-  return (
-    <Section title="Requests" lede="Each waits for you: a new key, or a change to one.">
-      <Rows>
-        {[
-          ...requests.map(request => ({
-            at: request.createdAt,
-            row: <RequestRow key={request.id} request={request} />,
-          })),
-          ...changes.map(change => ({
-            at: change.createdAt,
-            row: <KeyChangeRow key={change.id} change={change} />,
-          })),
-        ]
-          .toSorted((a, b) => b.at - a.at)
-          .map(({ row }) => row)}
-      </Rows>
-    </Section>
-  );
+  const requests = latest(useAtomValue(requestsAtom(owner))) ?? [];
+  const changes = latest(useAtomValue(keyChangesAtom(owner))) ?? [];
+  return [
+    ...requests
+      .filter(request => request.org.id === org.id)
+      .map(request => ({
+        at: request.createdAt,
+        row: <RequestRow key={request.id} request={request} />,
+      })),
+    ...changes
+      .filter(change => change.org.id === org.id)
+      .map(change => ({
+        at: change.createdAt,
+        row: <KeyChangeRow key={change.id} change={change} />,
+      })),
+  ]
+    .toSorted((a, b) => b.at - a.at)
+    .map(({ row }) => row);
 };
+
+const LISTS = [
+  { kind: 'service-account', title: 'Service accounts' },
+  { kind: 'agent', title: 'Agent keys' },
+] as const;
 
 export const KeysPage = () => {
   const org = useOrg();
+  useTitle('Keys', org.name);
   const result = useAtomValue(serviceAccountsAtom(useOwner()));
   const all = latest(result);
+  const failure = failureMessage(result);
   const ofOrg = all?.filter(key => key.org?.id === org.id) ?? null;
-  const shown = ofOrg?.filter(key => !hasEnded(key, Date.now())) ?? [];
-  const sections = [
-    {
-      title: 'Service accounts',
-      lede: 'Keys made for another system, such as CI.',
-      keys: shown.filter(key => kindOf(key) === 'service-account'),
-    },
-    {
-      title: 'Agent keys',
-      lede: 'Keys an agent asked for, for its own work.',
-      keys: shown.filter(key => kindOf(key) === 'agent'),
-    },
-  ];
+  const filter = useFilter(ofOrg?.length ?? 0);
+  // Here, not in the section: a filter that matches no key takes the section off the page, and
+  // clearing it brings the section back open or closed as it was.
+  const [isEndedOpen, setEndedOpen] = useState(false);
+  const waiting = useWaitingRows();
+  const now = Date.now();
+  const shown = (ofOrg ?? []).filter(key => filter.matches(...keyWords(key)));
+  const active = shown.filter(key => !hasEnded(key, now));
+  const ended = shown
+    .filter(key => hasEnded(key, now))
+    .toSorted((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0));
+  const allEnded = (ofOrg ?? []).filter(key => hasEnded(key, now)).length;
+  const row = (key: OpenedServiceAccount) => (
+    <KeyRow key={key.id} keyToShow={key} maker={all?.find(({ id }) => id === key.parentId)} />
+  );
+  const body = (() => {
+    if (failure !== null) return <Notice tone="danger">{failure}</Notice>;
+    if (ofOrg === null) return <Skeleton />;
+    if (filter.isFiltering && shown.length === 0) {
+      return (
+        <NoMatch filter={filter}>
+          No key in {org.name} matches “{filter.query.trim()}”.
+        </NoMatch>
+      );
+    }
+    return (
+      <>
+        {LISTS.map(({ kind, title }) => {
+          const keys = active
+            .filter(key => kindOf(key) === kind)
+            .toSorted((a, b) => b.createdAt - a.createdAt);
+          if (keys.length === 0) return null;
+          return (
+            <List key={kind} title={title} count={filter.isFiltering ? undefined : keys.length}>
+              <Rows>{keys.map(row)}</Rows>
+            </List>
+          );
+        })}
+        {active.length === 0 && waiting.length === 0 && !filter.isFiltering && (
+          <EmptyState
+            example={{
+              lead: 'An agent asks for one like this:',
+              commands: [
+                `baymutt ask access --read ${org.slug}/app/production --reason "run the migration"`,
+              ],
+            }}
+          >
+            {org.name}’s keys show here once you approve an agent’s request.
+          </EmptyState>
+        )}
+        {ended.length > 0 && (
+          <Ended
+            showLabel={`Show ${counted(allEnded, 'ended key')}`}
+            hideLabel="Hide ended keys"
+            isForcedOpen={filter.isFiltering}
+            open={isEndedOpen}
+            onOpenChange={setEndedOpen}
+          >
+            {ended.map(row)}
+          </Ended>
+        )}
+      </>
+    );
+  })();
   return (
     <>
-      <PageHeader
-        title="Keys"
-        lede={`A key of ${org.name} reaches what you approved for it, in ${org.name} alone. CLI logins are your account’s, under Account.`}
+      <PageHead
+        title={<PageTitle>Keys</PageTitle>}
+        filter={filter.isShown && <Filter filter={filter} placeholder="name or environment" />}
       />
-      <Requests />
-      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {ofOrg === null && !failureMessage(result) && <Skeleton />}
-      {ofOrg?.length === 0 && (
-        <Empty title={`No keys in ${org.name} yet`}>
-          <p>A CLI login asks you for one:</p>
-          <CommandLine>{`baymutt ask access --read ${org.slug}/<environment> --reason "<why>"`}</CommandLine>
-          <p>The request waits here until you approve or reject it.</p>
-        </Empty>
-      )}
-      {sections.map(
-        ({ title, lede, keys }) =>
-          keys.length > 0 && (
-            <Section key={title} title={title} lede={lede}>
-              <KeyRows keys={keys} all={all ?? []} />
-            </Section>
-          ),
-      )}
-      {ofOrg !== null && <EndedKeys keys={ofOrg} all={all ?? []} />}
+      {waiting.length > 0 && <WaitingList>{waiting}</WaitingList>}
+      {body}
     </>
   );
 };

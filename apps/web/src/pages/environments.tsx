@@ -1,173 +1,217 @@
 import { EnvironmentNameSchema, type Org } from '@baymutt/api';
-import { useAtom, useAtomValue } from '@effect/atom-react';
-import { CaretRightIcon } from '@phosphor-icons/react';
+import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
+import * as Atom from 'effect/reactivity/Atom';
 import * as Schema from 'effect/Schema';
 import { useState } from 'react';
+import { useJustWritten } from '../components/environment/just-written.ts';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
-import {
-  Code,
-  Empty,
-  Notice,
-  PageHeader,
-  Row,
-  Rows,
-  Section,
-  Skeleton,
-  Time,
-} from '../components/parts.tsx';
-import { Button, buttonStyles } from '../components/ui/button.tsx';
-import { Form, TextField } from '../components/ui/field.tsx';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { Button, buttonClass } from '../components/ui/button.tsx';
+import { Field, PrefixedInput } from '../components/ui/field.tsx';
+import { Filter, NoMatch, useFilter } from '../components/ui/filter.tsx';
+import { ActionForm, useInlineForm } from '../components/ui/form.tsx';
+import { EmptyState, List, Notice, Row, Rows, Skeleton } from '../components/ui/list.tsx';
+import { PageHead } from '../components/ui/page.tsx';
+import { Address } from '../components/ui/text.tsx';
+import { WaitingList, WaitingRow } from '../components/waiting.tsx';
 import {
   addressOf,
   createEnvironmentAtom,
   environmentRequestsAtom,
   environmentsAtom,
+  hasEnded,
+  isLogin,
+  serviceAccountsAtom,
 } from '../lib/data.ts';
 import { counted } from '../lib/format.ts';
-import { failureMessage, latest } from '../lib/result.ts';
+import { clearsFailure, failureMessage, latest } from '../lib/result.ts';
 
 const isEnvironmentName = Schema.is(EnvironmentNameSchema);
 
-const NewEnvironment = ({ org }: { readonly org: Org }) => {
+const NEW_ENVIRONMENT = 'new-environment';
+
+/** The first row of "All environments": a name under the org's fixed slug. It stays open after a create. */
+const NewEnvironmentForm = ({ org }: { readonly org: Org }) => {
   const owner = useOwner();
+  const form = useInlineForm(NEW_ENVIRONMENT);
   const [creation, create] = useAtom(createEnvironmentAtom, { mode: 'promiseExit' });
+  const clearing = clearsFailure(creation, useAtomSet(createEnvironmentAtom));
   const [name, setName] = useState('');
   const isValid = isEnvironmentName(name);
   return (
-    <Form
-      className="mb-8"
-      onSubmit={async event => {
-        event.preventDefault();
+    <ActionForm
+      placement="row"
+      label="New environment"
+      submitLabel="Create environment"
+      pendingLabel="Creating…"
+      isPending={creation.waiting}
+      isSubmitDisabled={!isValid}
+      onSubmit={async () => {
         const exit = await create({ owner, orgId: org.id, name });
         if (exit._tag === 'Success') setName('');
       }}
+      onCancel={form.close}
     >
-      <TextField
-        label="New environment"
-        isCode
-        placeholder="app/production"
-        hint={
-          <>
-            Lower-case segments joined by /. Its full name is{' '}
-            <Code>
-              {org.slug}/{name === '' ? 'app/production' : name}
-            </Code>
-            .
-          </>
-        }
+      <Field
+        label="Name"
+        hint="Lower-case segments joined by /."
         error={
           name !== '' && !isValid
             ? 'Use lower-case letters, digits, dots and dashes, in segments joined by /.'
-            : failureMessage(creation)
+            : null
         }
-        value={name}
-        onValueChange={setName}
-        action={
-          <Button type="submit" intent="primary" disabled={!isValid || creation.waiting}>
-            {creation.waiting ? 'Creating…' : 'Create environment'}
-          </Button>
-        }
-      />
-    </Form>
+        failure={failureMessage(creation)}
+      >
+        <PrefixedInput
+          prefix={`${org.slug}/`}
+          placeholder="app/production"
+          value={name}
+          onValueChange={clearing(setName)}
+        />
+      </Field>
+    </ActionForm>
   );
 };
 
-/** Environment requests in the org waiting for the owner: each as a sentence, its decision on its own page. */
+/** Environment requests of this org, newest first: each is answered on its own page. */
 const EnvironmentRequests = ({ org }: { readonly org: Org }) => {
-  const requests = latest(useAtomValue(environmentRequestsAtom(useOwner())))?.filter(
+  const requests = (latest(useAtomValue(environmentRequestsAtom(useOwner()))) ?? []).filter(
     request => request.orgId === org.id,
   );
-  if (requests === undefined || requests.length === 0) return null;
+  if (requests.length === 0) return null;
   return (
-    <Section
-      title="Requests"
-      lede="Each waits for you. Approving one creates the environment."
-      className="mb-10"
-    >
-      <Rows>
-        {requests.map(request => (
-          <Row key={request.id}>
-            <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
-              <div className="min-w-0 flex-1">
-                <p>
-                  <span className="font-medium">{request.createdBy.name}</span> asks for a new
-                  environment,{' '}
-                  <Code>{addressOf({ orgSlug: request.orgSlug, name: request.openedName })}</Code>
-                </p>
-                <p className="mt-1.5 max-w-[65ch] border-line border-l pl-3 text-sm text-muted [overflow-wrap:anywhere]">
-                  {request.reason}
-                </p>
-                <p className="mt-1.5 text-sm text-muted">
-                  asked <Time at={request.createdAt} />
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-1.5 sm:shrink-0">
-                <Link
-                  to="/orgs/$slug/ask/create-environment/$id"
-                  params={{ slug: org.slug, id: request.id }}
-                  className={buttonStyles()}
-                >
-                  Review
-                </Link>
-              </div>
-            </div>
-          </Row>
-        ))}
-      </Rows>
-    </Section>
+    <WaitingList>
+      {requests.map(request => (
+        <WaitingRow
+          key={request.id}
+          ask={
+            <>
+              <b>{request.createdBy.name}</b> asks you to create{' '}
+              <Address orgSlug={request.orgSlug} name={request.openedName} />
+            </>
+          }
+          reason={request.reason}
+          askedAt={request.createdAt}
+          action={
+            <Link
+              to="/orgs/$slug/ask/create-environment/$id"
+              params={{ slug: org.slug, id: request.id }}
+              className={buttonClass()}
+            >
+              Review
+            </Link>
+          }
+        />
+      ))}
+    </WaitingList>
   );
 };
 
 export const EnvironmentsPage = () => {
-  const result = useAtomValue(environmentsAtom(useOwner()));
+  const owner = useOwner();
   const org = useOrg();
+  useTitle('Environments', org.name);
+  const result = useAtomValue(environmentsAtom(owner));
   const environments = latest(result)?.filter(environment => environment.orgId === org.id) ?? null;
+  const keys = latest(useAtomValue(serviceAccountsAtom(owner))) ?? [];
+  const form = useInlineForm(NEW_ENVIRONMENT);
+  const filter = useFilter(environments?.length ?? 0);
+  const justWritten = useJustWritten(
+    environments?.map(environment => ({ id: environment.id, stamp: environment.id })) ?? null,
+  );
+  // A failure from an earlier visit is not this form's.
+  const forgetCreation = useAtomSet(createEnvironmentAtom);
+  const now = Date.now();
+  const keyCount = (environmentId: string) =>
+    keys.filter(
+      key =>
+        !isLogin(key) &&
+        !hasEnded(key, now) &&
+        key.grants.some(grant => grant.environmentId === environmentId),
+    ).length;
+  const shown =
+    environments?.filter(environment =>
+      filter.matches(addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })),
+    ) ?? null;
+  const isNoMatch = filter.isFiltering && shown?.length === 0 && !form.isOpen;
+  const failure = failureMessage(result);
+
   return (
     <>
-      <PageHeader
-        title="Environments"
-        lede="An environment is the unit of access. A CLI login lists it and opens nothing in it; a key reaches it when a request you approved named it."
+      <PageHead
+        title={<h1>Environments</h1>}
+        filter={filter.isShown && <Filter filter={filter} placeholder="name" />}
+        primary={
+          !form.isAnyOpen && (
+            <Button
+              kind="primary"
+              onClick={() => {
+                filter.clear();
+                forgetCreation(Atom.Reset);
+                form.open();
+              }}
+            >
+              New environment
+            </Button>
+          )
+        }
       />
       <EnvironmentRequests org={org} />
-      <NewEnvironment org={org} />
-      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {environments === null && !failureMessage(result) && <Skeleton />}
-      {environments?.length === 0 && (
-        <Empty title={`No environments in ${org.name} yet`}>
-          <p>
-            Create one above. A CLI login asks for one with{' '}
-            <Code>baymutt ask create-environment</Code>.
-          </p>
-        </Empty>
-      )}
-      {environments !== null && environments.length > 0 && (
-        <Rows>
-          {environments.map(environment => (
-            <Row key={environment.id} className="p-0">
-              <Link
-                to="/orgs/$slug/environments/$id"
-                params={{ slug: org.slug, id: environment.id }}
-                className="group flex items-center gap-4 px-4 py-3 transition-colors duration-150 ease-out hover:bg-sunken focus-visible:-outline-offset-2"
-              >
-                <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-6 gap-y-0.5">
-                  <Code className="text-base font-medium">
-                    {addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })}
-                  </Code>
-                  <span className="text-sm text-muted">
-                    {counted(environment.secretCount, 'secret')} · made by{' '}
-                    {environment.createdBy.name} <Time at={environment.createdAt} />
-                  </span>
-                </span>
-                <CaretRightIcon
-                  aria-hidden="true"
-                  className="size-4 shrink-0 text-muted transition-colors duration-150 ease-out group-hover:text-foreground"
-                />
-              </Link>
-            </Row>
-          ))}
-        </Rows>
+      {isNoMatch ? (
+        <NoMatch filter={filter}>
+          No environment in {org.name} matches “{filter.query.trim()}”.
+        </NoMatch>
+      ) : (
+        <List
+          title="All environments"
+          count={filter.isFiltering ? undefined : environments?.length}
+        >
+          {(() => {
+            if (failure !== null && environments === null) {
+              return <Notice tone="danger">{failure}</Notice>;
+            }
+            if (shown === null) return <Skeleton />;
+            if (shown.length === 0 && !form.isOpen) {
+              return (
+                <EmptyState
+                  example={{
+                    lead: 'An agent can also ask you for one:',
+                    commands: [
+                      `baymutt ask create-environment ${org.slug}/app/staging --reason "staging for the new API"`,
+                    ],
+                  }}
+                >
+                  {org.name}’s environments show here. New environment makes the first.
+                </EmptyState>
+              );
+            }
+            return (
+              <Rows>
+                {form.isOpen && <NewEnvironmentForm org={org} />}
+                {shown.map(environment => {
+                  const keysReaching = keyCount(environment.id);
+                  return (
+                    <Row key={environment.id} variant="" {...justWritten(environment.id)}>
+                      <Link
+                        to="/orgs/$slug/environments/$id"
+                        params={{ slug: org.slug, id: environment.id }}
+                        className="row-env"
+                      >
+                        <Address orgSlug={environment.orgSlug} name={environment.openedName} />
+                        <span className="count">{counted(environment.secretCount, 'secret')}</span>
+                        <span className="count">
+                          {keysReaching === 0 ? 'no keys' : counted(keysReaching, 'key')}
+                        </span>
+                      </Link>
+                    </Row>
+                  );
+                })}
+              </Rows>
+            );
+          })()}
+        </List>
       )}
     </>
   );

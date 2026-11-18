@@ -3,13 +3,16 @@
 // does not open is never shown as a name, and cannot be created.
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
-import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import type { ReactNode } from 'react';
+import { askState, SeeEnvironments } from '../components/decision/ask.tsx';
+import { DecisionColumn, DecisionLoading, Outcome } from '../components/decision/frame.tsx';
+import { Answer, ExactTime, Grant, Vouch } from '../components/decision/parts.tsx';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
-import { Claim, Code, Notice, Skeleton, Time } from '../components/parts.tsx';
-import { Button, buttonStyles } from '../components/ui/button.tsx';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { Button, buttonClass } from '../components/ui/button.tsx';
+import { Address, Code } from '../components/ui/text.tsx';
 import {
   addressOf,
   approveEnvironmentRequestAtom,
@@ -17,173 +20,146 @@ import {
   type OpenedEnvironmentRequest,
   rejectEnvironmentRequestAtom,
 } from '../lib/data.ts';
-import { exactTime } from '../lib/format.ts';
-import { failureMessage, latest } from '../lib/result.ts';
-
-const SeeEnvironments = () => (
-  <Link to="/orgs/$slug/environments" params={{ slug: useOrg().slug }} className={buttonStyles()}>
-    See environments
-  </Link>
-);
-
-/** A page that is not the decision: an answered or missing request, or the answer just given. */
-const Outcome = ({
-  title,
-  children,
-  action = <SeeEnvironments />,
-}: {
-  readonly title: string;
-  readonly children: ReactNode;
-  readonly action?: ReactNode;
-}) => (
-  <div className="max-w-[34rem] space-y-4">
-    <h1 className="text-xl">{title}</h1>
-    {children}
-    {action}
-  </div>
-);
-
-/**
- * The answer just given on this page, if any. The page reads it, not the decision: once given,
- * the request reads as answered and the decision is gone.
- */
-const justAnswered = ({
-  request,
-  creating,
-  rejecting,
-}: {
-  readonly request: OpenedEnvironmentRequest;
-  readonly creating: AsyncResult.AsyncResult<{ readonly id: string }, unknown>;
-  readonly rejecting: AsyncResult.AsyncResult<{ readonly id: string }, unknown>;
-}): ReactNode => {
-  const address = addressOf({ orgSlug: request.orgSlug, name: request.openedName });
-  if (AsyncResult.isSuccess(creating) && creating.value.id === request.id) {
-    return (
-      <Outcome
-        title="Created"
-        action={
-          <Link
-            to="/orgs/$slug/environments/$id"
-            params={{ slug: request.orgSlug, id: request.id }}
-            className={buttonStyles()}
-          >
-            Open {address}
-          </Link>
-        }
-      >
-        <p className="text-muted">
-          No key reaches <Code className="text-foreground">{address}</Code> until you approve a
-          request that names it.
-        </p>
-      </Outcome>
-    );
-  }
-  if (AsyncResult.isSuccess(rejecting) && rejecting.value.id === request.id) {
-    return (
-      <Outcome title="Rejected">
-        <p className="text-muted">Nothing was created.</p>
-      </Outcome>
-    );
-  }
-  return null;
-};
+import { failureMessage } from '../lib/result.ts';
 
 const Decision = ({ request }: { readonly request: OpenedEnvironmentRequest }) => {
+  const owner = useOwner();
   const [creating, create] = useAtom(approveEnvironmentRequestAtom(request.id));
   const [rejecting, reject] = useAtom(rejectEnvironmentRequestAtom(request.id));
-  const owner = useOwner();
+  const isBlocked = request.openedName === null;
   const isBusy = creating.waiting || rejecting.waiting;
-  const address = addressOf({ orgSlug: request.orgSlug, name: request.openedName });
-
   return (
-    <div className="max-w-[34rem] space-y-5">
-      <div>
-        <h1 className="text-xl">Create this environment?</h1>
-        <p className="mt-2 text-muted">
-          The CLI login{' '}
-          <span className="font-medium text-foreground">{request.createdBy.name}</span> asks for a
-          new environment, <Time at={request.createdAt} />.
-        </p>
+    <DecisionColumn>
+      <p className="ask">
+        <b>{request.createdBy.name}</b> asks you to create an environment
+      </p>
+      <h1 className="claim">“{request.reason}”</h1>
+      <div className="grants">
+        <ul>
+          <Grant item={{ orgSlug: request.orgSlug, openedEnvironmentName: request.openedName }} />
+        </ul>
       </div>
-      <Code className="block text-md font-medium [overflow-wrap:anywhere]">{address}</Code>
-      <Claim label="Why">
-        <p>“{request.reason}”</p>
-      </Claim>
-      <p>Creating it gives no one access to it.</p>
-      {request.openedName === null && (
-        <Notice tone="warn">
+      <p className="makes">Creating it gives no one access to it.</p>
+      {isBlocked && (
+        <p className="warnline">
           This name does not open with your vault, so it cannot be created.
-        </Notice>
+        </p>
       )}
-      {(failureMessage(creating) ?? failureMessage(rejecting)) && (
-        <Notice>{failureMessage(creating) ?? failureMessage(rejecting)}</Notice>
-      )}
-      <div className="flex flex-wrap gap-2">
+      <Answer error={failureMessage(creating) ?? failureMessage(rejecting)}>
         <Button
-          intent="primary"
-          disabled={isBusy || request.openedName === null}
+          size="lg"
+          disabled={isBusy}
+          isPending={rejecting.waiting}
+          pendingLabel="Rejecting…"
+          onClick={() => reject(request.id)}
+        >
+          Reject
+        </Button>
+        <Button
+          size="lg"
+          kind="primary"
+          disabled={isBusy || isBlocked}
+          isPending={creating.waiting}
+          pendingLabel="Creating…"
           onClick={() => create({ owner, request })}
         >
-          {creating.waiting ? 'Creating…' : 'Create environment'}
+          Create environment
         </Button>
-        <Button disabled={isBusy} onClick={() => reject(request.id)}>
-          {rejecting.waiting ? 'Rejecting…' : 'Reject'}
-        </Button>
-      </div>
-    </div>
+      </Answer>
+      <Vouch askedAt={request.createdAt} maker={request.createdBy} />
+    </DecisionColumn>
   );
 };
 
-const OUTCOME_TITLES = {
-  approved: 'Already created',
-  rejected: 'Already rejected',
-  expired: 'This request expired',
+const ANSWERED_EARLIER = {
+  approved: { title: 'Already created', words: 'it was created' },
+  rejected: { title: 'Already rejected', words: 'it was rejected' },
 } as const;
 
 export const AskCreateEnvironmentPage = ({ id }: { readonly id: string }) => {
-  const result = useAtomValue(environmentRequestAtom(useOwner())(id));
+  const org = useOrg();
+  const state = askState(
+    useAtomValue(environmentRequestAtom(useOwner())(id)),
+    ({ orgId }) => orgId === org.id,
+  );
   const creating = useAtomValue(approveEnvironmentRequestAtom(id));
   const rejecting = useAtomValue(rejectEnvironmentRequestAtom(id));
-  const org = useOrg();
-  const found = latest(result);
-  // Only an ask of the org the address names: one of another org is not at this link.
-  const request = found !== null && found.orgId === org.id ? found : null;
-  if (request === null) {
-    const isMissing =
-      found !== null ||
-      (AsyncResult.isFailure(result) &&
-        Option.match(AsyncResult.error(result), {
-          onNone: () => false,
-          onSome: error => error._tag === 'NotFoundError',
-        }));
-    if (isMissing) {
-      return (
-        <Outcome title="No request at this link">
-          <p className="text-muted">
-            Open the whole link <Code>baymutt ask create-environment</Code> printed.
-          </p>
+  const screen = ((): { readonly title: string | null; readonly body: ReactNode } => {
+    const outcome = (
+      title: string,
+      sentence: ReactNode,
+      { tone, action = <SeeEnvironments /> }: { tone?: 'danger'; action?: ReactNode } = {},
+    ) => ({
+      title,
+      body: (
+        <Outcome title={title} tone={tone} action={action}>
+          {sentence}
         </Outcome>
+      ),
+    });
+    if (state.kind === 'loading') return { title: null, body: <DecisionLoading /> };
+    if (state.kind === 'failed') {
+      return outcome('Couldn’t load this request', state.message, { tone: 'danger' });
+    }
+    if (state.kind === 'missing') {
+      return outcome(
+        'No request at this link',
+        <>
+          Open the whole link <Code>baymutt ask create-environment</Code> printed.
+        </>,
       );
     }
-    const failure = failureMessage(result);
-    return failure === null ? <Skeleton rows={4} /> : <Notice>{failure}</Notice>;
-  }
-  const answered = justAnswered({ request, creating, rejecting });
-  if (answered !== null) return answered;
-  if (request.status === 'pending') return <Decision request={request} />;
-  return (
-    <Outcome title={OUTCOME_TITLES[request.status]}>
-      <p className="text-muted">
-        {request.createdBy.name} asked for{' '}
-        <Code className="text-foreground">
-          {addressOf({ orgSlug: request.orgSlug, name: request.openedName })}
-        </Code>
-        , and{' '}
-        {request.status === 'expired'
-          ? 'nobody answered within an hour'
-          : `it was ${request.status === 'approved' ? 'created' : 'rejected'}`}
-        {request.resolvedAt !== null && `: ${exactTime(request.resolvedAt)}`}.
-      </p>
-    </Outcome>
-  );
+    const request = state.ask;
+    const address = <Address orgSlug={request.orgSlug} name={request.openedName} />;
+    // The answer just given: once given, the request reads as answered and the decision is gone.
+    if (AsyncResult.isSuccess(creating)) {
+      return outcome(
+        'Created',
+        <>No key reaches {address} until you approve a request that names it.</>,
+        {
+          action: (
+            <Link
+              to="/orgs/$slug/environments/$id"
+              params={{ slug: request.orgSlug, id: request.id }}
+              className={buttonClass({ size: 'lg' })}
+            >
+              <span className="t">
+                Open {addressOf({ orgSlug: request.orgSlug, name: request.openedName })}
+              </span>
+            </Link>
+          ),
+        },
+      );
+    }
+    if (AsyncResult.isSuccess(rejecting)) return outcome('Rejected', 'Nothing was created.');
+    if (request.status === 'pending') {
+      return {
+        title: `Create ${addressOf({ orgSlug: request.orgSlug, name: request.openedName })}?`,
+        body: <Decision request={request} />,
+      };
+    }
+    if (request.status === 'expired') {
+      return outcome(
+        'This request expired',
+        <>
+          {request.createdBy.name} asked for {address}, and nobody answered within an hour.
+        </>,
+      );
+    }
+    const { title, words } = ANSWERED_EARLIER[request.status];
+    return outcome(
+      title,
+      <>
+        {request.createdBy.name} asked for {address}, and {words}
+        {request.resolvedAt !== null && (
+          <>
+            : <ExactTime at={request.resolvedAt} />
+          </>
+        )}
+        .
+      </>,
+    );
+  })();
+  useTitle(screen.title, org.name);
+  return screen.body;
 };

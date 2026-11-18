@@ -1,21 +1,16 @@
-import { useAtom, useAtomValue } from '@effect/atom-react';
-import type { ReactNode } from 'react';
+import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
+import * as Atom from 'effect/reactivity/Atom';
+import { type ReactNode, useState } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
-import {
-  Code,
-  Empty,
-  Notice,
-  PageHeader,
-  Row,
-  RowActions,
-  Rows,
-  Section,
-  Skeleton,
-  Time,
-} from '../components/parts.tsx';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
 import { Button } from '../components/ui/button.tsx';
-import { Confirm } from '../components/ui/confirm.tsx';
+import { Confirm } from '../components/ui/dialog.tsx';
+import { Filter, NoMatch, useFilter } from '../components/ui/filter.tsx';
+import { EmptyState, List, Notice, Row, Rows, Skeleton, Status } from '../components/ui/list.tsx';
+import { RowMenu } from '../components/ui/menu.tsx';
+import { PageHead, PageTitle, RelativeTime } from '../components/ui/page.tsx';
+import { Address, Code, SealedName } from '../components/ui/text.tsx';
 import {
   addressOf,
   binAtom,
@@ -27,99 +22,118 @@ import {
   restoreEnvironmentAtom,
   restoreSecretAtom,
 } from '../lib/data.ts';
-import { exactDay, exactTime } from '../lib/format.ts';
+import { DAY_MS, removedForGoodWords } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-/** When it goes for good: a day, with the exact time on hover. */
-const GoesOn = ({ at }: { readonly at: number }) => (
-  <time dateTime={Temporal.Instant.fromEpochMilliseconds(at).toString()} title={exactTime(at)}>
-    {exactDay(at)}
-  </time>
-);
-
-/** One thing in the bin: what it is, when it was deleted and goes, and its two actions. */
+/**
+ * One thing in the bin: its name, when it goes for good (in `warn` under a day) over when it was
+ * deleted, Restore, and Delete for good in its `⋯`.
+ */
 const BinRow = ({
   name,
-  deleted,
+  menuLabel,
   purgeAt,
+  deleted,
   restore,
   purge,
 }: {
   readonly name: ReactNode;
-  readonly deleted: ReactNode;
+  /** What the `⋯` names it: its address or name, or "this secret" when that does not open. */
+  readonly menuLabel: string;
   readonly purgeAt: number;
+  readonly deleted: ReactNode;
   readonly restore: {
     readonly onClick: () => void;
-    readonly waiting: boolean;
+    readonly isPending: boolean;
     readonly error: string | null;
   };
   readonly purge: {
-    readonly title: string;
+    readonly title: ReactNode;
     readonly body: string;
-    readonly onConfirm: () => void;
-    readonly waiting: boolean;
+    readonly onConfirm: () => Promise<boolean>;
+    readonly isPending: boolean;
     readonly error: string | null;
+    /** Clears an earlier failure: called each time its dialog opens. */
+    readonly forget: () => void;
   };
-}) => (
-  <Row>
-    <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-center">
-      <div className="min-w-0 flex-1">
-        {name}
-        <p className="mt-0.5 text-sm text-muted">
-          {deleted} · removed for good on <GoesOn at={purgeAt} />
-        </p>
-      </div>
-      <RowActions>
-        <Button size="sm" intent="subtle" disabled={restore.waiting} onClick={restore.onClick}>
-          {restore.waiting ? 'Restoring…' : 'Restore'}
-        </Button>
-        <Confirm
-          trigger={
-            <Button size="sm" intent="subtleDanger">
-              Delete for good
-            </Button>
-          }
-          title={purge.title}
-          keepLabel="Keep it"
-          confirmLabel="Delete for good"
-          pendingLabel="Deleting…"
-          isDangerous
-          isPending={purge.waiting}
-          error={purge.error}
-          onConfirm={purge.onConfirm}
-        >
-          <p>{purge.body} This cannot be undone.</p>
-        </Confirm>
-      </RowActions>
-    </div>
-    {restore.error && <Notice className="mt-2">{restore.error}</Notice>}
-  </Row>
-);
+}) => {
+  const [isConfirming, setConfirming] = useState(false);
+  return (
+    <Row variant="row-bin" error={restore.error}>
+      <span>{name}</span>
+      <Status
+        status={
+          <RelativeTime at={purgeAt}>{() => removedForGoodWords(purgeAt, Date.now())}</RelativeTime>
+        }
+        isWarn={purgeAt - Date.now() < DAY_MS}
+        fact={deleted}
+      />
+      <Button
+        kind="quiet"
+        isPending={restore.isPending}
+        pendingLabel="Restoring…"
+        onClick={restore.onClick}
+      >
+        Restore
+      </Button>
+      <RowMenu
+        label={`${menuLabel}: delete for good`}
+        items={[{ label: 'Delete for good', onClick: () => setConfirming(true), isDanger: true }]}
+      />
+      <Confirm
+        open={isConfirming}
+        onOpenChange={setConfirming}
+        onOpen={purge.forget}
+        title={purge.title}
+        keepLabel="Keep it"
+        confirmLabel="Delete for good"
+        pendingLabel="Deleting…"
+        isPending={purge.isPending}
+        error={purge.error}
+        onConfirm={async () => {
+          if (await purge.onConfirm()) setConfirming(false);
+        }}
+      >
+        <p>{purge.body} This cannot be undone.</p>
+      </Confirm>
+    </Row>
+  );
+};
 
 const EnvironmentRow = ({ environment }: { readonly environment: OpenedBinEnvironment }) => {
   const [restoring, restore] = useAtom(restoreEnvironmentAtom(environment.id));
-  const [purging, purge] = useAtom(purgeEnvironmentAtom(environment.id));
-  const address = addressOf({ orgSlug: environment.orgSlug, name: environment.openedName });
+  const [purging, purge] = useAtom(purgeEnvironmentAtom(environment.id), {
+    mode: 'promiseExit',
+  });
+  const forgetPurge = useAtomSet(purgeEnvironmentAtom(environment.id));
+  const address = <Address orgSlug={environment.orgSlug} name={environment.openedName} />;
   return (
     <BinRow
-      name={<Code className="text-base font-medium">{address}</Code>}
-      deleted={
-        <>
-          deleted <Time at={environment.deletedAt} />
-        </>
+      name={address}
+      menuLabel={
+        environment.openedName === null
+          ? 'this environment'
+          : addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })
       }
       purgeAt={environment.purgeAt}
+      deleted={<RelativeTime at={environment.deletedAt}>{ago => `deleted ${ago}`}</RelativeTime>}
       restore={{
         onClick: () => restore(environment.id),
-        waiting: restoring.waiting,
+        isPending: restoring.waiting,
         error: failureMessage(restoring),
       }}
       purge={{
-        title: `Delete ${address} for good?`,
+        title:
+          environment.openedName === null ? (
+            'Delete this environment for good?'
+          ) : (
+            <>Delete {address} for good?</>
+          ),
         body: 'Its secrets, every version of each, and who could reach it are removed from baymutt.',
-        onConfirm: () => purge(environment.id),
-        waiting: purging.waiting,
+        onConfirm: async () => (await purge(environment.id))._tag === 'Success',
+        isPending: purging.waiting,
         error: failureMessage(purging),
+        forget: () => forgetPurge(Atom.Reset),
       }}
     />
   );
@@ -128,33 +142,42 @@ const EnvironmentRow = ({ environment }: { readonly environment: OpenedBinEnviro
 const SecretRow = ({ secret }: { readonly secret: OpenedBinSecret }) => {
   const slot = `${secret.environmentId}/${secret.name}`;
   const [restoring, restore] = useAtom(restoreSecretAtom(slot));
-  const [purging, purge] = useAtom(purgeSecretAtom(slot));
+  const [purging, purge] = useAtom(purgeSecretAtom(slot), { mode: 'promiseExit' });
+  const forgetPurge = useAtomSet(purgeSecretAtom(slot));
   const key = { environmentId: secret.environmentId, name: secret.name };
   return (
     <BinRow
       name={
-        <p>
-          <Code className="text-base font-medium">{secret.openedName ?? NAME_NOT_OPENED}</Code>{' '}
-          <span className="text-muted">in</span>{' '}
-          <Code>{addressOf({ orgSlug: secret.orgSlug, name: secret.openedEnvironmentName })}</Code>
-        </p>
-      }
-      deleted={
         <>
-          deleted by {secret.deletedBy.name}, <Time at={secret.deletedAt} />
+          <SealedName name={secret.openedName} /> in{' '}
+          <Address orgSlug={secret.orgSlug} name={secret.openedEnvironmentName} />
         </>
       }
+      menuLabel={secret.openedName ?? 'this secret'}
       purgeAt={secret.purgeAt}
+      deleted={
+        <RelativeTime at={secret.deletedAt}>
+          {ago => `deleted by ${secret.deletedBy.name} ${ago}`}
+        </RelativeTime>
+      }
       restore={{
         onClick: () => restore({ ...key, version: secret.latestVersion }),
-        waiting: restoring.waiting,
+        isPending: restoring.waiting,
         error: failureMessage(restoring),
       }}
       purge={{
-        title: `Delete ${secret.openedName ?? 'this secret'} for good?`,
-        body: `Every version of it is removed from baymutt.`,
-        onConfirm: () => purge(key),
-        waiting: purging.waiting,
+        title:
+          secret.openedName === null ? (
+            'Delete this secret for good?'
+          ) : (
+            <>
+              Delete <Code>{secret.openedName}</Code> for good?
+            </>
+          ),
+        body: 'Every version of it is removed from baymutt.',
+        onConfirm: async () => (await purge(key))._tag === 'Success',
+        forget: () => forgetPurge(Atom.Reset),
+        isPending: purging.waiting,
         error: failureMessage(purging),
       }}
     />
@@ -162,49 +185,75 @@ const SecretRow = ({ secret }: { readonly secret: OpenedBinSecret }) => {
 };
 
 export const BinPage = () => {
-  const result = useAtomValue(binAtom(useOwner()));
   const org = useOrg();
-  const all = latest(result);
-  const bin =
-    all === null
-      ? null
-      : {
-          environments: all.environments.filter(environment => environment.orgId === org.id),
-          secrets: all.secrets.filter(secret => secret.orgId === org.id),
-        };
+  useTitle('Bin', org.name);
+  const result = useAtomValue(binAtom(useOwner()));
   const failure = failureMessage(result);
-  const isEmpty = bin !== null && bin.environments.length === 0 && bin.secrets.length === 0;
+  const all = latest(result);
+  const environments = (all?.environments ?? []).filter(
+    environment => environment.orgId === org.id,
+  );
+  const secrets = (all?.secrets ?? []).filter(secret => secret.orgId === org.id);
+  const filter = useFilter(environments.length + secrets.length);
+  const soonestFirst = (a: { readonly purgeAt: number }, b: { readonly purgeAt: number }) =>
+    a.purgeAt - b.purgeAt;
+  const shownEnvironments = environments
+    .filter(environment =>
+      filter.matches(addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })),
+    )
+    .toSorted(soonestFirst);
+  const shownSecrets = secrets
+    .filter(secret =>
+      filter.matches(
+        secret.openedName ?? NAME_NOT_OPENED,
+        addressOf({ orgSlug: secret.orgSlug, name: secret.openedEnvironmentName }),
+      ),
+    )
+    .toSorted(soonestFirst);
+  const count = (rows: number) => (filter.isFiltering ? undefined : rows);
+  const body = (() => {
+    if (failure !== null) return <Notice tone="danger">{failure}</Notice>;
+    if (all === null) return <Skeleton />;
+    if (environments.length + secrets.length === 0) {
+      return (
+        <EmptyState>
+          What you delete in {org.name} stays here for 30 days, and can be restored until then.
+        </EmptyState>
+      );
+    }
+    if (shownEnvironments.length + shownSecrets.length === 0) {
+      return <NoMatch filter={filter}>Nothing in the bin matches “{filter.query.trim()}”.</NoMatch>;
+    }
+    return (
+      <>
+        {shownEnvironments.length > 0 && (
+          <List title="Environments" count={count(shownEnvironments.length)}>
+            <Rows>
+              {shownEnvironments.map(environment => (
+                <EnvironmentRow key={environment.id} environment={environment} />
+              ))}
+            </Rows>
+          </List>
+        )}
+        {shownSecrets.length > 0 && (
+          <List title="Secrets" count={count(shownSecrets.length)}>
+            <Rows>
+              {shownSecrets.map(secret => (
+                <SecretRow key={`${secret.environmentId}/${secret.name}`} secret={secret} />
+              ))}
+            </Rows>
+          </List>
+        )}
+      </>
+    );
+  })();
   return (
     <>
-      <PageHeader
-        title="Bin"
-        lede={`Deleted environments and secrets of ${org.name}. Each can be restored for 30 days, then it is removed for good.`}
+      <PageHead
+        title={<PageTitle>Bin</PageTitle>}
+        filter={filter.isShown && <Filter filter={filter} placeholder="name" />}
       />
-      {failure && <Notice className="mb-6">{failure}</Notice>}
-      {bin === null && !failure && <Skeleton rows={2} />}
-      {isEmpty && (
-        <Empty title="The bin is empty">
-          <p>An environment or secret you or a CLI login deletes stays here for 30 days.</p>
-        </Empty>
-      )}
-      {bin !== null && bin.environments.length > 0 && (
-        <Section title="Environments">
-          <Rows>
-            {bin.environments.map(environment => (
-              <EnvironmentRow key={environment.id} environment={environment} />
-            ))}
-          </Rows>
-        </Section>
-      )}
-      {bin !== null && bin.secrets.length > 0 && (
-        <Section title="Secrets">
-          <Rows>
-            {bin.secrets.map(secret => (
-              <SecretRow key={`${secret.environmentId}/${secret.name}`} secret={secret} />
-            ))}
-          </Rows>
-        </Section>
-      )}
+      {body}
     </>
   );
 };

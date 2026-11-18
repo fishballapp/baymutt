@@ -1,0 +1,8 @@
+---
+// A command line of the dashboard's `.cmd`. This page runs no script, so it has no Copy button.
+type Props = { command: string };
+
+const { command } = Astro.props;
+---
+
+<div class="cmd"><span class="ps" aria-hidden="true">$</span><code>{command}</code></div>

@@ -149,8 +149,10 @@ pnpm -F @baymutt/cli cli -- --help   # builds, then runs the CLI
 pnpm check && pnpm typecheck && pnpm test
 ```
 
-Point the CLI at the local Worker with `BAYMUTT_URL=http://localhost:5183`. Local development
-sends no mail: `GET /api/dev/magic-link?email=…` answers the newest sign-in link's token.
+The ports are `BAYMUTT_WORKER_PORT` (8790), `BAYMUTT_WEB_PORT` (5183), `BAYMUTT_SITE_PORT` (4391)
+and `BAYMUTT_WORKER_INSPECTOR_PORT` (9240), so two checkouts can run side by side; give both dev
+servers the same set. Point the CLI at the local Worker with `BAYMUTT_URL=http://localhost:5183`
+(the web port). Local development sends no mail: `GET /api/dev/magic-link?email=…` answers the newest sign-in link's token.
 
 This repository is cut from a private monorepo, and every commit on `main` is deployed to
 baymutt.fsh.ba by [`cd.yml`](.github/workflows/cd.yml). Issues are welcome. Please open one before

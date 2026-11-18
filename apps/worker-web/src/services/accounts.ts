@@ -254,7 +254,7 @@ export class Accounts extends Context.Service<
         create: Effect.fn('Accounts.create')(function* ({ userId, account }) {
           if (account.passkey === null && account.password === null) {
             return yield* new NotFoundError({
-              message: 'A vault needs a passkey or a password to open it.',
+              message: 'A vault needs a passkey or a password to unlock it.',
             });
           }
           const passkey =
@@ -315,7 +315,7 @@ export class Accounts extends Context.Service<
           }
           if (!(yield* auth.verifyPassword({ hash: stored.value.password, authValue }))) {
             return yield* new WrongPasswordError({
-              message: 'That password does not open this vault.',
+              message: 'That password does not unlock this vault.',
             });
           }
           return { wrappedDek: passwordWrappedDek };
@@ -373,7 +373,7 @@ export class Accounts extends Context.Service<
           if ((removed ?? []).length === 0) {
             return yield* new LastUnlockError({
               message:
-                'The password is the only thing that opens the vault. Add a passkey before removing it.',
+                'The password is the only thing that unlocks the vault. Add a passkey before removing it.',
             });
           }
           return yield* view(caller.userId, { ...account, passwordWrappedDek: null });
@@ -388,7 +388,7 @@ export class Accounts extends Context.Service<
           if (found === undefined) {
             return yield* new NotFoundError({
               message:
-                'This passkey signs in but cannot open the vault yet. Open the vault with another passkey, or with the recovery key, to add it.',
+                'This passkey signs in but cannot unlock the vault yet. Unlock the vault with another passkey, or with the recovery key, to add it.',
             });
           }
           return { wrappedDek: found.wrappedDek };
@@ -446,7 +446,7 @@ export class Accounts extends Context.Service<
           }
           return yield* new LastUnlockError({
             message:
-              'This passkey is the only thing that opens the vault. Add another, or set a password, before removing it.',
+              'This passkey is the only thing that unlocks the vault. Add another, or set a password, before removing it.',
           });
         }),
 

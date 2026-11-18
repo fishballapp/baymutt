@@ -6,7 +6,7 @@
   "type": "module",
   "description": "baymutt's one Worker (baymutt-web): the API under /api/*, Better Auth's sign-in, D1, and the static assets: the landing page at / and the dashboard. It stores ciphertext and can read none of it.",
   "scripts": {
-    "dev": "node scripts/assemble-assets.ts --allow-missing && wrangler d1 migrations apply baymutt --local && wrangler dev --var MODE:development --var BETTER_AUTH_SECRET:local-development-only-never-a-real-secret --var MAIL_SENDER:noreply@localhost --var FORWARD_EMAIL_ALIAS_PASSWORD:unused-in-development",
+    "dev": "node scripts/assemble-assets.ts --allow-missing && wrangler d1 migrations apply baymutt --local && wrangler dev --port ${BAYMUTT_WORKER_PORT:-8790} --inspector-port ${BAYMUTT_WORKER_INSPECTOR_PORT:-9240} --var MODE:development --var DEV_ORIGIN:http://localhost:${BAYMUTT_WEB_PORT:-5183} --var BETTER_AUTH_SECRET:local-development-only-never-a-real-secret --var MAIL_SENDER:noreply@localhost --var FORWARD_EMAIL_ALIAS_PASSWORD:unused-in-development",
     "build": "pnpm -F @baymutt/site build && pnpm -F @baymutt/web build && node scripts/assemble-assets.ts",
     "deploy": "pnpm -F @baymutt/varlock-plugin build && pnpm run build && varlock run -- node scripts/deploy-worker.ts",
     "cf-typegen": "wrangler types",

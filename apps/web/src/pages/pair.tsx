@@ -5,16 +5,20 @@ import { PairingRequestSchema } from '@baymutt/api';
 import { pairingCode } from '@baymutt/keys';
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Link, useRouterState } from '@tanstack/react-router';
+import { cn } from 'cn';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import * as Atom from 'effect/reactivity/Atom';
 import * as Schema from 'effect/Schema';
 import { useMemo, useState } from 'react';
+import { DecisionColumn, Outcome } from '../components/decision/frame.tsx';
+import { Answer } from '../components/decision/parts.tsx';
 import { ExpiryField, expiryLabel } from '../components/expiry.tsx';
 import { useOwner } from '../components/gate.tsx';
-import { Code, Notice } from '../components/parts.tsx';
-import { Button, buttonStyles } from '../components/ui/button.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { Button, buttonClass } from '../components/ui/button.tsx';
+import { Code } from '../components/ui/text.tsx';
 import { pairAtom } from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
@@ -32,98 +36,102 @@ export const PairPage = () => {
 
 const Pairing = ({ hash }: { readonly hash: string }) => {
   const owner = useOwner();
-  const request = useMemo(
-    () => Option.getOrNull(decodeFragment(decodeURIComponent(hash.replace(/^#/u, '')))),
-    [hash],
-  );
+  const request = useMemo(() => {
+    // A link cut in the middle of an escape (`%2`) is no login link, not a crash.
+    const fragment = (() => {
+      try {
+        return decodeURIComponent(hash.replace(/^#/u, ''));
+      } catch {
+        return null;
+      }
+    })();
+    return fragment === null ? null : Option.getOrNull(decodeFragment(fragment));
+  }, [hash]);
   const [pairing, pair] = useAtom(pairAtom(request?.id ?? ''));
   const code = latest(useAtomValue(pairingCodeAtom(request?.publicKey ?? '')));
   const [expiresAt, setExpiresAt] = useState<number | null | undefined>(request?.expiresAt ?? null);
+  const title = (() => {
+    if (request === null) return 'This is not a login link';
+    if (AsyncResult.isSuccess(pairing)) return `${request.name} is approved`;
+    return `Approve ${request.name}?`;
+  })();
+  useTitle(title);
 
   if (request === null) {
     return (
-      <div className="max-w-[34rem] space-y-4">
-        <h1 className="text-xl">This is not a login link</h1>
-        <p className="text-muted">
-          Run <Code>baymutt auth login</Code> on the computer and open the whole link it prints,
-          including everything after the #.
-        </p>
-      </div>
+      <Outcome title={title}>
+        Run <Code>baymutt auth login</Code> on the computer and open the whole link it prints,
+        including everything after the #.
+      </Outcome>
     );
   }
 
   if (AsyncResult.isSuccess(pairing)) {
     return (
-      <div className="max-w-[34rem] space-y-4">
-        <h1 className="text-xl">{request.name} is approved</h1>
-        <p className="text-muted">
-          The terminal picks this up by itself. It lists the names in your orgs now; each request it
-          makes for an environment waits for you.
-        </p>
-        <Link to="/account" className={buttonStyles({ intent: 'primary' })}>
-          See CLI logins
-        </Link>
-      </div>
+      <Outcome
+        title={title}
+        action={
+          <Link to="/account" className={buttonClass({ size: 'lg' })}>
+            See CLI logins
+          </Link>
+        }
+      >
+        The terminal picks this up by itself. Each request it makes waits for you.
+      </Outcome>
     );
   }
 
   return (
-    <div className="max-w-[34rem] space-y-5">
-      <div>
-        <h1 className="text-xl">Approve this login?</h1>
-        <p className="mt-2 text-muted">
-          A terminal ran <Code>baymutt auth login</Code> and asks to join{' '}
-          <span className="text-foreground">{owner.accountName}</span>.
-        </p>
-      </div>
-      <div className="rounded-panel border border-line bg-surface px-5 py-4 sm:px-6">
-        <p className="text-sm text-muted">It calls itself</p>
-        <p className="mt-0.5 font-medium">{request.name}</p>
-        {request.description !== undefined && (
-          <p className="mt-1 text-sm [overflow-wrap:anywhere]">“{request.description}”</p>
-        )}
-        <p className="mt-2 text-sm text-muted">
-          Its own words, from the link: the code below is what proves which key you approve.
-        </p>
-      </div>
-      <div className="rounded-panel border border-line bg-surface px-5 py-5 sm:px-6">
-        <Code aria-live="polite" className="block text-xl font-medium tracking-[0.14em]">
+    <DecisionColumn>
+      <p className="ask">
+        A terminal ran <Code>baymutt auth login</Code> and asks to join <b>{owner.accountName}</b>’s
+        account.
+      </p>
+      <h1 className="claim">“{request.name}”</h1>
+      {request.description !== undefined && <p className="claim-sub">“{request.description}”</p>}
+      <div className="pair-code">
+        <span aria-live="polite" className={cn('code-big', code === null && 'pending')}>
           {code ?? '····-····'}
-        </Code>
-        <p className="mt-2 text-sm text-muted">This must match the code in the terminal.</p>
+        </span>
+        <p>This must match the code in the terminal.</p>
       </div>
-      <p>
-        Approving lets it{' '}
-        <strong className="font-medium">
-          list the names of your orgs, environments and secrets
-        </strong>
-        , make paste links, and ask you for access to environments. It opens no value and writes
-        none.
+      <p className="makes">
+        Approving lets it <b>list the names of your orgs, environments and secrets</b>, make paste
+        links, and ask you for access. It opens no value and writes none.
       </p>
       <ExpiryField
+        placement="decision"
         kept={request.expiresAt ?? null}
         keptLabel={at => `As the terminal asked: ${expiryLabel(at)}`}
         onChange={setExpiresAt}
       />
-      <Notice tone="warn">
-        If the codes differ, or you did not run <Code>baymutt auth login</Code> yourself, this link
-        carries someone else’s key. Do not approve it.
-      </Notice>
-      {failureMessage(pairing) && <Notice>{failureMessage(pairing)}</Notice>}
-      <div className="flex flex-wrap gap-2">
+      <p className="warnline">
+        If the codes differ, or you did not run <Code>baymutt auth login</Code> yourself, do not
+        approve it.
+      </p>
+      <Answer error={failureMessage(pairing)}>
+        {/* A link cannot be disabled: while approving it is marked so, and the style takes the pointer. */}
+        <Link
+          to="/account"
+          className={buttonClass({ size: 'lg' })}
+          aria-disabled={pairing.waiting ? true : undefined}
+          tabIndex={pairing.waiting ? -1 : undefined}
+        >
+          Do not approve
+        </Link>
         <Button
-          intent="primary"
-          disabled={pairing.waiting || code === null || expiresAt === undefined}
+          size="lg"
+          kind="primary"
+          disabled={code === null || expiresAt === undefined}
+          isPending={pairing.waiting}
+          pendingLabel="Approving…"
           onClick={() => {
             if (expiresAt !== undefined) pair({ owner, request, expiresAt });
           }}
         >
-          {pairing.waiting ? 'Approving…' : 'The codes match: approve it'}
+          The codes match: approve it
         </Button>
-        <Link to="/account" className={buttonStyles()}>
-          Do not approve
-        </Link>
-      </div>
-    </div>
+      </Answer>
+    </DecisionColumn>
   );
 };

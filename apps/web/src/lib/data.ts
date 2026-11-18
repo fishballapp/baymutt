@@ -227,7 +227,7 @@ const environmentListAtom = ApiClient.query('environments', 'list', {
 });
 
 /** The open vault's names keys, from the same list the environments come in. */
-export const namesKeysAtom = Atom.family((owner: Owner) =>
+const namesKeysAtom = Atom.family((owner: Owner) =>
   ApiClient.runtime.atom(get =>
     Effect.gen(function* () {
       const { namesKeys = [] } = yield* get.result(environmentListAtom);
@@ -512,12 +512,6 @@ export const versionsAtom = Atom.family(({ environmentId, name }: SecretKey) =>
     params: { environmentId, name },
     reactivityKeys: ['secrets'],
   }).pipe(Atom.mapResult(({ versions }) => versions)),
-);
-
-export const grantsAtom = Atom.family((id: string) =>
-  ApiClient.query('environments', 'grants', { params: { id }, reactivityKeys: ['grants'] }).pipe(
-    Atom.mapResult(({ grants }) => grants),
-  ),
 );
 
 const NOT_SEALED_YET = (what: string) =>
@@ -841,7 +835,7 @@ const openGrant = async (grant: CredentialGrant, namesKeys: NamesKeys): Promise<
 const requestListAtom = ApiClient.query('requests', 'list', { reactivityKeys: ['requests'] });
 
 /** Requests waiting for the owner, as the nav counts them. */
-export const pendingRequestsAtom = requestListAtom.pipe(
+const pendingRequestsAtom = requestListAtom.pipe(
   Atom.mapResult(({ requests }) => requests.filter(({ status }) => status === 'pending')),
 );
 
@@ -1270,7 +1264,7 @@ const keyChangeListAtom = ApiClient.query('keyChanges', 'list', {
  * Key changes waiting for the owner, as the nav counts them: only those that can be approved. One
  * whose key has ended, or that names an environment removed for good, waits on nobody.
  */
-export const pendingKeyChangesAtom = keyChangeListAtom.pipe(
+const pendingKeyChangesAtom = keyChangeListAtom.pipe(
   Atom.mapResult(({ changes }) => changes.filter(change => isApprovable(change, Date.now()))),
 );
 
@@ -1556,85 +1550,88 @@ export type ShownPasteTarget = {
 /**
  * Seals the pasted value to the key the owner's vault proves for the link's environment, never to
  * the one the store sent beside the link, under the name the names key opens. Only for the target
- * the page showed: the link is read again to seal, and refused if it now names another.
+ * the page showed: the link is read again to seal, and refused if it now names another. One per
+ * paste link, so a page for another link starts with nothing sent.
  */
-export const fulfilPasteAtom = ApiClient.runtime.fn(
-  ({
-    id,
-    owner,
-    shown,
-    value,
-  }: {
-    readonly id: string;
-    readonly owner: Owner;
-    readonly shown: ShownPasteTarget;
-    readonly value: string;
-  }) =>
-    Effect.gen(function* () {
-      const target = yield* ApiClient.use(client => client.paste.target({ params: { id } }));
-      const { link } = target;
-      const changed = new OwnerError({
-        message:
-          'This link names something other than what this page shows. Nothing was sent; reload the page to see what it asks for now.',
-      });
-      if (
-        shown.openedName === null ||
-        shown.openedEnvironmentName === null ||
-        link.environmentId !== shown.environmentId ||
-        link.environmentName !== shown.environmentName ||
-        link.environmentSealedName !== shown.environmentSealedName ||
-        link.name !== shown.name ||
-        link.sealedName !== shown.sealedName
-      ) {
-        return yield* changed;
-      }
-      const proven = yield* ownedEnvironment(owner, link.environmentId);
-      if (
-        proven.keyVersion !== target.keyVersion ||
-        proven.publicKey !== target.environmentPublicKey
-      ) {
-        return yield* new OwnerError({
+export const fulfilPasteAtom = Atom.family((_id: string) =>
+  ApiClient.runtime.fn(
+    ({
+      id,
+      owner,
+      shown,
+      value,
+    }: {
+      readonly id: string;
+      readonly owner: Owner;
+      readonly shown: ShownPasteTarget;
+      readonly value: string;
+    }) =>
+      Effect.gen(function* () {
+        const target = yield* ApiClient.use(client => client.paste.target({ params: { id } }));
+        const { link } = target;
+        const changed = new OwnerError({
           message:
-            'The store shows a different environment key than the one your vault holds. Nothing was sent.',
+            'This link names something other than what this page shows. Nothing was sent; reload the page to see what it asks for now.',
         });
-      }
-      const { namesKeys } = yield* currentNamesKeys(owner);
-      yield* reopenShown(namesKeys, {
-        orgId: link.orgId,
-        scopeId: link.orgId,
-        name: link.environmentName,
-        sealedName: link.environmentSealedName,
-        shown: shown.openedEnvironmentName,
-        what: 'This link',
-      });
-      const name = yield* reopenShown(namesKeys, {
-        orgId: link.orgId,
-        scopeId: link.environmentId,
-        name: link.name,
-        sealedName: link.sealedName,
-        shown: shown.openedName,
-        what: 'This link',
-      });
-      const ciphertext = yield* keys(() =>
-        sealValue({
-          environmentPublicKey: proven.publicKey,
-          slot: {
-            environmentId: link.environmentId,
-            keyVersion: target.keyVersion,
-            name,
-            version: target.nextVersion,
-          },
-          value,
-        }),
-      );
-      return yield* ApiClient.use(client =>
-        client.paste.fulfil({
-          params: { id },
-          payload: { version: target.nextVersion, keyVersion: target.keyVersion, ciphertext },
-        }),
-      );
-    }).pipe(faultsAsDefects),
-  { reactivityKeys: ['paste', 'pasteLinks', 'secrets', 'audit'] },
+        if (
+          shown.openedName === null ||
+          shown.openedEnvironmentName === null ||
+          link.environmentId !== shown.environmentId ||
+          link.environmentName !== shown.environmentName ||
+          link.environmentSealedName !== shown.environmentSealedName ||
+          link.name !== shown.name ||
+          link.sealedName !== shown.sealedName
+        ) {
+          return yield* changed;
+        }
+        const proven = yield* ownedEnvironment(owner, link.environmentId);
+        if (
+          proven.keyVersion !== target.keyVersion ||
+          proven.publicKey !== target.environmentPublicKey
+        ) {
+          return yield* new OwnerError({
+            message:
+              'The store shows a different environment key than the one your vault holds. Nothing was sent.',
+          });
+        }
+        const { namesKeys } = yield* currentNamesKeys(owner);
+        yield* reopenShown(namesKeys, {
+          orgId: link.orgId,
+          scopeId: link.orgId,
+          name: link.environmentName,
+          sealedName: link.environmentSealedName,
+          shown: shown.openedEnvironmentName,
+          what: 'This link',
+        });
+        const name = yield* reopenShown(namesKeys, {
+          orgId: link.orgId,
+          scopeId: link.environmentId,
+          name: link.name,
+          sealedName: link.sealedName,
+          shown: shown.openedName,
+          what: 'This link',
+        });
+        const ciphertext = yield* keys(() =>
+          sealValue({
+            environmentPublicKey: proven.publicKey,
+            slot: {
+              environmentId: link.environmentId,
+              keyVersion: target.keyVersion,
+              name,
+              version: target.nextVersion,
+            },
+            value,
+          }),
+        );
+        return yield* ApiClient.use(client =>
+          client.paste.fulfil({
+            params: { id },
+            payload: { version: target.nextVersion, keyVersion: target.keyVersion, ciphertext },
+          }),
+        );
+      }).pipe(faultsAsDefects),
+    { reactivityKeys: ['paste', 'pasteLinks', 'secrets', 'audit'] },
+  ),
 );
 
 // --- activity ----------------------------------------------------------------------------------

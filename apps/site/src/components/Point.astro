@@ -1,0 +1,11 @@
+---
+// One selling point: its words beside a drawn piece of the product, which is the slot.
+type Props = { title: string; say: string };
+
+const { title, say } = Astro.props;
+---
+
+<div class="l-point">
+  <div><h2 class="l-h2">{title}</h2><p class="l-say">{say}</p></div>
+  <slot />
+</div>

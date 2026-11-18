@@ -2,32 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<!-- The share card: the landing's first screen, condensed. Colours are the light scheme's tokens
-     (@baymutt/web's styles), written out because this page loads no stylesheet. -->
+<!-- The share card: `.og` from the stylesheet, as design/og.html draws it. A file page cannot resolve
+     the stylesheet's package imports, so the face is loaded here. -->
+<link rel="stylesheet" href="{{stylesheet}}" />
 <style>
-  @font-face { font-family: Schibsted; src: url("{{sans}}") format("woff2"); font-weight: 400 900; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 1200px; height: 630px; overflow: hidden; }
-  body {
-    display: grid;
-    grid-template-columns: 1fr 440px;
-    grid-template-rows: auto 1fr;
-    column-gap: 56px;
-    padding: 56px 72px;
-    background: oklch(0.972 0.008 85);
-    color: oklch(0.24 0.02 250);
-    font-family: Schibsted, system-ui, sans-serif;
-  }
-  .brand { display: flex; align-items: center; gap: 14px; font-size: 34px; font-weight: 650; letter-spacing: -0.02em; }
-  .brand img { width: 48px; height: 48px; }
-  h1 { align-self: center; font-size: 70px; font-weight: 650; line-height: 1.02; letter-spacing: -0.038em; }
-  h1 span { display: block; color: oklch(0.47 0.02 250); }
-  .scene { grid-column: 2; grid-row: 1 / 3; align-self: center; width: 440px; height: auto; }
+  @font-face { font-family: "Schibsted Grotesk Variable"; font-weight: 400 900; src: url("{{sans}}") format("woff2-variations"); }
 </style>
 </head>
 <body>
-  <div class="brand"><img src="{{mark}}" alt="" />baymutt</div>
-  <h1>Your agents ask for secrets. <span>You answer on one screen.</span></h1>
-  <img class="scene" src="{{scene}}" alt="" />
+<div class="og"><img src="{{scene}}" alt="" /><div><h1>Know why your agent wants it. <span class="muted">Hand it over in one paste.</span></h1><span class="btn lg primary">Create an account</span></div></div>
 </body>
 </html>

@@ -1,33 +1,71 @@
-import type { ActivityAction, Org } from '@baymutt/api';
+import type { ActivityAction } from '@baymutt/api';
 import { useAtomValue } from '@effect/atom-react';
-import type { ReactNode } from 'react';
+import { Children, isValidElement, type ReactNode } from 'react';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
-import { Code, Empty, Notice, PageHeader, Skeleton } from '../components/parts.tsx';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { Filter, NoMatch, useFilter } from '../components/ui/filter.tsx';
+import { EmptyState, List, Notice, Row, Rows, Skeleton } from '../components/ui/list.tsx';
+import { PageHead, PageTitle, RelativeTime } from '../components/ui/page.tsx';
+import { AccessWords, Address, accessText, Code, SealedName } from '../components/ui/text.tsx';
 import { activityAtom, addressOf, NAME_NOT_OPENED, type OpenedActivityEvent } from '../lib/data.ts';
-import { clockTime, dayLabel, dayOf, exactTime } from '../lib/format.ts';
+import { clockTime, dayLabel, dayOf } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-/** An entry as a row shows it: its environment by its address, or null for none. */
-type Entry = OpenedActivityEvent & { readonly address: string | null };
+/** The store returns at most this many entries. */
+const ACTIVITY_LIMIT = 100;
 
-const environment = ({ address }: Entry) => <Code>{address}</Code>;
+/** An entry with the slug of the org it happened in, which its environment's address starts with. */
+type Entry = OpenedActivityEvent & { readonly orgSlug: string };
+
+const environment = ({ orgSlug, openedEnvironmentName }: Entry) => (
+  <Address orgSlug={orgSlug} name={openedEnvironmentName} />
+);
 const secret = ({ openedSecretName, version }: Entry) => (
   <>
-    <Code>{openedSecretName ?? NAME_NOT_OPENED}</Code>
+    <SealedName name={openedSecretName} />
     {version !== null && ` (v${version})`}
   </>
 );
 
+/** The access words a grant's detail ends with, as the Worker writes them. */
+const GRANTED: Readonly<
+  Record<string, { readonly canRead: boolean; readonly canWrite: boolean } | undefined>
+> = {
+  read: { canRead: true, canWrite: false },
+  write: { canRead: false, canWrite: true },
+  'read + write': { canRead: true, canWrite: true },
+};
+
 /**
- * A grant's detail is "<key>: <read + write>": as a sentence, "<read + write> for <key>".
+ * A grant's detail is "<key>: <read + write>": as a sentence, "read and write for <key>".
  * Anything else is shown as it came.
  */
 const grantDetail = ({ detail }: Entry) => {
   const split = detail?.lastIndexOf(': ') ?? -1;
   if (detail === null || split === -1) return detail;
-  return `${detail.slice(split + 2)} for ${detail.slice(0, split)}`;
+  const granted = GRANTED[detail.slice(split + 2)];
+  if (granted === undefined) return detail;
+  return (
+    <>
+      <AccessWords {...granted} /> for {detail.slice(0, split)}
+    </>
+  );
 };
+
+/**
+ * A day as the Worker writes it into a detail (`2026-12-01`, the UTC day of the moment), in the
+ * dashboard's words: "Dec 1, 2026". Every stored row has the day alone, so no time is shown. Words
+ * that are not a day stay as they are.
+ */
+const dayWords = (words: string): string =>
+  /^\d{4}-\d{2}-\d{2}$/.test(words)
+    ? Temporal.PlainDate.from(words).toLocaleString('en', { dateStyle: 'medium' })
+    : words;
+
+/** "until 2026-12-01" as "until Dec 1, 2026". */
+const untilWords = (end: string): string =>
+  end.startsWith('until ') ? `until ${dayWords(end.slice('until '.length))}` : end;
 
 /** How a key change's detail names the end it left the key with; any other is `until <day>`. */
 const CHANGED_ENDS: Record<string, string> = { 'same end': '', 'no end': ', with no end' };
@@ -35,7 +73,7 @@ const CHANGED_ENDS: Record<string, string> = { 'same end': '', 'no end': ', with
 /** What happened, as the rest of a sentence that starts with who did it. */
 const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   'account.create': () => 'created the account',
-  'passkey.add': () => 'added a passkey that opens the vault',
+  'passkey.add': () => 'added a passkey that unlocks the vault',
   'passkey.remove': () => 'removed a passkey',
   'password.set': () => 'set a new password',
   'password.remove': () => 'removed the password',
@@ -50,7 +88,8 @@ const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
     const end = detail.slice(split + 2);
     return (
       <>
-        approved the request {detail.slice(0, split)}, {end === 'no end' ? 'with no end' : end}
+        approved the request {detail.slice(0, split)},{' '}
+        {end === 'no end' ? 'with no end' : untilWords(end)}
       </>
     );
   },
@@ -65,20 +104,30 @@ const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
     return (
       <>
         approved a change to {detail.slice(0, split)}
-        {CHANGED_ENDS[end] ?? `, ${end}`}
+        {CHANGED_ENDS[end] ?? `, ${untilWords(end)}`}
       </>
     );
   },
   'key-change.reject': ({ detail }) => <>rejected a change to {detail}</>,
   'key-change.expire': ({ detail }) => <>expired a change to {detail}, unanswered for an hour</>,
-  'credential.revoke': ({ detail }) => <>revoked {detail}</>,
+  'credential.revoke': ({ detail }) => {
+    // The nightly sweep writes "<key>: ended on <day>"; the owner's revoke writes the name alone.
+    const [name, ended] = detail?.split(': ended on ') ?? [];
+    if (ended === undefined) return <>revoked {detail}</>;
+    return (
+      <>
+        revoked {name}, which ended on {dayWords(ended)}
+      </>
+    );
+  },
   'credential.expiry': ({ detail }) => {
     const split = detail?.lastIndexOf(': ') ?? -1;
     if (detail === null || split === -1) return <>changed when {detail} expires</>;
     const when = detail.slice(split + 2);
     return (
       <>
-        set {detail.slice(0, split)} to {when === 'never' ? 'never expire' : `expire on ${when}`}
+        set {detail.slice(0, split)} to{' '}
+        {when === 'never' ? 'never expire' : `expire on ${dayWords(when)}`}
       </>
     );
   },
@@ -165,72 +214,107 @@ const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   ),
 };
 
-/** An org's entries, each environment named by its address; the account's own name none. */
-const OrgActivity = ({ org }: { readonly org: Org }) => {
-  const result = useAtomValue(activityAtom(useOwner())(org.id));
-  const events = latest(result);
-  const now = Date.now();
-  // Newest first, so each day's entries stay in the order they came.
-  const days = Map.groupBy(events ?? [], event => dayOf(event.at));
-  return (
-    <>
-      {failureMessage(result) && <Notice>{failureMessage(result)}</Notice>}
-      {events === null && !failureMessage(result) && <Skeleton rows={6} />}
-      {events?.length === 0 && (
-        <Empty title="Nothing has happened yet">
-          <p>Every load, write and grant is listed here once there is one.</p>
-        </Empty>
-      )}
-      <div className="space-y-8">
-        {[...days].map(([day, entries]) => (
-          <section key={day} aria-labelledby={`day-${day}`}>
-            <h2 id={`day-${day}`} className="mb-2 text-sm font-medium text-muted tracking-normal">
-              {dayLabel(day, now)}
-            </h2>
-            <ol className="divide-y divide-line overflow-hidden rounded-panel border border-line bg-surface">
-              {entries.map(event => (
-                <li
-                  key={event.id}
-                  className="flex flex-col gap-x-6 gap-y-0.5 px-4 py-2.5 sm:flex-row sm:items-baseline"
-                >
-                  <p className="min-w-0 flex-1">
-                    <span className="font-medium">{event.actor.name}</span>{' '}
-                    {DEEDS[event.action]({
-                      ...event,
-                      address:
-                        event.environmentName === null
-                          ? null
-                          : addressOf({ orgSlug: org.slug, name: event.openedEnvironmentName }),
-                    })}
-                  </p>
-                  <time
-                    dateTime={Temporal.Instant.fromEpochMilliseconds(event.at).toString({
-                      fractionalSecondDigits: 3,
-                    })}
-                    title={exactTime(event.at)}
-                    className="shrink-0 text-sm whitespace-nowrap text-muted sm:text-right"
-                  >
-                    {clockTime(event.at)}
-                  </time>
-                </li>
-              ))}
-            </ol>
-          </section>
-        ))}
-      </div>
-    </>
-  );
-};
+/**
+ * A sentence's words, for the filter: the text in it, the access words `AccessWords` draws from
+ * its props, then (passed beside it) its address and secret name, which `Address` and
+ * `SealedName` draw from props too.
+ */
+const textOf = (node: ReactNode): string =>
+  Children.toArray(node)
+    .map(child => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child);
+      if (isValidElement<Parameters<typeof AccessWords>[0]>(child) && child.type === AccessWords) {
+        return accessText(child.props);
+      }
+      if (!isValidElement<{ readonly children?: ReactNode }>(child)) return '';
+      return textOf(child.props.children);
+    })
+    .join('');
+
+/** One day's entries, newest first, each the actor's name, what they did and the clock time. */
+const Day = ({
+  day,
+  entries,
+  note,
+}: {
+  readonly day: number;
+  readonly entries: ReadonlyArray<{ readonly event: Entry; readonly sentence: ReactNode }>;
+  readonly note?: string;
+}) => (
+  <List title={dayLabel(day, Date.now())} note={note}>
+    <Rows>
+      {entries.map(({ event, sentence }) => (
+        <Row key={event.id} variant="row-activity">
+          <p>
+            <b>{event.actor.name}</b> {sentence}
+          </p>
+          <RelativeTime at={event.at}>{() => clockTime(event.at)}</RelativeTime>
+        </Row>
+      ))}
+    </Rows>
+  </List>
+);
 
 export const ActivityPage = () => {
   const org = useOrg();
+  useTitle('Activity', org.name);
+  const result = useAtomValue(activityAtom(useOwner())(org.id));
+  const failure = failureMessage(result);
+  const events = latest(result);
+  const filter = useFilter(events?.length ?? 0);
+  const entries = (events ?? [])
+    .map(event => {
+      const entry = { ...event, orgSlug: org.slug };
+      return { event: entry, sentence: DEEDS[event.action](entry) };
+    })
+    .filter(({ event, sentence }) =>
+      filter.matches(
+        `${event.actor.name} ${textOf(sentence)}`,
+        event.environmentName === null
+          ? ''
+          : addressOf({ orgSlug: org.slug, name: event.openedEnvironmentName }),
+        event.secretName === null ? '' : (event.openedSecretName ?? NAME_NOT_OPENED),
+      ),
+    );
+  // Newest first, so each day's entries stay in the order they came.
+  const days = [...Map.groupBy(entries, ({ event }) => dayOf(event.at))];
+  const body = (() => {
+    if (failure !== null) return <Notice tone="danger">{failure}</Notice>;
+    if (events === null) return <Skeleton />;
+    if (events.length === 0) {
+      return (
+        <EmptyState>
+          Every load, write and approval in {org.name} shows here as it happens.
+        </EmptyState>
+      );
+    }
+    if (days.length === 0) {
+      return (
+        <NoMatch filter={filter}>
+          Nothing in {org.name}’s activity matches “{filter.query.trim()}”.
+        </NoMatch>
+      );
+    }
+    return days.map(([day, dayEntries], index) => (
+      <Day
+        key={day}
+        day={day}
+        entries={dayEntries}
+        note={
+          index === days.length - 1 && events.length >= ACTIVITY_LIMIT
+            ? 'The last 100 entries.'
+            : undefined
+        }
+      />
+    ));
+  })();
   return (
     <>
-      <PageHeader
-        title="Activity"
-        lede={`Who loaded, wrote or granted what in ${org.name}, and what was done to your account, newest first. The last 100 entries.`}
+      <PageHead
+        title={<PageTitle>Activity</PageTitle>}
+        filter={filter.isShown && <Filter filter={filter} placeholder="who or what" />}
       />
-      <OrgActivity org={org} />
+      {body}
     </>
   );
 };

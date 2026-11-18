@@ -2,7 +2,6 @@
 
 import sitemap from '@astrojs/sitemap';
 import { marketing } from '@internal/marketing/integration';
-import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'astro/config';
 
 // One page, served at / by the baymutt-web Worker on the dashboard's origin
@@ -12,7 +11,4 @@ export default defineConfig({
   trailingSlash: 'never',
   build: { format: 'file' },
   integrations: [sitemap(), marketing()],
-  vite: {
-    plugins: [tailwindcss()],
-  },
 });

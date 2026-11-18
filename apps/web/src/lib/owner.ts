@@ -203,7 +203,7 @@ export const signInWithPasskey = Effect.fn('owner.signInWithPasskey')(
   withSignIn,
 );
 
-const WRONG_PASSWORD = 'That password does not open this vault.';
+const WRONG_PASSWORD = 'That password does not unlock this vault.';
 
 /** Opens the vault of the session that is already signed in. */
 const unlockWithKeys = Effect.fnUntraced(function* ({
@@ -264,7 +264,7 @@ export const recover = Effect.fn('owner.recover')(function* (recoveryKey: string
     { account, email },
     unlockedWith,
     recoveryWrappedDek,
-    'That recovery key does not open this vault.',
+    'That recovery key does not unlock this vault.',
   );
   return yield* rotateRecoveryKey(owner);
 }, faultsAsDefects);

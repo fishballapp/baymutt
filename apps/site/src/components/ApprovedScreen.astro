@@ -1,0 +1,15 @@
+---
+// The Approved outcome and, under it, the activity the approved key leaves, drawn static and inert.
+import Address from './Address.astro';
+---
+
+<div class="screen" aria-hidden="true" inert>
+  <div class="outcome"><p class="t-title">Approved</p><p>The terminal picks up its key by itself. It expires in 1 hour.</p></div>
+  <div class="screen-then">
+    <p class="t-sub">Today</p>
+    <ul class="rows">
+      <li class="row-activity"><p><b>Stripe webhooks</b> wrote <span class="code">STRIPE_WEBHOOK_SECRET</span> (v1) in <Address org="acme" path="app/production" /></p><time>2:41 PM</time></li>
+      <li class="row-activity"><p><b>Stripe webhooks</b> loaded <Address org="acme" path="app/production" /></p><time>2:38 PM</time></li>
+    </ul>
+  </div>
+</div>

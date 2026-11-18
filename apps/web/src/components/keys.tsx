@@ -1,6 +1,6 @@
-// A key as a row, wherever keys are listed: an org's Keys page, and the CLI logins under Account.
+// A key as a row on an org's Keys page, with the dialogs its `⋯` opens: access, expiry, revoke.
+
 import { useAtom, useAtomSet, useAtomValue } from '@effect/atom-react';
-import { ChatCircleDotsIcon, RobotIcon, TerminalWindowIcon } from '@phosphor-icons/react';
 import * as Atom from 'effect/reactivity/Atom';
 import { useState } from 'react';
 import {
@@ -9,139 +9,92 @@ import {
   changeAccessAtom,
   environmentsAtom,
   hasEnded,
-  isLogin,
   isVouched,
-  kindOf,
   type OpenedEnvironment,
   type OpenedServiceAccount,
   revokeServiceAccountAtom,
   setExpiryAtom,
 } from '../lib/data.ts';
-import { counted, expiryWords } from '../lib/format.ts';
+import { expiryWords } from '../lib/format.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 import { ExpiryField, expiryLabel } from './expiry.tsx';
 import { useOwner } from './gate.tsx';
-import { Code, grantWords, Row, RowActions, Rows, Tag, Time } from './parts.tsx';
-import { Button } from './ui/button.tsx';
-import { Checkbox } from './ui/checkbox.tsx';
-import { Collapsible } from './ui/collapsible.tsx';
-import { Confirm } from './ui/confirm.tsx';
-
-const KINDS = {
-  login: { Icon: TerminalWindowIcon, label: 'CLI login' },
-  'service-account': { Icon: RobotIcon, label: 'Service account' },
-  agent: { Icon: ChatCircleDotsIcon, label: 'Agent key' },
-} as const;
-
-/** A CLI login, a service account and an agent key are told apart by a glyph and a word, never by colour. */
-const KindIcon = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
-  const { Icon, label } = KINDS[kindOf(serviceAccount)];
-  return (
-    <Icon
-      role="img"
-      aria-label={label}
-      weight="regular"
-      className="mt-0.5 size-5 shrink-0 text-muted"
-    />
-  );
-};
-
-const ChangeExpiry = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
-  const [saving, save] = useAtom(setExpiryAtom, { mode: 'promiseExit' });
-  const [isOpen, setIsOpen] = useState(false);
-  const [expiresAt, setExpiresAt] = useState<number | null | undefined>(serviceAccount.expiresAt);
-  return (
-    <Confirm
-      open={isOpen}
-      onOpenChange={open => {
-        setIsOpen(open);
-        if (open) setExpiresAt(serviceAccount.expiresAt);
-      }}
-      trigger={
-        <Button size="sm" intent="subtle">
-          Expiry
-        </Button>
-      }
-      title={`When should ${serviceAccount.name} expire?`}
-      confirmLabel="Save expiry"
-      pendingLabel="Saving…"
-      isPending={saving.waiting}
-      error={failureMessage(saving)}
-      onConfirm={async () => {
-        if (expiresAt === undefined) return;
-        const exit = await save({ id: serviceAccount.id, expiresAt });
-        if (exit._tag === 'Success') setIsOpen(false);
-      }}
-    >
-      <ExpiryField
-        kept={serviceAccount.expiresAt}
-        keptLabel={at => `${at <= Date.now() ? 'Expired' : 'Unchanged'}: ${expiryLabel(at)}`}
-        onChange={setExpiresAt}
-      />
-      <p>
-        Once it expires its key stops working
-        {isLogin(serviceAccount) && ', and so do the keys it asked for'}. A later date revives it.
-        What it already read stays read.
-      </p>
-    </Confirm>
-  );
-};
+import { Confirm, Dialog } from './ui/dialog.tsx';
+import { Checkbox } from './ui/field.tsx';
+import { Filter, NoMatch, useFilter } from './ui/filter.tsx';
+import { Row, Status } from './ui/list.tsx';
+import { RowMenu } from './ui/menu.tsx';
+import { RelativeTime } from './ui/page.tsx';
+import { AccessWords, Address } from './ui/text.tsx';
 
 type Held = { readonly canRead: boolean; readonly canWrite: boolean };
 
-const heldOn = (serviceAccount: OpenedServiceAccount, environmentId: string): Held => {
-  const grant = serviceAccount.grants.find(held => held.environmentId === environmentId);
+const heldOn = (key: OpenedServiceAccount, environmentId: string): Held => {
+  const grant = key.grants.find(held => held.environmentId === environmentId);
   return { canRead: grant?.canRead ?? false, canWrite: grant?.canWrite ?? false };
 };
 
+/** The words a filter on Keys matches: the key's name, its reason and its environments' addresses. */
+export const keyWords = (key: OpenedServiceAccount): ReadonlyArray<string> => [
+  key.name,
+  key.description ?? '',
+  ...key.grants.map(grant =>
+    addressOf({ orgSlug: grant.orgSlug, name: grant.openedEnvironmentName }),
+  ),
+];
+
 /**
- * What a service account can reach, changed here under the key it already has. A read or an
- * environment it gains needs its key as its CLI login vouched for it; one made by a CLI before
- * 0.4.0 has no such voucher, so it can only lose access, and gain write on an environment it holds.
+ * What a key can reach, changed here under the key it already has: from its row on Keys, and from
+ * "Keys that reach it" on an environment. A read or an environment it
+ * gains needs its key as its CLI login vouched for it; one made by a CLI before 0.4.0 has no such
+ * voucher, so it can only lose access, and gain write on an environment it holds.
  */
-const ChangeAccess = ({
-  serviceAccount,
+export const AccessDialog = ({
+  keyToChange,
   maker,
+  isOpen,
+  onOpenChange,
 }: {
-  readonly serviceAccount: OpenedServiceAccount;
+  readonly keyToChange: OpenedServiceAccount;
   readonly maker: OpenedServiceAccount | undefined;
+  readonly isOpen: boolean;
+  readonly onOpenChange: (isOpen: boolean) => void;
 }) => {
   const owner = useOwner();
   // A key belongs to one org and holds environments of that org only.
-  const environments = (latest(useAtomValue(environmentsAtom(owner))) ?? []).filter(
-    environment => environment.orgId === serviceAccount.org?.id,
-  );
+  const environments = (latest(useAtomValue(environmentsAtom(owner))) ?? [])
+    .filter(environment => environment.orgId === keyToChange.org?.id)
+    .map(environment => ({
+      environment,
+      address: addressOf({ orgSlug: environment.orgSlug, name: environment.openedName }),
+    }))
+    .toSorted((a, b) => a.address.localeCompare(b.address));
+  const filter = useFilter(environments.length);
   const [saving, save] = useAtom(changeAccessAtom, { mode: 'promiseExit' });
-  // One atom serves every row, so an earlier row's failure is cleared when this dialog opens.
+  // One atom serves every key: another key's failure is cleared when this dialog opens.
   const forget = useAtomSet(changeAccessAtom);
-  const [isOpen, setIsOpen] = useState(false);
   const [chosen, setChosen] = useState<Readonly<Record<string, Held>>>({});
-  const vouched = isVouched(serviceAccount) && maker !== undefined;
+  const isKeyVouched = isVouched(keyToChange) && maker !== undefined;
   const accessOn = (environment: OpenedEnvironment) =>
-    chosen[environment.id] ?? heldOn(serviceAccount, environment.id);
-  const changes: ReadonlyArray<AccessChange> = environments.flatMap(environment => {
-    const before = heldOn(serviceAccount, environment.id);
+    chosen[environment.id] ?? heldOn(keyToChange, environment.id);
+  const changes: ReadonlyArray<AccessChange> = environments.flatMap(({ environment }) => {
+    const before = heldOn(keyToChange, environment.id);
     const after = accessOn(environment);
     return before.canRead === after.canRead && before.canWrite === after.canWrite
       ? []
       : [{ environmentId: environment.id, orgId: environment.orgId, ...after }];
   });
+  const shown = environments.filter(({ address }) => filter.matches(address));
   return (
-    <Confirm
+    <Dialog
       open={isOpen}
-      onOpenChange={open => {
-        setIsOpen(open);
-        if (open) {
-          setChosen({});
-          forget(Atom.Reset);
-        }
+      onOpenChange={onOpenChange}
+      onOpen={() => {
+        setChosen({});
+        filter.clear();
+        forget(Atom.Reset);
       }}
-      trigger={
-        <Button size="sm" intent="subtle">
-          Access
-        </Button>
-      }
-      title={`What can ${serviceAccount.name} reach?`}
+      title={`What can ${keyToChange.name} reach?`}
       confirmLabel="Save access"
       pendingLabel="Saving…"
       isPending={saving.waiting}
@@ -150,198 +103,218 @@ const ChangeAccess = ({
         'Something went wrong. The list behind shows what it holds now; try again.',
       )}
       onConfirm={async () => {
-        if (maker === undefined || changes.length === 0) return setIsOpen(false);
-        const exit = await save({ owner, serviceAccount, maker, changes });
-        if (exit._tag === 'Success') setIsOpen(false);
+        if (maker === undefined || changes.length === 0) return onOpenChange(false);
+        const exit = await save({ owner, serviceAccount: keyToChange, maker, changes });
+        if (exit._tag === 'Success') onOpenChange(false);
       }}
     >
-      <ul className="max-h-72 divide-y divide-line overflow-y-auto border-line border-y">
-        {environments.map(environment => {
-          const before = heldOn(serviceAccount, environment.id);
-          const after = accessOn(environment);
-          const set = (next: Held) =>
-            setChosen(current => ({ ...current, [environment.id]: next }));
-          return (
-            <li key={environment.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
-              <Code className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                {addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })}
-              </Code>
-              <Checkbox
-                label="read"
-                checked={after.canRead}
-                disabled={!vouched && !before.canRead}
-                onCheckedChange={canRead => set({ ...after, canRead })}
-              />
-              <Checkbox
-                label="write"
-                checked={after.canWrite}
-                disabled={!vouched && !before.canRead && !before.canWrite}
-                onCheckedChange={canWrite => set({ ...after, canWrite })}
-              />
-            </li>
-          );
-        })}
-      </ul>
-      {vouched ? (
-        <p>A read wraps the environment key to it. What it reads cannot be unread.</p>
+      {filter.isShown && <Filter filter={filter} placeholder="environment" />}
+      {shown.length === 0 && filter.isFiltering ? (
+        <NoMatch filter={filter}>No environment matches “{filter.query.trim()}”.</NoMatch>
+      ) : (
+        <ul className="access-list">
+          {shown.map(({ environment, address }) => {
+            const before = heldOn(keyToChange, environment.id);
+            const after = accessOn(environment);
+            const set = (next: Held) =>
+              setChosen(current => ({ ...current, [environment.id]: next }));
+            return (
+              // biome-ignore lint/a11y/useSemanticElements: a fieldset would put a legend's box in the list; the group only names the two checkboxes.
+              <li key={environment.id} role="group" aria-label={address}>
+                <Address orgSlug={environment.orgSlug} name={environment.openedName} />
+                <span className="checks">
+                  <Checkbox
+                    label="read"
+                    checked={after.canRead}
+                    disabled={!isKeyVouched && !before.canRead}
+                    onCheckedChange={canRead => set({ ...after, canRead })}
+                  />
+                  <Checkbox
+                    label="write"
+                    checked={after.canWrite}
+                    disabled={!isKeyVouched && !before.canRead && !before.canWrite}
+                    onCheckedChange={canWrite => set({ ...after, canWrite })}
+                  />
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {isKeyVouched ? (
+        <p>A read wraps the environment’s key to it. What it reads cannot be unread.</p>
       ) : (
         <p>
           A CLI before 0.4.0 made it, so nothing vouches for its key: it can lose access here, and
           gain only write on an environment it holds.
         </p>
       )}
+    </Dialog>
+  );
+};
+
+const ExpiryDialog = ({
+  keyToChange,
+  isOpen,
+  onOpenChange,
+}: {
+  readonly keyToChange: OpenedServiceAccount;
+  readonly isOpen: boolean;
+  readonly onOpenChange: (isOpen: boolean) => void;
+}) => {
+  const [saving, save] = useAtom(setExpiryAtom, { mode: 'promiseExit' });
+  // One atom serves every key: another key's failure is cleared when this dialog opens.
+  const forget = useAtomSet(setExpiryAtom);
+  const [expiresAt, setExpiresAt] = useState<number | null | undefined>(keyToChange.expiresAt);
+  return (
+    <Dialog
+      open={isOpen}
+      onOpenChange={onOpenChange}
+      onOpen={() => {
+        setExpiresAt(keyToChange.expiresAt);
+        forget(Atom.Reset);
+      }}
+      title={`When should ${keyToChange.name} expire?`}
+      confirmLabel="Save expiry"
+      pendingLabel="Saving…"
+      isPending={saving.waiting}
+      isConfirmDisabled={expiresAt === undefined}
+      error={failureMessage(saving)}
+      onConfirm={async () => {
+        if (expiresAt === undefined) return;
+        const exit = await save({ id: keyToChange.id, expiresAt });
+        if (exit._tag === 'Success') onOpenChange(false);
+      }}
+    >
+      <ExpiryField
+        kept={keyToChange.expiresAt}
+        keptLabel={at => `${at <= Date.now() ? 'Expired' : 'Unchanged'}: ${expiryLabel(at)}`}
+        onChange={setExpiresAt}
+      />
+      <p>
+        Once it expires its key stops working. A later date revives it. What it already read stays
+        read.
+      </p>
+    </Dialog>
+  );
+};
+
+const RevokeDialog = ({
+  keyToChange,
+  isOpen,
+  onOpenChange,
+}: {
+  readonly keyToChange: OpenedServiceAccount;
+  readonly isOpen: boolean;
+  readonly onOpenChange: (isOpen: boolean) => void;
+}) => {
+  const [revoking, revoke] = useAtom(revokeServiceAccountAtom, { mode: 'promiseExit' });
+  const forget = useAtomSet(revokeServiceAccountAtom);
+  return (
+    <Confirm
+      open={isOpen}
+      onOpenChange={onOpenChange}
+      onOpen={() => forget(Atom.Reset)}
+      title={`Revoke ${keyToChange.name}?`}
+      keepLabel="Keep key"
+      confirmLabel="Revoke key"
+      pendingLabel="Revoking…"
+      isPending={revoking.waiting}
+      error={failureMessage(revoking)}
+      onConfirm={async () => {
+        const exit = await revoke(keyToChange.id);
+        if (exit._tag === 'Success') onOpenChange(false);
+      }}
+    >
+      <p>Its key stops working at once.</p>
+      <p>
+        What it already read stays read. If the key may have leaked, replace those values at their
+        vendors too.
+      </p>
     </Confirm>
   );
 };
 
-/** What it can reach: the names alone for a login, the environments it holds for any other. */
-const Reach = ({ serviceAccount }: { readonly serviceAccount: OpenedServiceAccount }) => {
-  if (isLogin(serviceAccount)) {
-    return (
-      <p className="mt-2 text-sm">
-        <span className="text-muted">lists</span> the names in your orgs{' '}
-        <span className="text-muted">and opens no value</span>
-      </p>
-    );
-  }
-  if (serviceAccount.grants.length === 0) {
-    return <p className="mt-2 text-sm text-muted">No access to any environment.</p>;
-  }
-  return (
-    <ul className="mt-2 space-y-0.5 text-sm">
-      {serviceAccount.grants.map(grant => (
-        <li key={grant.environmentId}>
-          <span className="text-muted">can {grantWords(grant)}</span>{' '}
-          <Code>{addressOf({ orgSlug: grant.orgSlug, name: grant.openedEnvironmentName })}</Code>
-        </li>
-      ))}
-    </ul>
+/** When it ends, as `.status` reads it: a moment for an end, plain words for none. */
+const EndWords = ({ expiresAt }: { readonly expiresAt: number | null }) =>
+  expiresAt === null ? (
+    'never expires'
+  ) : (
+    <RelativeTime at={expiresAt}>{() => expiryWords(expiresAt, Date.now())}</RelativeTime>
   );
-};
-
-const ServiceAccountRow = ({
-  serviceAccount,
-  maker,
-  made,
-}: {
-  readonly serviceAccount: OpenedServiceAccount;
-  readonly maker: OpenedServiceAccount | undefined;
-  readonly made: number;
-}) => {
-  const [revoking, revoke] = useAtom(revokeServiceAccountAtom, { mode: 'promiseExit' });
-  const [isConfirming, setIsConfirming] = useState(false);
-  return (
-    <Row>
-      <div className="flex flex-col gap-x-4 gap-y-2 sm:flex-row sm:items-start">
-        <KindIcon serviceAccount={serviceAccount} />
-        <div className="min-w-0 flex-1">
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-medium">{serviceAccount.name}</span>
-            <Tag tone={hasEnded(serviceAccount, Date.now()) ? 'warn' : 'plain'}>
-              {expiryWords(serviceAccount.expiresAt, Date.now())}
-            </Tag>
-          </p>
-          {serviceAccount.description !== null && (
-            <p className="mt-0.5 text-sm [overflow-wrap:anywhere]">{serviceAccount.description}</p>
-          )}
-          <p className="mt-0.5 text-sm text-muted">
-            {isLogin(serviceAccount) ? 'CLI login, approved' : 'Asked for'}{' '}
-            {maker !== undefined && `by ${maker.name} `}
-            <Time at={serviceAccount.createdAt} /> ·{' '}
-            {serviceAccount.lastUsedAt === null ? (
-              'never used'
-            ) : (
-              <>
-                last used <Time at={serviceAccount.lastUsedAt} />
-              </>
-            )}
-          </p>
-          <Reach serviceAccount={serviceAccount} />
-        </div>
-        <RowActions>
-          {!isLogin(serviceAccount) && (
-            <ChangeAccess serviceAccount={serviceAccount} maker={maker} />
-          )}
-          <ChangeExpiry serviceAccount={serviceAccount} />
-          <Confirm
-            open={isConfirming}
-            onOpenChange={setIsConfirming}
-            trigger={
-              <Button size="sm" intent="subtleDanger">
-                Revoke
-              </Button>
-            }
-            title={`Revoke ${serviceAccount.name}?`}
-            keepLabel="Keep key"
-            confirmLabel="Revoke key"
-            pendingLabel="Revoking…"
-            isDangerous
-            isPending={revoking.waiting}
-            error={failureMessage(revoking)}
-            onConfirm={async () => {
-              const exit = await revoke(serviceAccount.id);
-              if (exit._tag === 'Success') setIsConfirming(false);
-            }}
-          >
-            <p>
-              Its key stops working at once
-              {made > 0 && `, and so do the ${counted(made, 'key')} it asked for`}.
-            </p>
-            <p>
-              What it already read stays read. If the key may have leaked, replace those values at
-              their vendors too.
-            </p>
-          </Confirm>
-        </RowActions>
-      </div>
-    </Row>
-  );
-};
 
 /**
- * Keys as rows, newest first. `all` is every key of the account, which names each key's maker and
- * counts the keys a CLI login asked for.
+ * A service account or agent key: its name and quoted reason, what it reaches, when it ends and
+ * was last used, and its `⋯` with Access, Expiry and Revoke.
  */
-export const KeyRows = ({
-  keys,
-  all,
+export const KeyRow = ({
+  keyToShow,
+  maker,
 }: {
-  readonly keys: ReadonlyArray<OpenedServiceAccount>;
-  readonly all: ReadonlyArray<OpenedServiceAccount>;
-}) => (
-  <Rows>
-    {keys
-      .toSorted((a, b) => b.createdAt - a.createdAt)
-      .map(serviceAccount => (
-        <ServiceAccountRow
-          key={serviceAccount.id}
-          serviceAccount={serviceAccount}
-          maker={all.find(({ id }) => id === serviceAccount.parentId)}
-          made={all.filter(({ parentId }) => parentId === serviceAccount.id).length}
-        />
-      ))}
-  </Rows>
-);
-
-/** Keys that have ended stay out of sight until asked for: they are listed until the nightly sweep revokes them. */
-export const EndedKeys = ({
-  keys,
-  all,
-}: {
-  readonly keys: ReadonlyArray<OpenedServiceAccount>;
-  readonly all: ReadonlyArray<OpenedServiceAccount>;
+  readonly keyToShow: OpenedServiceAccount;
+  /** The CLI login that asked for it, which vouched for its key. */
+  readonly maker: OpenedServiceAccount | undefined;
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const ended = keys.filter(key => hasEnded(key, Date.now()));
-  if (ended.length === 0) return null;
+  const [dialog, setDialog] = useState<'access' | 'expiry' | 'revoke' | null>(null);
+  const toggle = (which: NonNullable<typeof dialog>) => (isOpen: boolean) =>
+    setDialog(isOpen ? which : null);
   return (
-    <Collapsible.Root open={isOpen} onOpenChange={setIsOpen} className="mt-8">
-      <Collapsible.Trigger>
-        {isOpen ? 'Hide ended keys' : `Show ${counted(ended.length, 'ended key')}`}
-      </Collapsible.Trigger>
-      <Collapsible.Panel className="mt-3">
-        <KeyRows keys={ended} all={all} />
-      </Collapsible.Panel>
-    </Collapsible.Root>
+    <Row variant="row-key">
+      <div>
+        <b>{keyToShow.name}</b>
+        {keyToShow.description !== null && (
+          <span className="cell-sub">“{keyToShow.description}”</span>
+        )}
+      </div>
+      <ul className="reach">
+        {keyToShow.grants.length === 0 ? (
+          <li className="t-small muted">No access to any environment.</li>
+        ) : (
+          keyToShow.grants.map(grant => (
+            <li key={grant.environmentId}>
+              <Address orgSlug={grant.orgSlug} name={grant.openedEnvironmentName} />
+              <span className="muted">
+                <AccessWords canRead={grant.canRead} canWrite={grant.canWrite} />
+              </span>
+            </li>
+          ))
+        )}
+      </ul>
+      <Status
+        status={<EndWords expiresAt={keyToShow.expiresAt} />}
+        isWarn={hasEnded(keyToShow, Date.now())}
+        fact={
+          keyToShow.lastUsedAt === null ? (
+            'never used'
+          ) : (
+            <RelativeTime at={keyToShow.lastUsedAt}>{ago => `used ${ago}`}</RelativeTime>
+          )
+        }
+      />
+      <RowMenu
+        label={`${keyToShow.name}: access, expiry, revoke`}
+        items={[
+          { label: 'Access', onClick: () => setDialog('access') },
+          { label: 'Expiry', onClick: () => setDialog('expiry') },
+          { label: 'Revoke', onClick: () => setDialog('revoke'), isDanger: true },
+        ]}
+      />
+      <AccessDialog
+        keyToChange={keyToShow}
+        maker={maker}
+        isOpen={dialog === 'access'}
+        onOpenChange={toggle('access')}
+      />
+      <ExpiryDialog
+        keyToChange={keyToShow}
+        isOpen={dialog === 'expiry'}
+        onOpenChange={toggle('expiry')}
+      />
+      <RevokeDialog
+        keyToChange={keyToShow}
+        isOpen={dialog === 'revoke'}
+        onOpenChange={toggle('revoke')}
+      />
+    </Row>
   );
 };

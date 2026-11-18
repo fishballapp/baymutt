@@ -42,7 +42,7 @@ export const AccountSchema = Schema.Struct({
 }).annotate({ identifier: 'Account' });
 export type Account = typeof AccountSchema.Type;
 
-/** Removing it would leave nothing that opens the vault. */
+/** Removing it would leave nothing that unlocks the vault. */
 export class LastUnlockError extends Schema.TaggedError<LastUnlockError>()(
   'LastUnlockError',
   { message: ErrorMessageSchema },

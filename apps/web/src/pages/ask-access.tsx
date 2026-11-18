@@ -1,238 +1,186 @@
 // The page `baymutt ask access` links to: one request, approved or rejected here. What the terminal
 // claims (the reason, the command) is shown as its words; the owner changes only when the key ends.
-import type { Request } from '@baymutt/api';
 import { useAtom, useAtomValue } from '@effect/atom-react';
-import { Link } from '@tanstack/react-router';
-import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { type ReactNode, useState } from 'react';
+import {
+  askState,
+  expiresAtOf,
+  type Lifetime,
+  lifetimeOf,
+  lifetimeOptions,
+  SeeKeys,
+} from '../components/decision/ask.tsx';
+import { DecisionColumn, DecisionLoading, Outcome } from '../components/decision/frame.tsx';
+import { Answer, ExactTime, Grant, Vouch } from '../components/decision/parts.tsx';
 import { useOwner } from '../components/gate.tsx';
-import { useOrg } from '../components/orgs.tsx';
+import { useOrg } from '../components/org-scope.tsx';
+import { useTitle } from '../components/shell.tsx';
+import { Button } from '../components/ui/button.tsx';
+import { Select } from '../components/ui/select.tsx';
+import { AccessWords, Code } from '../components/ui/text.tsx';
 import {
-  Claim,
-  Code,
-  grantWords,
-  Notice,
-  Row,
-  Rows,
-  Skeleton,
-  Time,
-} from '../components/parts.tsx';
-import { Button, buttonStyles } from '../components/ui/button.tsx';
-import { SelectField } from '../components/ui/field.tsx';
-import {
-  addressOf,
   approveRequestAtom,
   type OpenedRequest,
   rejectRequestAtom,
   requestAtom,
 } from '../lib/data.ts';
-import { durationWords, exactTime, expiryWords } from '../lib/format.ts';
-import { failureMessage, latest } from '../lib/result.ts';
+import { expiryWords } from '../lib/format.ts';
+import { failureMessage } from '../lib/result.ts';
 
-const MINUTE_MS = 60_000;
-
-/** The ends the owner may pick, besides what was asked for and no end. */
-const LIFETIMES = [15 * MINUTE_MS, 60 * MINUTE_MS, 24 * 60 * MINUTE_MS] as const;
-
-/** A lifetime in milliseconds as a select's value, or `never`. */
-type Choice = 'never' | `${number}`;
-
-const choiceOf = (lifetime: number | null): Choice => (lifetime === null ? 'never' : `${lifetime}`);
-
-/** A page that is not the decision: an answered or missing request, or the answer just given. */
-const Outcome = ({ title, children }: { readonly title: string; readonly children: ReactNode }) => (
-  <div className="max-w-[34rem] space-y-4">
-    <h1 className="text-xl">{title}</h1>
-    {children}
-    <Link to="/orgs/$slug/keys" params={{ slug: useOrg().slug }} className={buttonStyles()}>
-      See keys
-    </Link>
-  </div>
-);
-
-/**
- * The answer just given on this page, if any. The page reads it, not the decision: once given,
- * the request reads as answered and the decision is gone.
- */
-const justAnswered = ({
-  request,
-  approving,
-  rejecting,
-}: {
-  readonly request: OpenedRequest;
-  readonly approving: AsyncResult.AsyncResult<Request, unknown>;
-  readonly rejecting: AsyncResult.AsyncResult<Request, unknown>;
-}): ReactNode => {
-  if (AsyncResult.isSuccess(approving) && approving.value.id === request.id) {
-    return (
-      <Outcome title="Approved">
-        <p className="text-muted">
-          The terminal picks up its key by itself. It{' '}
-          {expiryWords(approving.value.expiresAt, Date.now())}.
-        </p>
-      </Outcome>
-    );
-  }
-  if (AsyncResult.isSuccess(rejecting) && rejecting.value.id === request.id) {
-    return (
-      <Outcome title="Rejected">
-        <p className="text-muted">Its key holds nothing and no longer works.</p>
-      </Outcome>
-    );
-  }
-  return null;
+/** "read and write", "read" or "write": everything the request asks for, across its environments. */
+const askedWords = (items: OpenedRequest['items']): string => {
+  const canRead = items.some(item => item.canRead);
+  const canWrite = items.some(item => item.canWrite);
+  if (canRead && canWrite) return 'read and write';
+  return canWrite ? 'write' : 'read';
 };
 
 const Decision = ({ request }: { readonly request: OpenedRequest }) => {
   const owner = useOwner();
   const [approving, approve] = useAtom(approveRequestAtom(request.id));
   const [rejecting, reject] = useAtom(rejectRequestAtom(request.id));
-  const isUnopened = request.items.some(item => item.openedEnvironmentName === null);
-  const [choice, setChoice] = useState<Choice>(choiceOf(request.lifetime));
+  const asked = request.lifetime === null ? 'never' : lifetimeOf(request.lifetime);
+  const [lifetime, setLifetime] = useState<Lifetime>(asked);
+  const isBlocked = request.items.some(item => item.openedEnvironmentName === null);
   const isBusy = approving.waiting || rejecting.waiting;
-  const choices: ReadonlyArray<Choice> = [
-    ...new Set<Choice>([
-      ...LIFETIMES.map(choiceOf),
-      ...(request.lifetime === null ? [] : [choiceOf(request.lifetime)]),
-    ]),
-  ]
-    .toSorted((a, b) => Number(a) - Number(b))
-    .concat('never');
-
   return (
-    <div className="max-w-[34rem] space-y-5">
-      <div>
-        <h1 className="text-xl">Approve this request?</h1>
-        <p className="mt-2 text-muted">
-          The CLI login <span className="font-medium text-foreground">{request.maker.name}</span>{' '}
-          asks for a key it calls “{request.name}”, <Time at={request.createdAt} />.
-        </p>
-      </div>
-      <Claim label="Why">
-        <p>“{request.reason}”</p>
-      </Claim>
-      <div>
-        <h2 className="mb-2 text-md">What the key reaches</h2>
-        <Rows>
+    <DecisionColumn>
+      <p className="ask">
+        <b>{request.maker.name}</b> asks for a key it calls <b>{request.name}</b>
+      </p>
+      <h1 className="claim">“{request.reason}”</h1>
+      <div className="grants">
+        <ul>
           {request.items.map(item => (
-            <Row key={item.environmentId} className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <Code className="min-w-0 flex-1 font-medium">
-                {addressOf({ orgSlug: item.orgSlug, name: item.openedEnvironmentName })}
-              </Code>
-              <span className="text-sm">{grantWords(item)}</span>
-            </Row>
+            <Grant key={item.environmentId} item={item}>
+              <AccessWords canRead={item.canRead} canWrite={item.canWrite} />
+            </Grant>
           ))}
-        </Rows>
+        </ul>
       </div>
-      {request.command !== null && (
-        <Claim label="Its key is piped into">
-          <Code className="block rounded-control border border-line bg-sunken px-3 py-1.5">
-            {request.command}
-          </Code>
-        </Claim>
-      )}
-      <p>
-        {request.command === null
-          ? 'Its key stays in a file on that CLI login’s computer, so approving makes an agent key.'
-          : 'Its key goes into that command, so approving makes a service account.'}
+      <p className="makes">
+        {request.command === null ? (
+          <>Approving makes an agent key, kept in a file on {request.maker.name}.</>
+        ) : (
+          <>
+            Approving makes a service account. Its key goes into <Code>{request.command}</Code> and
+            is never shown.
+          </>
+        )}
       </p>
-      <div className="w-full sm:w-96">
-        <SelectField
-          label="Ends"
-          value={choice}
-          onValueChange={setChoice}
-          options={choices.map(option => ({
-            value: option,
-            label: [
-              option === 'never' ? 'Never' : `${durationWords(Number(option))} after approval`,
-              option === choiceOf(request.lifetime) && '(your agent’s pick)',
-            ]
-              .filter(Boolean)
-              .join(' '),
-          }))}
-        />
-      </div>
-      <p>
-        What its key reads stays read after it ends or you revoke it.
-        {choice === 'never' && ' With no end, it works until you revoke it.'}
-      </p>
-      {isUnopened && (
-        <Notice tone="warn">
+      <Select
+        label="Ends"
+        labelPlacement="beside"
+        value={lifetime}
+        onValueChange={setLifetime}
+        options={lifetimeOptions(asked)}
+      />
+      {isBlocked && (
+        <p className="warnline">
           An environment’s name does not open with your vault, so this request cannot be approved.
-        </Notice>
+        </p>
       )}
-      {(failureMessage(approving) ?? failureMessage(rejecting)) && (
-        <Notice>{failureMessage(approving) ?? failureMessage(rejecting)}</Notice>
-      )}
-      <div className="flex flex-wrap gap-2">
+      <Answer error={failureMessage(approving) ?? failureMessage(rejecting)}>
         <Button
-          intent="primary"
-          disabled={isBusy || isUnopened}
-          onClick={() =>
-            approve({
-              owner,
-              request,
-              expiresAt: choice === 'never' ? null : Date.now() + Number(choice),
-            })
-          }
+          size="lg"
+          disabled={isBusy}
+          isPending={rejecting.waiting}
+          pendingLabel="Rejecting…"
+          onClick={() => reject(request.id)}
         >
-          {approving.waiting ? 'Approving…' : 'Approve'}
+          Reject
         </Button>
-        <Button disabled={isBusy} onClick={() => reject(request.id)}>
-          {rejecting.waiting ? 'Rejecting…' : 'Reject'}
+        <Button
+          size="lg"
+          kind="primary"
+          disabled={isBusy || isBlocked}
+          isPending={approving.waiting}
+          pendingLabel="Approving…"
+          onClick={() => approve({ owner, request, expiresAt: expiresAtOf(lifetime, Date.now()) })}
+        >
+          Approve {askedWords(request.items)}
         </Button>
-      </div>
-    </div>
+      </Answer>
+      {!isBlocked && (
+        <p className="then">
+          What it reads stays read after the key ends or you revoke it.
+          {lifetime === 'never' && ' With no end, it works until you revoke it.'}
+        </p>
+      )}
+      <Vouch askedAt={request.createdAt} maker={request.maker} />
+    </DecisionColumn>
   );
 };
 
-const OUTCOME_TITLES = {
-  approved: 'Already approved',
-  rejected: 'Already rejected',
-  expired: 'This request expired',
+const ANSWERED_EARLIER = {
+  approved: { title: 'Already approved', words: 'it was approved' },
+  rejected: { title: 'Already rejected', words: 'it was rejected' },
 } as const;
 
 export const AskAccessPage = ({ id }: { readonly id: string }) => {
-  const result = useAtomValue(requestAtom(useOwner())(id));
+  const org = useOrg();
+  const state = askState(
+    useAtomValue(requestAtom(useOwner())(id)),
+    ({ org: { id: orgId } }) => orgId === org.id,
+  );
   const approving = useAtomValue(approveRequestAtom(id));
   const rejecting = useAtomValue(rejectRequestAtom(id));
-  const org = useOrg();
-  const found = latest(result);
-  // Only an ask of the org the address names: one of another org is not at this link.
-  const request = found !== null && found.org.id === org.id ? found : null;
-  if (request === null) {
-    const isMissing =
-      found !== null ||
-      (AsyncResult.isFailure(result) &&
-        Option.match(AsyncResult.error(result), {
-          onNone: () => false,
-          onSome: error => error._tag === 'NotFoundError',
-        }));
-    if (isMissing) {
-      return (
-        <Outcome title="No request at this link">
-          <p className="text-muted">
-            Open the whole link <Code>baymutt ask access</Code> printed.
-          </p>
+  const screen = ((): { readonly title: string | null; readonly body: ReactNode } => {
+    const outcome = (title: string, sentence: ReactNode, tone?: 'danger') => ({
+      title,
+      body: (
+        <Outcome title={title} tone={tone} action={<SeeKeys />}>
+          {sentence}
         </Outcome>
+      ),
+    });
+    if (state.kind === 'loading') return { title: null, body: <DecisionLoading /> };
+    if (state.kind === 'failed') {
+      return outcome('Couldn’t load this request', state.message, 'danger');
+    }
+    if (state.kind === 'missing') {
+      return outcome(
+        'No request at this link',
+        <>
+          Open the whole link <Code>baymutt ask access</Code> printed.
+        </>,
       );
     }
-    const failure = failureMessage(result);
-    return failure === null ? <Skeleton rows={4} /> : <Notice>{failure}</Notice>;
-  }
-  const answered = justAnswered({ request, approving, rejecting });
-  if (answered !== null) return answered;
-  if (request.status === 'pending') return <Decision request={request} />;
-  return (
-    <Outcome title={OUTCOME_TITLES[request.status]}>
-      <p className="text-muted">
-        {request.maker.name} asked for it, and{' '}
-        {request.status === 'expired'
-          ? 'nobody answered within an hour'
-          : `it was ${request.status}`}
-        {request.resolvedAt !== null && `: ${exactTime(request.resolvedAt)}`}.
-      </p>
-    </Outcome>
-  );
+    const request = state.ask;
+    // The answer just given: once given, the request reads as answered and the decision is gone.
+    if (AsyncResult.isSuccess(approving)) {
+      return outcome(
+        'Approved',
+        `The terminal picks up its key by itself. It ${expiryWords(approving.value.expiresAt, Date.now())}.`,
+      );
+    }
+    if (AsyncResult.isSuccess(rejecting)) {
+      return outcome('Rejected', 'Its key holds nothing and no longer works.');
+    }
+    if (request.status === 'pending') {
+      return { title: `Approve ${request.name}?`, body: <Decision request={request} /> };
+    }
+    if (request.status === 'expired') {
+      return outcome(
+        'This request expired',
+        `${request.maker.name} asked for it, and nobody answered within an hour.`,
+      );
+    }
+    const { title, words } = ANSWERED_EARLIER[request.status];
+    return outcome(
+      title,
+      <>
+        {request.maker.name} asked for it, and {words}
+        {request.resolvedAt !== null && (
+          <>
+            : <ExactTime at={request.resolvedAt} />
+          </>
+        )}
+        .
+      </>,
+    );
+  })();
+  useTitle(screen.title, org.name);
+  return screen.body;
 };

@@ -1,0 +1,8 @@
+---
+// An environment's address as the dashboard's `Address` draws it: the org dimmed, then the rest.
+type Props = { org: string; path: string };
+
+const { org, path } = Astro.props;
+---
+
+<span class="code addr"><span class="org">{org}/</span>{path}</span>

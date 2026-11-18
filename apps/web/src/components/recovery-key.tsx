@@ -1,17 +1,13 @@
-import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
 import { useState } from 'react';
-import { useCopy } from '../lib/clipboard.ts';
-import { Code, Notice } from './parts.tsx';
+import { useTitle } from './shell.tsx';
 import { Button } from './ui/button.tsx';
-import { Checkbox } from './ui/checkbox.tsx';
+import { useCopied } from './ui/command-line.tsx';
+import { Checkbox } from './ui/field.tsx';
 
-const COPIED_NOTE = {
-  idle: '',
-  copied: 'Copied. Paste it somewhere safe, then clear your clipboard.',
-  failed: 'This browser would not copy it. Select the key and copy it yourself.',
-} as const;
-
-/** Shown once. The owner cannot go on until they say they have kept it. */
+/**
+ * Shown once, as an entry page's parts (its `h1` first). The owner cannot go on until they say
+ * they have kept it. Copying is a step they must take, so it is a word, and its result a sentence.
+ */
 export const RecoveryKey = ({
   recoveryKey,
   onDone,
@@ -19,51 +15,45 @@ export const RecoveryKey = ({
   readonly recoveryKey: string;
   readonly onDone: () => void;
 }) => {
+  useTitle('Keep your recovery key');
   const [isKept, setIsKept] = useState(false);
-  const [copied, copy] = useCopy(recoveryKey);
+  const [isTaken, setIsTaken] = useState<boolean | null>(null);
+  const { copy } = useCopied();
   return (
-    <div className="max-w-[34rem]">
-      <h1 className="text-xl leading-tight">Keep your recovery key</h1>
-      <p className="mt-2 text-muted">
-        If you lose every passkey, this key is the only way back into your vault. baymutt cannot
-        read your secrets, so it cannot reset them for you. Keep it in a password manager or on
-        paper, away from this browser.
+    <>
+      <h1>Keep your recovery key</h1>
+      <p className="entry-lede">
+        If you lose every passkey and your password, this key is the only way back into your vault.
+        baymutt cannot read your secrets, so it cannot reset them for you. Keep it in a password
+        manager or on paper, away from this browser.
       </p>
-      <div className="mt-6 rounded-panel border border-line bg-sunken">
-        <Code className="block px-4 pt-4 pb-3 text-md leading-8 tracking-wide select-all">
-          {recoveryKey}
-        </Code>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-line border-t px-2 py-2">
-          <Button size="sm" intent="subtle" onClick={copy}>
-            {copied === 'copied' ? (
-              <CheckIcon aria-hidden="true" className="size-4 text-accent" />
-            ) : (
-              <CopyIcon aria-hidden="true" className="size-4 text-muted" />
-            )}
+      <p className="entry-key code-big">{recoveryKey}</p>
+      <div className="entry-body">
+        <p>
+          <Button kind="quiet" onClick={async () => setIsTaken(await copy(recoveryKey))}>
             Copy key
           </Button>
-          <span aria-live="polite" className="text-sm text-muted">
-            {COPIED_NOTE[copied]}
-          </span>
-        </div>
+        </p>
+        {isTaken === true && (
+          <p role="status" className="t-small muted">
+            Copied. Paste it somewhere safe, then clear your clipboard.
+          </p>
+        )}
+        {isTaken === false && (
+          <p role="alert" className="error">
+            This browser would not copy it. Select the key and copy it yourself.
+          </p>
+        )}
+        <p className="warn">It is shown once. Leaving this page without it cannot be undone.</p>
+        <Checkbox
+          label="I have kept the recovery key somewhere I can find it without this browser."
+          checked={isKept}
+          onCheckedChange={setIsKept}
+        />
+        <Button kind="primary" size="lg" isWide disabled={!isKept} onClick={onDone}>
+          Continue
+        </Button>
       </div>
-      <Notice tone="warn" className="mt-4">
-        It is shown once. Leaving this page without it cannot be undone.
-      </Notice>
-      <Checkbox
-        label="I have kept the recovery key somewhere I can find it without this browser."
-        className="mt-6 items-start gap-2.5 text-base [&>button]:mt-0.5"
-        checked={isKept}
-        onCheckedChange={setIsKept}
-      />
-      <Button
-        intent="primary"
-        className="mt-5 w-full sm:w-auto"
-        disabled={!isKept}
-        onClick={onDone}
-      >
-        Continue
-      </Button>
-    </div>
+    </>
   );
 };
