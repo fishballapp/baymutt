@@ -2,6 +2,7 @@
   "name": "@internal/effect-worker",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "What every Effect Worker shares: the JSON error contract, which requests a session may sign, isolated sweeps, KV records, R2 presigning, and (under /testing) the node:sqlite D1 and binding fakes its tests run on.",
   "main": "./src/index.ts",
