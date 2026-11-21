@@ -197,7 +197,7 @@ describe('a CLI login', () => {
     const bundle = await call(w, 'GET', `/environments/${environmentId}/bundle`, login.headers);
     expect(bundle).toMatchObject(askToRead);
     expect(bundle.body).toMatchObject({
-      message: expect.stringContaining('reads org-user-1/<environment> in a plan'),
+      message: expect.stringContaining('reads org-user-1/<environment> in an ask'),
     });
     const written = await write(environmentId, 'API_KEY', 2, login.headers);
     expect(written).toMatchObject(askToWrite);
@@ -255,7 +255,7 @@ describe('a CLI login', () => {
     expect(await call(w, 'GET', '/environments/legacy-env/bundle', login.headers)).toMatchObject({
       status: 403,
       body: {
-        message: expect.stringContaining('reads legacy/app/production in a plan'),
+        message: expect.stringContaining('reads legacy/app/production in an ask'),
       },
     });
   });
@@ -396,7 +396,7 @@ describe('what a caller is shown', () => {
     const laptop = await pair('laptop');
     const other = await pair('other');
     const ci = await serviceAccount([environmentId], { maker: laptop });
-    // A key whose plan step still waits is listed with its plan, not as a key.
+    // A key whose ask step still waits is listed with its ask, not as a key.
     await ask(laptop, [environmentId]);
     const listed = async (headers: Record<string, string>) =>
       (
@@ -656,7 +656,7 @@ describe('the audit log', () => {
       'secret.write',
       'step.approve',
       'grant.set',
-      'plan.create',
+      'ask.create',
       'credential.pair',
       'environment.create',
       'names.seal',

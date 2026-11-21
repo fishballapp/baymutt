@@ -63,11 +63,11 @@ export const KeysPage = () => {
         {active.length === 0 && !filter.isFiltering && (
           <EmptyState
             example={{
-              lead: 'An agent asks for one in a plan’s `access` step:',
-              commands: ['baymutt ask plan.json'],
+              lead: 'An agent asks for one with an `access` step:',
+              commands: ['baymutt ask ask.json'],
             }}
           >
-            {org.name}’s keys show here once you approve an agent’s plan.
+            {org.name}’s keys show here once you approve an agent’s ask.
           </EmptyState>
         )}
         {ended.length > 0 && (

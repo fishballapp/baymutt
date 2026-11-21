@@ -56,11 +56,11 @@ export const findEnvironment = (
 
 /** What to run to get at an environment: a CLI login asks the owner for it. */
 export const askFor = (address: string) =>
-  `a plan with an \`access\` step that reads ${address}: \`baymutt ask\` (see \`baymutt ask --help\`)`;
+  `an ask with an \`access\` step that reads ${address}: \`baymutt ask\` (see \`baymutt ask --help\`)`;
 
 /** How the CLI login that asked for key `id` asks to add `address` to it, on the same key. */
 export const changeFor = (id: string, address: string) =>
-  `a plan with a \`change\` step for key ${id} that reads ${address}, sent by the CLI login with \`baymutt ask\` (without BAYMUTT_KEY_FILE)`;
+  `an ask with a \`change\` step for key ${id} that reads ${address}, sent by the CLI login with \`baymutt ask\` (without BAYMUTT_KEY_FILE)`;
 
 /** An environment by its address (or id), among `environments`; refused with what to do next. */
 export const resolveIn = Effect.fn('environments.resolveIn')(function* (
@@ -73,7 +73,7 @@ export const resolveIn = Effect.fn('environments.resolveIn')(function* (
   const hint = ' An environment is named with its org first: `<org>/<name>`.';
   return yield* usage(
     isLogin
-      ? `None of your orgs has an environment ${address}.${hint} See them with \`baymutt env list\`. To ask the owner for a new one, send a plan with an \`environments\` step that creates it: \`baymutt ask\`.`
+      ? `None of your orgs has an environment ${address}.${hint} See them with \`baymutt env list\`. To ask the owner for a new one, send an ask with an \`environments\` step that creates it: \`baymutt ask\`.`
       : `No environment ${address} is granted to this key.${hint} See what is with \`baymutt env list\`. The CLI login that asked for it asks to add one with ${changeFor(key.credentialId, address)}.`,
     'notFound',
   );
@@ -87,7 +87,7 @@ export const resolveEnvironment = Effect.fn('environments.resolve')(function* (a
 
 /**
  * The environment's public key, as someone this key trusts vouched for it: the owner who approved
- * its plan's step (whose key it learns from the login that asked), or a login that made it before
+ * its ask's step (whose key it learns from the login that asked), or a login that made it before
  * 0.8.
  * Every value is sealed to this key and every wrap is checked against it. The key the store lists
  * beside the environment is only compared with it.
@@ -126,7 +126,7 @@ export const trustedKey = Effect.fn('environments.trustedKey')(function* (
         binding,
       }),
     );
-  // The owner's proof, which approving a plan's step writes: the login that asked vouched for the
+  // The owner's proof, which approving an ask's step writes: the login that asked vouched for the
   // account's key.
   const publicKey = yield* vouchedBy(serviceAccount.vouchers).pipe(
     Effect.catchTag('IntegrityError', error =>

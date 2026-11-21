@@ -5,13 +5,13 @@ import type * as Schema from 'effect/Schema';
 import * as SchemaParser from 'effect/SchemaParser';
 import * as SchemaRepresentation from 'effect/SchemaRepresentation';
 import { describe, expect, it } from 'vitest';
-import { EXAMPLE_PLAN } from './commands/ask.ts';
-import { decodePlanDocument } from './plan-document.ts';
-import { PLAN_JSON_SCHEMA } from './plan-schema.ts';
+import { decodeAskDocument } from './ask-document.ts';
+import { ASK_JSON_SCHEMA } from './ask-schema.ts';
+import { EXAMPLE_ASK } from './commands/ask.ts';
 
 // No JSON Schema validator is a dependency anywhere in the monorepo, so the printed schema is read
 // back by Effect's own importer (patterns applied, excess properties refused) and compared with
-// `decodePlanDocument`. That catches a schema that drifts from what `ask` takes, and the structure
+// `decodeAskDocument`. That catches a schema that drifts from what `ask` takes, and the structure
 // tests below pin what a reader of the schema relies on.
 type Node = {
   description?: string;
@@ -28,7 +28,7 @@ type Node = {
 };
 // The printed text, read as a reader reads it.
 const printed: Node & { $schema: string; $defs: Record<string, Node> } = JSON.parse(
-  JSON.stringify(PLAN_JSON_SCHEMA),
+  JSON.stringify(ASK_JSON_SCHEMA),
 );
 const { $schema, $defs, ...root } = printed;
 // The importer types its result as needing unknown services; one made of checks needs none.
@@ -36,9 +36,9 @@ const imported = SchemaRepresentation.fromJsonSchemaDocument(
   { dialect: 'draft-2020-12', schema: root, definitions: $defs },
   { patterns: 'apply' },
 ) as unknown as Schema.ConstraintDecoder<unknown>;
-const isAccepted = (plan: unknown) =>
-  Result.isSuccess(SchemaParser.decodeUnknownResult(imported)(plan, { onExcessProperty: 'error' }));
-const isTaken = (plan: unknown) => Result.isSuccess(decodePlanDocument(JSON.stringify(plan)));
+const isAccepted = (ask: unknown) =>
+  Result.isSuccess(SchemaParser.decodeUnknownResult(imported)(ask, { onExcessProperty: 'error' }));
+const isTaken = (ask: unknown) => Result.isSuccess(decodeAskDocument(JSON.stringify(ask)));
 
 const slot = { environment: 'acme/shop/preview', name: 'A' };
 const one = (step: unknown) => ({ reason: 'rotate a token', steps: [step] });
@@ -46,7 +46,7 @@ const secrets = (item: unknown) => one({ type: 'secrets', items: [item] });
 const key = '0b0e7a52-6f3c-4c58-9a51-3f0f7a0c1d11';
 
 const shapeRefusals: ReadonlyArray<readonly [string, unknown]> = [
-  ['an unknown field on the plan', { ...one({ type: 'access', read: ['acme/x'] }), org: 'acme' }],
+  ['an unknown field on the ask', { ...one({ type: 'access', read: ['acme/x'] }), org: 'acme' }],
   ['an unknown field on a step', one({ type: 'access', read: ['acme/x'], expiry: '1h' })],
   ['a missing field', one({ type: 'access' })],
   ['a missing reason', { steps: [{ type: 'access', read: ['acme/x'] }] }],
@@ -79,11 +79,11 @@ const shapeRefusals: ReadonlyArray<readonly [string, unknown]> = [
   ],
 ];
 
-describe('the plan JSON Schema', () => {
-  it('takes the plan `ask --help` shows, as `ask` does', () => {
-    const plan: unknown = JSON.parse(EXAMPLE_PLAN);
-    expect(isTaken(plan)).toBe(true);
-    expect(isAccepted(plan)).toBe(true);
+describe('the ask JSON Schema', () => {
+  it('takes the ask `ask --help` shows, as `ask` does', () => {
+    const ask: unknown = JSON.parse(EXAMPLE_ASK);
+    expect(isTaken(ask)).toBe(true);
+    expect(isAccepted(ask)).toBe(true);
   });
 
   it.each([
@@ -97,14 +97,14 @@ describe('the plan JSON Schema', () => {
       secrets({ op: 'set', ...slot, from: { dotenv: '.env', key: 'B' } }),
     ],
     ['a paste with a hint', secrets({ op: 'paste', ...slot, hint: 'the dashboard' })],
-  ])('takes %s, as `ask` does', (_, plan) => {
-    expect(isTaken(plan)).toBe(true);
-    expect(isAccepted(plan)).toBe(true);
+  ])('takes %s, as `ask` does', (_, ask) => {
+    expect(isTaken(ask)).toBe(true);
+    expect(isAccepted(ask)).toBe(true);
   });
 
-  it.each(shapeRefusals)('refuses %s, as `ask` does', (_, plan) => {
-    expect(isTaken(plan)).toBe(false);
-    expect(isAccepted(plan)).toBe(false);
+  it.each(shapeRefusals)('refuses %s, as `ask` does', (_, ask) => {
+    expect(isTaken(ask)).toBe(false);
+    expect(isAccepted(ask)).toBe(false);
   });
 
   it('leaves to its description what a schema cannot say', () => {
@@ -125,9 +125,9 @@ describe('the plan JSON Schema', () => {
     const twoOrgs = one({ type: 'access', read: ['acme/x', 'globex/y'] });
     const nothingAsked = one({ type: 'change', key });
     const twice = one({ type: 'access', read: ['acme/x', 'acme/x'] });
-    for (const plan of [twoOrgs, nothingAsked, twice]) {
-      expect(isTaken(plan)).toBe(false);
-      expect(isAccepted(plan)).toBe(true);
+    for (const ask of [twoOrgs, nothingAsked, twice]) {
+      expect(isTaken(ask)).toBe(false);
+      expect(isAccepted(ask)).toBe(true);
     }
   });
 
@@ -169,7 +169,7 @@ describe('the plan JSON Schema', () => {
   });
 
   it('describes every field and what the patterns mean', () => {
-    const undescribed = [...Object.entries({ Plan: root, ...$defs })].flatMap(([name, def]) =>
+    const undescribed = [...Object.entries({ Ask: root, ...$defs })].flatMap(([name, def]) =>
       Object.entries(def.properties ?? {})
         // `type` and `op` of one kind say it in their value.
         .filter(([, field]) => field.enum?.length !== 1 && field.description === undefined)
@@ -193,11 +193,11 @@ describe('the plan JSON Schema', () => {
   });
 });
 
-describe('the README’s plan reference', () => {
+describe('the README’s ask reference', () => {
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const reference = readme.slice(
-    readme.indexOf('## The plan'),
-    readme.indexOf('## ', readme.indexOf('## The plan') + 3),
+    readme.indexOf('## The ask'),
+    readme.indexOf('## ', readme.indexOf('## The ask') + 3),
   );
   const fields = new Set(
     [root, ...Object.values($defs)].flatMap(def => Object.keys(def.properties ?? {})),

@@ -1,14 +1,14 @@
-// How plans are read: the rows of `plan`, `plan_step` and `plan_item`, joined to the environments,
-// secrets and keys they name as those are now. A step still pending past the plan's hour reads as
+// How asks are read: the rows of `ask`, `ask_step` and `ask_item`, joined to the environments,
+// secrets and keys they name as those are now. A step still pending past the ask's hour reads as
 // expired from that moment; what it waits for and whether it can only be rejected are worked out
 // here, on every read, from the environments as they are then.
 import {
   type ActorIdentity,
+  ASK_WAIT_MS,
+  type Ask,
+  type AskStep,
   type CredentialGrantSchema,
   NotFoundError,
-  PLAN_WAIT_MS,
-  type Plan,
-  type PlanStep,
   type StepStatus,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
@@ -21,7 +21,7 @@ import { isLogin, orgsOf } from './rows.ts';
 export const StepTypeSchema = Schema.Literals(['environments', 'access', 'change', 'secrets']);
 export type StepType = typeof StepTypeSchema.Type;
 
-const PlanRowSchema = Schema.Struct({
+const AskRowSchema = Schema.Struct({
   id: Schema.String,
   orgId: Schema.String,
   orgSlug: Schema.String,
@@ -33,10 +33,10 @@ const PlanRowSchema = Schema.Struct({
   makerPublicKey: Schema.String,
   makerEndorsement: Schema.NullOr(Schema.String),
 });
-type PlanRow = typeof PlanRowSchema.Type;
+type AskRow = typeof AskRowSchema.Type;
 
 const StepRowSchema = Schema.Struct({
-  planId: Schema.String,
+  askId: Schema.String,
   position: Schema.Finite,
   type: StepTypeSchema,
   reason: Schema.NullOr(Schema.String),
@@ -57,7 +57,7 @@ const StepRowSchema = Schema.Struct({
 export type StepRow = typeof StepRowSchema.Type;
 
 const ItemRowSchema = Schema.Struct({
-  planId: Schema.String,
+  askId: Schema.String,
   stepPosition: Schema.Finite,
   position: Schema.Finite,
   op: Schema.Literals([
@@ -81,7 +81,7 @@ const ItemRowSchema = Schema.Struct({
   sealedHint: Schema.NullOr(Schema.String),
   version: Schema.NullOr(Schema.Finite),
   proposedValue: Schema.NullOr(Schema.String),
-  /** The environment as it is now, when the plan's org has one with this id. */
+  /** The environment as it is now, when the ask's org has one with this id. */
   hasEnvironment: Schema.Finite,
   environmentName: Schema.NullOr(Schema.String),
   environmentSealedName: Schema.NullOr(Schema.String),
@@ -113,7 +113,7 @@ const QuerySchema = Schema.Struct({
   makerId: Schema.NullOr(Schema.String),
   orgId: Schema.NullOr(Schema.String),
   isPendingOnly: Schema.Boolean,
-  /** A plan made at or before this has expired, whatever its steps' rows still say. */
+  /** An ask made at or before this has expired, whatever its steps' rows still say. */
   expiredBy: Schema.Finite,
 });
 type Query = typeof QuerySchema.Type;
@@ -150,14 +150,14 @@ const environmentState = (item: ItemRow) => {
   return item.isEnvironmentDeleted === 1 ? 'binned' : 'live';
 };
 
-/** A plan as the store holds it, for the methods that answer one. */
-export type LoadedPlan = {
-  readonly plan: Plan;
+/** An ask as the store holds it, for the methods that answer one. */
+export type LoadedAsk = {
+  readonly ask: Ask;
   readonly steps: ReadonlyArray<StepRow>;
   readonly items: ReadonlyArray<ItemRow>;
 };
 
-export const planRows = (sql: D1Client.D1Client) => {
+export const askRows = (sql: D1Client.D1Client) => {
   const matching = ({ accountId, id, makerId, orgId, isPendingOnly, expiredBy }: Query) =>
     sql`p.org_id IN (${orgsOf(sql, accountId)})
       AND (${id} IS NULL OR p.id = ${id})
@@ -165,16 +165,16 @@ export const planRows = (sql: D1Client.D1Client) => {
       AND (${orgId} IS NULL OR p.org_id = ${orgId})
       AND (${isPendingOnly ? 1 : 0} = 0
         OR (p.cancelled_at IS NULL AND p.created_at > ${expiredBy}
-          AND EXISTS (SELECT 1 FROM plan_step s WHERE s.plan_id = p.id AND s.status = 'pending')))`;
+          AND EXISTS (SELECT 1 FROM ask_step s WHERE s.ask_id = p.id AND s.status = 'pending')))`;
 
-  const plans = SqlSchema.findAll({
+  const asks = SqlSchema.findAll({
     Request: QuerySchema,
-    Result: PlanRowSchema,
+    Result: AskRowSchema,
     execute: query =>
       sql`SELECT p.id, p.org_id, o.slug AS org_slug, p.reason, p.created_at, p.cancelled_at,
             m.id AS maker_id, m.name AS maker_name, m.public_key AS maker_public_key,
             m.endorsement AS maker_endorsement
-          FROM plan p
+          FROM ask p
           JOIN organization o ON o.id = p.org_id
           JOIN credential m ON m.id = p.credential_id
           WHERE ${matching(query)}
@@ -185,23 +185,23 @@ export const planRows = (sql: D1Client.D1Client) => {
     Request: QuerySchema,
     Result: StepRowSchema,
     execute: query =>
-      sql`SELECT s.plan_id, s.position, s.type, s.reason, s.status, s.note, s.key_id, s.key_end,
+      sql`SELECT s.ask_id, s.position, s.type, s.reason, s.status, s.note, s.key_id, s.key_end,
             s.lifetime, s.command, s.resolved_at, k.name AS key_name,
             k.public_key AS key_public_key, k.intent AS key_intent, k.key_voucher_owner,
             k.expires_at AS key_expires_at, k.revoked_at IS NOT NULL AS is_key_revoked
-          FROM plan_step s
-          JOIN plan p ON p.id = s.plan_id
+          FROM ask_step s
+          JOIN ask p ON p.id = s.ask_id
           LEFT JOIN credential k ON k.id = s.key_id
           WHERE ${matching(query)}
           ORDER BY p.created_at, s.position`,
   });
 
-  // An environment of another org reads as one that is not there: a plan reaches its own org only.
+  // An environment of another org reads as one that is not there: an ask reaches its own org only.
   const items = SqlSchema.findAll({
     Request: QuerySchema,
     Result: ItemRowSchema,
     execute: query =>
-      sql`SELECT i.plan_id, i.step_position, i.position, i.op, i.environment_id,
+      sql`SELECT i.ask_id, i.step_position, i.position, i.op, i.environment_id,
             i.environment_name AS item_environment_name,
             i.environment_sealed_name AS item_environment_sealed_name, i.secret_name,
             i.secret_sealed_name AS item_secret_sealed_name, i.sealed_hint, i.version, i.proposed_value,
@@ -212,8 +212,8 @@ export const planRows = (sql: D1Client.D1Client) => {
             i.op = 'rollback' AND EXISTS (SELECT 1 FROM secret_version v
               WHERE v.environment_id = e.id AND v.name = i.secret_name AND v.version = i.version)
               AS has_version
-          FROM plan_item i
-          JOIN plan p ON p.id = i.plan_id
+          FROM ask_item i
+          JOIN ask p ON p.id = i.ask_id
           LEFT JOIN environment e ON e.id = i.environment_id AND e.org_id = p.org_id
           LEFT JOIN secret sc ON sc.environment_id = e.id AND sc.name = i.secret_name
           WHERE ${matching(query)}
@@ -235,7 +235,7 @@ export const planRows = (sql: D1Client.D1Client) => {
           ORDER BY o.slug, e.name`,
   });
 
-  const toPlan = ({
+  const toAsk = ({
     actor,
     row,
     stepRows,
@@ -244,21 +244,21 @@ export const planRows = (sql: D1Client.D1Client) => {
     now,
   }: {
     readonly actor: ActorIdentity;
-    readonly row: PlanRow;
+    readonly row: AskRow;
     readonly stepRows: ReadonlyArray<StepRow>;
     readonly itemRows: ReadonlyArray<ItemRow>;
     readonly held: ReadonlyArray<typeof HoldingRowSchema.Type>;
     readonly now: number;
-  }): Plan => {
+  }): Ask => {
     const isOwner = actor._tag === 'Owner';
     const isMaker = actor._tag === 'Credential' && actor.credentialId === row.makerId;
-    const expiresAt = row.createdAt + PLAN_WAIT_MS;
+    const expiresAt = row.createdAt + ASK_WAIT_MS;
     const hasExpired = now >= expiresAt;
     const statusOf = (step: StepRow): StepStatus =>
       step.status === 'pending' && hasExpired ? 'expired' : step.status;
     const statuses = new Map(stepRows.map(step => [step.position, statusOf(step)]));
 
-    /** The names a `create` of this plan gives an environment that has no row yet. */
+    /** The names a `create` of this ask gives an environment that has no row yet. */
     const created = new Map(
       itemRows
         .filter(item => item.op === 'create')
@@ -320,7 +320,7 @@ export const planRows = (sql: D1Client.D1Client) => {
       };
     };
 
-    const toStep = (step: StepRow): PlanStep => {
+    const toStep = (step: StepRow): AskStep => {
       const status = statusOf(step);
       const own = itemRows.filter(item => item.stepPosition === step.position);
       const common = {
@@ -334,7 +334,7 @@ export const planRows = (sql: D1Client.D1Client) => {
       const keyOf = () => {
         // The table holds a key for an `access` or `change` step, and the key's row with it.
         if (step.keyId === null || step.keyName === null || step.keyPublicKey === null) {
-          throw new Error(`plan ${step.planId} step ${step.position} has no key`);
+          throw new Error(`ask ${step.askId} step ${step.position} has no key`);
         }
         return {
           id: step.keyId,
@@ -346,7 +346,7 @@ export const planRows = (sql: D1Client.D1Client) => {
       };
       const lifetimeOf = () => {
         if (step.lifetime === null) {
-          throw new Error(`plan ${step.planId} step ${step.position} ends with no lifetime`);
+          throw new Error(`ask ${step.askId} step ${step.position} ends with no lifetime`);
         }
         return step.lifetime;
       };
@@ -391,7 +391,7 @@ export const planRows = (sql: D1Client.D1Client) => {
 
     const secretItem = (status: StepStatus) => (item: ItemRow) => {
       if (item.secretName === null) {
-        throw new Error(`plan ${item.planId} item ${item.position} names no secret`);
+        throw new Error(`ask ${item.askId} item ${item.position} names no secret`);
       }
       const slot = {
         ...environmentOf(item),
@@ -428,11 +428,11 @@ export const planRows = (sql: D1Client.D1Client) => {
           return { op: item.op, ...slot };
         case 'rollback':
           if (item.version === null) {
-            throw new Error(`plan ${item.planId} item ${item.position} rolls back to no version`);
+            throw new Error(`ask ${item.askId} item ${item.position} rolls back to no version`);
           }
           return { op: item.op, ...slot, version: item.version };
         default:
-          throw new Error(`plan ${item.planId}: a secrets step holds a ${item.op} item`);
+          throw new Error(`ask ${item.askId}: a secrets step holds a ${item.op} item`);
       }
     };
 
@@ -453,7 +453,7 @@ export const planRows = (sql: D1Client.D1Client) => {
     };
   };
 
-  /** Plans as they stand now, with the rows they were read from. */
+  /** Asks as they stand now, with the rows they were read from. */
   const load = Effect.fnUntraced(function* (
     actor: ActorIdentity,
     filter: Omit<Query, 'accountId' | 'expiredBy' | 'makerId'>,
@@ -462,12 +462,12 @@ export const planRows = (sql: D1Client.D1Client) => {
     const query = {
       ...filter,
       accountId: actor.accountId,
-      // A CLI login sees the plans it made, and the owner every one in their orgs.
+      // A CLI login sees the asks it made, and the owner every one in their orgs.
       makerId: actor._tag === 'Credential' ? actor.credentialId : null,
-      expiredBy: now - PLAN_WAIT_MS,
+      expiredBy: now - ASK_WAIT_MS,
     };
-    const [planList, stepList, itemList] = yield* Effect.all(
-      [plans(query), steps(query), items(query)],
+    const [askList, stepList, itemList] = yield* Effect.all(
+      [asks(query), steps(query), items(query)],
       { concurrency: 3 },
     ).pipe(Effect.orDie);
     const keyIds = stepList.flatMap(step =>
@@ -479,20 +479,20 @@ export const planRows = (sql: D1Client.D1Client) => {
         : yield* holdings({ accountId: actor.accountId, ids: JSON.stringify(keyIds) }).pipe(
             Effect.orDie,
           );
-    return planList.map((row): LoadedPlan => {
-      const stepRows = stepList.filter(step => step.planId === row.id);
-      const itemRows = itemList.filter(item => item.planId === row.id);
+    return askList.map((row): LoadedAsk => {
+      const stepRows = stepList.filter(step => step.askId === row.id);
+      const itemRows = itemList.filter(item => item.askId === row.id);
       return {
-        plan: toPlan({ actor, row, stepRows, itemRows, held, now }),
+        ask: toAsk({ actor, row, stepRows, itemRows, held, now }),
         steps: stepRows,
         items: itemRows,
       };
     });
   });
 
-  /** A plan the caller may see: the owner any in their orgs, a CLI login those it made. */
+  /** An ask the caller may see: the owner any in their orgs, a CLI login those it made. */
   const visible = Effect.fnUntraced(function* (actor: ActorIdentity, id: string) {
-    const notFound = new NotFoundError({ message: 'No plan of yours has this id.' });
+    const notFound = new NotFoundError({ message: 'No ask of yours has this id.' });
     if (actor._tag === 'Credential' && !isLogin(actor)) return yield* notFound;
     const [found] = yield* load(actor, { id, orgId: null, isPendingOnly: false });
     if (found === undefined) return yield* notFound;
@@ -502,7 +502,7 @@ export const planRows = (sql: D1Client.D1Client) => {
   const list = Effect.fnUntraced(function* (actor: ActorIdentity, orgId: string | null) {
     if (actor._tag === 'Credential' && !isLogin(actor)) return [];
     const found = yield* load(actor, { id: null, orgId, isPendingOnly: true });
-    return found.map(({ plan }) => plan);
+    return found.map(({ ask }) => ask);
   });
 
   return { visible, list };

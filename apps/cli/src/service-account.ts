@@ -75,7 +75,7 @@ const make = Effect.gen(function* () {
           usage(
             isLogin
               ? 'This login is not finished. Run `baymutt auth login` again once the owner has approved it.'
-              : 'This key comes from a plan, so it has no account key pinned at login. Run this from a computer where `baymutt auth login` ran, without BAYMUTT_KEY or BAYMUTT_KEY_FILE.',
+              : 'This key comes from an ask, so it has no account key pinned at login. Run this from a computer where `baymutt auth login` ran, without BAYMUTT_KEY or BAYMUTT_KEY_FILE.',
             'notLoggedIn',
           ),
         )
@@ -120,7 +120,7 @@ export class ServiceAccount extends Context.Service<
     /**
      * The account's public key as the login that asked for this service account vouched for it,
      * or null for a login. With it, a service account takes the owner's proof of an environment's
-     * key, which is what approving a plan's step writes.
+     * key, which is what approving an ask's step writes.
      */
     readonly vouchedAccount: Effect.Effect<string | null>;
     /** The CLI login this computer pinned at login; refused for a service account, which has none. */

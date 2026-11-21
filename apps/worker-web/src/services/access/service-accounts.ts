@@ -4,13 +4,13 @@ import {
   type Actor,
   type ActorIdentity,
   AlreadyExistsError,
+  ASK_WAIT_MS,
   type CredentialActor,
   InvalidRequestError,
   type Me,
   NotFoundError,
   type OrgNamesKeyWrap,
   OwnerRequiredError,
-  PLAN_WAIT_MS,
   type ServiceAccount,
   type ServiceAccountVouchers,
   type SetAccessPayload,
@@ -117,8 +117,8 @@ export const credentialTaken = () =>
 
 /**
  * Revoking the credentials `ids` selects: their bearers stop working, their grants and names key
- * copies go, a plan's step still waiting to make or change one of them is rejected, and so is every
- * step still waiting in a plan one of them made, its proposed value gone with it. The first
+ * copies go, an ask's step still waiting to make or change one of them is rejected, and so is every
+ * step still waiting in an ask one of them made, its proposed value gone with it. The first
  * statement answers the ids it revoked. `onlyIf` conditions all of it inside a batch.
  */
 export const revokeStatements = (
@@ -138,24 +138,24 @@ export const revokeStatements = (
       WHERE id IN (${ids}) AND revoked_at IS NULL AND ${onlyIf} RETURNING id`,
     sql`DELETE FROM environment_grant WHERE credential_id IN (${ids}) AND ${onlyIf}`,
     sql`DELETE FROM names_key_wrap WHERE reader_id IN (${ids}) AND ${onlyIf}`,
-    // A plan's step that makes or changes a revoked key has nothing left to do.
-    sql`UPDATE plan_step
-      SET status = CASE WHEN (SELECT created_at FROM plan WHERE id = plan_step.plan_id)
-                          > ${now - PLAN_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
+    // An ask's step that makes or changes a revoked key has nothing left to do.
+    sql`UPDATE ask_step
+      SET status = CASE WHEN (SELECT created_at FROM ask WHERE id = ask_step.ask_id)
+                          > ${now - ASK_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
         resolved_at = ${now}
       WHERE key_id IN (${ids}) AND status = 'pending' AND ${onlyIf}`,
-    // A revoked CLI login is who a plan's answer goes back to: the owner no longer wants it.
-    sql`UPDATE plan_step
-      SET status = CASE WHEN (SELECT created_at FROM plan WHERE id = plan_step.plan_id)
-                          > ${now - PLAN_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
+    // A revoked CLI login is who an ask's answer goes back to: the owner no longer wants it.
+    sql`UPDATE ask_step
+      SET status = CASE WHEN (SELECT created_at FROM ask WHERE id = ask_step.ask_id)
+                          > ${now - ASK_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
         resolved_at = ${now}
-      WHERE status = 'pending' AND plan_id IN (SELECT id FROM plan WHERE credential_id IN (${ids}))
+      WHERE status = 'pending' AND ask_id IN (SELECT id FROM ask WHERE credential_id IN (${ids}))
         AND ${onlyIf}`,
-    sql`UPDATE plan_item SET proposed_value = NULL, sealed_hint = NULL
+    sql`UPDATE ask_item SET proposed_value = NULL, sealed_hint = NULL
       WHERE (proposed_value IS NOT NULL OR sealed_hint IS NOT NULL)
-        AND plan_id IN (SELECT id FROM plan WHERE credential_id IN (${ids}))
-        AND NOT EXISTS (SELECT 1 FROM plan_step s WHERE s.plan_id = plan_item.plan_id
-          AND s.position = plan_item.step_position AND s.status = 'pending')
+        AND ask_id IN (SELECT id FROM ask WHERE credential_id IN (${ids}))
+        AND NOT EXISTS (SELECT 1 FROM ask_step s WHERE s.ask_id = ask_item.ask_id
+          AND s.position = ask_item.step_position AND s.status = 'pending')
         AND ${onlyIf}`,
   ] as const;
 
@@ -198,7 +198,7 @@ export const serviceAccounts = ({
           FROM credential c LEFT JOIN organization o ON o.id = c.org_id
           WHERE c.account_id = ${accountId} AND c.revoked_at IS NULL
             AND (${self} IS NULL OR c.id = ${self} OR c.parent_id = ${self})
-            AND NOT EXISTS (SELECT 1 FROM plan_step s
+            AND NOT EXISTS (SELECT 1 FROM ask_step s
                             WHERE s.key_id = c.id AND s.type = 'access' AND s.status = 'pending')
           ORDER BY c.created_at`,
   });
@@ -289,14 +289,14 @@ export const serviceAccounts = ({
 
   /**
    * A key whose reads the owner may change. A CLI login holds no environment, so its access never
-   * changes; a plan's key gets what the owner approved, and later the owner changes it here or
+   * changes; an ask's key gets what the owner approved, and later the owner changes it here or
    * approves a `change` step its CLI login asked.
    */
   const changeable = Effect.fnUntraced(function* (actor: ActorIdentity, id: string) {
     if (actor._tag !== 'Owner') {
       return yield* new OwnerRequiredError({
         message:
-          'Only the owner changes a key’s access, from the dashboard. The CLI login that asked for it asks to change it in a plan’s `change` step.',
+          'Only the owner changes a key’s access, from the dashboard. The CLI login that asked for it asks to change it in an ask’s `change` step.',
       });
     }
     const target = yield* approvedServiceAccountIn(actor.accountId, id);
@@ -438,7 +438,7 @@ export const serviceAccounts = ({
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'Only the owner approves a CLI login, from the link `baymutt auth login` prints. A CLI login asks for access in a plan: `baymutt ask --help`.',
+            'Only the owner approves a CLI login, from the link `baymutt auth login` prints. A CLI login asks for access in an ask: `baymutt ask --help`.',
         });
       }
       const sealed = new Set(
@@ -581,7 +581,7 @@ export const serviceAccounts = ({
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'Only the owner changes when a CLI login or key expires, from the dashboard. The CLI login that asked for a key may ask for a new end in a plan’s `change` step.',
+            'Only the owner changes when a CLI login or key expires, from the dashboard. The CLI login that asked for a key may ask for a new end in an ask’s `change` step.',
         });
       }
       const target = yield* approvedServiceAccountIn(actor.accountId, id);

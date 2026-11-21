@@ -114,7 +114,7 @@ const AuthenticatedLive = Layer.effect(
         if (actor === null) {
           return yield* new UnauthorizedError({
             message:
-              'Send a key’s bearer (`Authorization: Bearer …`, from `baymutt auth login` or `baymutt ask access`), or sign in to the dashboard.',
+              'Send a key’s bearer (`Authorization: Bearer …`, from `baymutt auth login`, or an `access` step of `baymutt ask`), or sign in to the dashboard.',
           });
         }
         return yield* Effect.provideService(httpEffect, CurrentActor, actor);

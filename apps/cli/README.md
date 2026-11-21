@@ -8,15 +8,15 @@ The `baymutt` command: everything a CLI login, a key or a coding agent does with
 npm install -g @baymutt/cli
 baymutt auth login                       # once per computer: prints a link; the owner opens it and approves
 baymutt secret list acme/app/production  # names, versions and sizes; never a value
-baymutt ask plan.json                    # asks the owner for everything at once: prints a link and returns
-baymutt ask --check plan.json            # checks a plan and sends nothing: no login, no network
-baymutt ask schema                       # prints the format of a plan as JSON Schema
-baymutt ask wait <id>                    # returns once the owner has answered every step
+baymutt ask ask.json                    # asks the owner for everything at once: prints a link, then waits (run it in the background)
+baymutt ask --check ask.json            # checks an ask and sends nothing: no login, no network
+baymutt ask schema                       # prints the format of an ask as JSON Schema
+baymutt ask wait <id>                    # picks an ask up again after `ask` was stopped or run with --no-wait
 baymutt key list                         # this login's keys: kind (cli-login, agent-key, service-account) and org
 baymutt auth logout                      # revokes this CLI login and forgets its key
 ```
 
-A plan is JSON: a reason, and steps in the order they are to happen, all in one org.
+An ask is JSON: a reason, and steps in the order they are to happen, all in one org.
 
 ```json
 {
@@ -36,7 +36,7 @@ A plan is JSON: a reason, and steps in the order they are to happen, all in one 
 - Values and names are sealed and opened on this computer. The store holds only ciphertext.
 - An environment is named with its org first, `<org>/<name>`. Orgs are made in the dashboard.
 - A CLI login lists orgs, environments and secret names, and holds no environment. Everything else
-  is asked of the owner in a plan, whose steps are of four types: `environments` (create, delete,
+  is asked of the owner in an ask, whose steps are of four types: `environments` (create, delete,
   restore), `access` (a new key that reads), `change` (a key this login asked for reads more,
   gives some back, or gets a new end) and `secrets` (set, paste, generate, delete, roll back,
   restore). `baymutt ask --help` prints a full example and the format is below; every error names
@@ -45,13 +45,14 @@ A plan is JSON: a reason, and steps in the order they are to happen, all in one 
   `set` names a file, an environment variable or a dotenv file here, sealed so that only the
   owner's vault opens it, never a value inline. A value only the owner can fetch is a `paste`,
   with a hint where to find it, sealed here like a proposed value.
-- A key belongs to the one org of its plan. Within a task, change the key you hold with a `change`
+- A key belongs to the one org of its ask. Within a task, change the key you hold with a `change`
   step rather than asking for another; the same key file keeps working.
-- `ask` prints a link for the owner and returns; each step waits an hour. The owner sees only
-  your reply to them, not a command's output: end that reply with the link alone on its last
-  line, and run `ask wait` in the background or after that reply, since a wait that blocks first
-  hides the link. `ask wait <id>` prints one JSON line per step as it is answered, with the
-  owner's note when there is one; an approved `access` step prints its key file, used as
+- `ask` prints a link for the owner at once and keeps running until the owner has answered every
+  step (each waits an hour, and `--timeout` ends the wait sooner); `--no-wait` returns after the
+  link. The owner sees only your reply to them, not a command's output: run `ask` in the
+  background and end that reply with the link alone on its last line, since a command that
+  blocks first hides the link. If it is stopped, `ask wait <id>` picks up every answer and key.
+  Both finish each step and print its JSON line as the owner answers it, with the owner's note when there is one, so a key is in hand the moment its step is approved; one process waits on an ask at a time, and a second exits 6; an approved `access` step prints its key file, used as
   `BAYMUTT_KEY_FILE=<path>`, or is piped into its `command` (for CI). It exits 0 when every step
   was approved, 9 while any still waits, 4 when one was rejected, withdrawn or expired. `ask cancel
   <id>` withdraws what the owner has not answered.
@@ -71,21 +72,21 @@ A plan is JSON: a reason, and steps in the order they are to happen, all in one 
 `baymutt --help` lists every command. To load an environment's values into a process, use
 [`@baymutt/varlock-plugin`](https://www.npmjs.com/package/@baymutt/varlock-plugin).
 
-## The plan
+## The ask
 
 `baymutt ask schema` prints this format as JSON Schema, made from the schemas `ask` decodes with.
-`baymutt ask --check plan.json` (or the plan on stdin) runs the decoding `ask` runs, then reads
+`baymutt ask --check ask.json` (or the ask on stdin) runs the decoding `ask` runs, then reads
 each `set` source on this computer as `ask` would, and sends nothing. It needs no login and no
-network, and prints no value: one JSON line says the plan is well-formed and not sent, with its org
-and each step's type (the org is null when the plan only changes keys, since it is then the keys'
-org). A plan that fails is refused with the same sentence and exit code as `ask`: 2 for the format,
+network, and prints no value: one JSON line says the ask is well-formed and not sent, with its org
+and each step's type (the org is null when the ask only changes keys, since it is then the keys'
+org). An ask that fails is refused with the same sentence and exit code as `ask`: 2 for the format,
 5 for a source that is not there. It does not look at the store, so whether an environment exists
-or a key is this login's is known only when the plan is sent.
+or a key is this login's is known only when the ask is sent.
 
-A plan holds a `reason` and `steps`; every step has a `type` and an optional `reason`. All objects
+An ask holds a `reason` and `steps`; every step has a `type` and an optional `reason`. All objects
 are closed: a field not listed here is refused.
 
-| Plan field | Required | Meaning |
+| Ask field | Required | Meaning |
 | --- | --- | --- |
 | `reason` | yes | The task, shown to the owner. 1 to 140 characters. Never a secret |
 | `steps` | yes | Steps in the order they are to happen. At most 20 |
@@ -132,12 +133,12 @@ A `change` step needs at least one of `read`, `giveBack` and `expires`.
 | `hint` | no | On `paste`: where the owner finds the value, up to 500 characters. Sealed on this computer so that only the owner's vault opens it |
 | `version` | `rollback` only | The version to roll back to. 1 or more |
 
-A value is never in a plan, not even one you were told in chat: `paste` asks the owner for it, and
+A value is never in an ask, not even one you were told in chat: `paste` asks the owner for it, and
 `set` reads it from where it already is. A relative path is from the current directory.
 
 The rules a schema cannot state, which `ask` and `--check` refuse:
 
-- One org: the first segment of every environment a plan names is the same.
+- One org: the first segment of every environment an ask names is the same.
 - A step names each environment once, and in a `secrets` step each secret once. A step may name
   an environment an earlier step creates or restores.
 - At most 200 environments and secrets across all the steps.

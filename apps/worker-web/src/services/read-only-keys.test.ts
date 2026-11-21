@@ -469,7 +469,8 @@ describe('migration 0007', () => {
   it('rejects a plan step waiting to change a key it revokes, and leaves the rest of the plan', async () => {
     const { sqlite, kept } = await migrated();
     expect(
-      all(sqlite, 'SELECT position, status, resolved_at FROM plan_step ORDER BY position'),
+      // 0008 renamed the tables to `ask`, `ask_step` and `ask_item`, and `plan_id` to `ask_id`.
+      all(sqlite, 'SELECT position, status, resolved_at FROM ask_step ORDER BY position'),
     ).toEqual([
       { position: 0, status: 'approved', resolved_at: NOW },
       { position: 1, status: 'pending', resolved_at: null },
@@ -477,10 +478,12 @@ describe('migration 0007', () => {
       { position: 3, status: 'pending', resolved_at: null },
       { position: 4, status: 'pending', resolved_at: null },
     ]);
-    expect(all(sqlite, 'SELECT * FROM plan_item ORDER BY step_position, position')).toEqual(
-      kept.planItems,
-    );
-    expect(all(sqlite, 'SELECT * FROM plan ORDER BY 1, 2, 3')).toEqual(kept.plan);
+    expect(
+      all(sqlite, 'SELECT ask_id AS plan_id, * FROM ask_item ORDER BY step_position, position').map(
+        ({ ask_id: _, ...row }) => row,
+      ),
+    ).toEqual(kept.planItems);
+    expect(all(sqlite, 'SELECT * FROM ask ORDER BY 1, 2, 3')).toEqual(kept.plan);
   });
 
   it('leaves member copies, secrets, every version, the bin and the activity log as they were', async () => {

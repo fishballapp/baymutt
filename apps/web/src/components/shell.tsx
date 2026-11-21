@@ -20,7 +20,7 @@ import {
   useState,
 } from 'react';
 import mark from '../assets/mark.svg';
-import { orgsAtom, pendingPlansAtom } from '../lib/data.ts';
+import { orgsAtom, pendingAsksAtom } from '../lib/data.ts';
 import { latest } from '../lib/result.ts';
 import { useNamesSealing, useOwner } from './gate.tsx';
 import { homeOrg } from './org-scope.tsx';
@@ -32,18 +32,18 @@ import { Tooltip } from './ui/tooltip.tsx';
 const ORG_ITEMS = [
   { item: 'environments', to: '/orgs/$slug/environments', label: 'Environments', Glyph: StackIcon },
   { item: 'keys', to: '/orgs/$slug/keys', label: 'Keys', Glyph: KeyIcon },
-  { item: 'plans', to: '/orgs/$slug/plans', label: 'Plans', Glyph: ListChecksIcon },
+  { item: 'asks', to: '/orgs/$slug/asks', label: 'Asks', Glyph: ListChecksIcon },
   { item: 'activity', to: '/orgs/$slug/activity', label: 'Activity', Glyph: PulseIcon },
   { item: 'bin', to: '/orgs/$slug/bin', label: 'Bin', Glyph: TrashIcon },
 ] as const;
 
 type OrgItem = (typeof ORG_ITEMS)[number]['item'];
 
-type DecisionPlace = 'plans' | 'account';
+type DecisionPlace = 'asks' | 'account';
 
 /**
  * Where a path sits: an org's item, Account, or a decision page and the item it waits under. A
- * plan (`ask/<id>`) waits under Plans, and a pairing link under Account.
+ * ask (`ask/<id>`) waits under Asks, and a pairing link under Account.
  */
 const placeOf = (
   path: string,
@@ -55,7 +55,7 @@ const placeOf = (
   if (path.startsWith('/pair')) return { kind: 'decision', waitsUnder: 'account' };
   const [, segment, id, rest] = /^\/orgs\/[^/]+\/([^/]+)(?:\/([^/]+))?(\/.*)?/.exec(path) ?? [];
   if (segment === 'ask' && id !== undefined && rest === undefined) {
-    return { kind: 'decision', waitsUnder: 'plans' };
+    return { kind: 'decision', waitsUnder: 'asks' };
   }
   return { kind: 'item', item: ORG_ITEMS.find(({ item }) => item === segment)?.item ?? null };
 };
@@ -66,13 +66,13 @@ export const isDecisionPath = (path: string) => placeOf(path).kind === 'decision
 type Waiting = Readonly<Partial<Record<OrgItem, number>>>;
 
 /**
- * What waits on the owner in one org, by the item it waits under: every ask is a plan, under
- * Plans. Nothing hints that another org has something waiting.
+ * What waits on the owner in one org, by the item it waits under: every ask waits under
+ * Asks. Nothing hints that another org has something waiting.
  */
 const useWaiting = (org: Org | null): Waiting => {
-  const plans = latest(useAtomValue(pendingPlansAtom)) ?? [];
+  const asks = latest(useAtomValue(pendingAsksAtom)) ?? [];
   if (org === null) return {};
-  return { plans: plans.filter(plan => plan.org.id === org.id).length };
+  return { asks: asks.filter(ask => ask.org.id === org.id).length };
 };
 
 /** `<title>`: the screen's subject, then its org when it has one, then "baymutt". */
@@ -290,7 +290,7 @@ const ShellFrame = ({
 const BACK = {
   environments: { label: 'Environments', to: '/orgs/$slug/environments' },
   keys: { label: 'Keys', to: '/orgs/$slug/keys' },
-  plans: { label: 'Plans', to: '/orgs/$slug/plans' },
+  asks: { label: 'Asks', to: '/orgs/$slug/asks' },
 } as const;
 
 /**

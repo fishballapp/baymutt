@@ -58,8 +58,8 @@ export const LIMITS = {
   serviceAccounts: 200,
   secretsPerEnvironment: 500,
   versionsPerSecret: 1000,
-  /** Plans with a step still waiting for the owner, in one org. */
-  waitingPlansPerOrg: 20,
+  /** Asks with a step still waiting for the owner, in one org. */
+  waitingAsksPerOrg: 20,
 } as const;
 
 /** A single-use link that was used, cancelled or has expired. */

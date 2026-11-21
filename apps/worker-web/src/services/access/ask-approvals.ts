@@ -1,12 +1,12 @@
-// What approving each type of plan step writes. Each answer is checked against the step as it was
+// What approving each type of ask step writes. Each answer is checked against the step as it was
 // read, then becomes one batch: a precondition, decided once in the statement that marks the step
 // approved and before anything else is written, and the effects, each conditioned on that
 // statement having taken. So a step happens whole or not at all, however many items it has.
 import {
   type Actor,
   type ApproveStepPayload,
+  type AskStep,
   InvalidRequestError,
-  type PlanStep,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
 import * as Effect from 'effect/Effect';
@@ -14,8 +14,8 @@ import type * as Statement from 'effect/sql/Statement';
 import { encodeActor } from '../actors.ts';
 import type { Audit } from '../audit.ts';
 import type { secretWrites } from '../secret-writes.ts';
+import type { ItemRow, LoadedAsk, StepRow } from './ask-rows.ts';
 import { removeEnvironmentStatements, restoreEnvironmentStatements } from './environments.ts';
-import type { ItemRow, LoadedPlan, StepRow } from './plan-rows.ts';
 import {
   grantStatement,
   type Lookups,
@@ -45,8 +45,8 @@ type Approval = {
 };
 
 type Context = {
-  readonly loaded: LoadedPlan;
-  readonly step: PlanStep;
+  readonly loaded: LoadedAsk;
+  readonly step: AskStep;
   readonly row: StepRow;
   readonly items: ReadonlyArray<ItemRow>;
   readonly actor: Actor;
@@ -59,7 +59,7 @@ type Context = {
 /** A refusal that names what does not match: nothing was written. */
 const mismatch = (what: string) =>
   new InvalidRequestError({
-    message: `The approval does not match the step: ${what}. Read the plan again and approve what the step names.`,
+    message: `The approval does not match the step: ${what}. Read the ask again and approve what the step names.`,
   });
 
 /** Whether `ids` and `expected` hold the same ids, each once. */
@@ -70,7 +70,7 @@ const isSameSet = (ids: ReadonlyArray<string>, expected: ReadonlyArray<string>) 
   );
 };
 
-export const planApprovals = ({
+export const askApprovals = ({
   sql,
   audit,
   writes,
@@ -100,7 +100,7 @@ export const planApprovals = ({
    * in the org, live or in the bin. Nothing when every one is free.
    */
   const createTaken = Effect.fnUntraced(function* ({
-    loaded: { plan },
+    loaded: { ask },
     items,
   }: Pick<Context, 'loaded' | 'items'>) {
     const creates = items.filter(item => item.op === 'create');
@@ -108,10 +108,10 @@ export const planApprovals = ({
       SELECT json_extract(j.value, '$.id') AS id, json_extract(j.value, '$.name') AS name
       FROM json_each(${json(creates.map(item => ({ id: item.environmentId, name: item.itemEnvironmentName })))}) j
       WHERE EXISTS (SELECT 1 FROM environment e WHERE e.id = json_extract(j.value, '$.id')
-        OR (e.org_id = ${plan.org.id} AND e.name = json_extract(j.value, '$.name')))
+        OR (e.org_id = ${ask.org.id} AND e.name = json_extract(j.value, '$.name')))
       LIMIT 1`.pipe(Effect.orDie);
     if (taken === undefined) return null;
-    return yield* nameTaken({ ...taken, orgId: plan.org.id, orgSlug: plan.org.slug });
+    return yield* nameTaken({ ...taken, orgId: ask.org.id, orgSlug: ask.org.slug });
   });
 
   /** The read grants of an `access` or `change` step: one per environment, each at its current key. */
@@ -142,14 +142,14 @@ export const planApprovals = ({
   ) =>
     wraps.length === (isNeeded ? 1 : 0) && wraps.every(wrap => wrap.orgId === orgId)
       ? Effect.void
-      : Effect.fail(mismatch('the names key of the plan’s org when it reads, and of no other'));
+      : Effect.fail(mismatch('the names key of the ask’s org when it reads, and of no other'));
 
   const environments = Effect.fnUntraced(function* (
     context: Context,
     { creates }: Extract<ApproveStepPayload, { type: 'environments' }>,
   ) {
     const {
-      loaded: { plan },
+      loaded: { ask },
       items,
       actor,
       accountId,
@@ -171,7 +171,7 @@ export const planApprovals = ({
     const restores = items.filter(item => item.op === 'restore').map(item => item.environmentId);
     const adding = asked.length + restores.length;
     if (adding > 0) yield* underLimit(accountId, 'environments', adding);
-    const orgId = plan.org.id;
+    const orgId = ask.org.id;
     const named = asked.map(item => ({ id: item.environmentId, name: item.itemEnvironmentName }));
     const by = encodeActor(actor);
     const effects = yield* Effect.forEach(
@@ -179,7 +179,7 @@ export const planApprovals = ({
       Effect.fnUntraced(function* (create) {
         const item = asked.find(ask => ask.environmentId === create.environmentId);
         if (item?.itemEnvironmentName == null || item.itemEnvironmentSealedName === null) {
-          return yield* Effect.die(`plan ${plan.id}: a create names no environment`);
+          return yield* Effect.die(`ask ${ask.id}: a create names no environment`);
         }
         const { made, statements } = newEnvironmentStatements(
           sql,
@@ -203,7 +203,7 @@ export const planApprovals = ({
       { concurrency: 1 },
     );
     return {
-      // A name taken since the plan was read is the approval's error, not a block: see `failed`.
+      // A name taken since the ask was read is the approval's error, not a block: see `failed`.
       precondition: sql`NOT EXISTS (SELECT 1 FROM json_each(${json(named)}) j
           JOIN environment e ON e.id = json_extract(j.value, '$.id')
             OR (e.org_id = ${orgId} AND e.name = json_extract(j.value, '$.name')))
@@ -228,11 +228,11 @@ export const planApprovals = ({
   });
 
   const access = Effect.fnUntraced(function* (
-    { loaded: { plan }, row, items, actor, now, took }: Context,
+    { loaded: { ask }, row, items, actor, now, took }: Context,
     answer: Extract<ApproveStepPayload, { type: 'access' }>,
   ) {
     if (row.keyId === null || row.keyName === null) {
-      return yield* Effect.die(`plan ${plan.id}: an access step has no key`);
+      return yield* Effect.die(`ask ${ask.id}: an access step has no key`);
     }
     const keyId = row.keyId;
     const keyName = row.keyName;
@@ -241,8 +241,8 @@ export const planApprovals = ({
       return yield* mismatch('an end later than now');
     }
     yield* readGrantsMatch(items, answer.grants);
-    yield* namesKeyWrapsMatch(answer.namesKeyWraps, plan.org.id, true);
-    const orgId = plan.org.id;
+    yield* namesKeyWrapsMatch(answer.namesKeyWraps, ask.org.id, true);
+    const orgId = ask.org.id;
     return {
       precondition: sql`${keyWorks(keyId, now, false)}
         AND ${allEnvironments(
@@ -279,11 +279,11 @@ export const planApprovals = ({
   });
 
   const change = Effect.fnUntraced(function* (
-    { loaded: { plan }, step, row, items, actor, now, took }: Context,
+    { loaded: { ask }, step, row, items, actor, now, took }: Context,
     answer: Extract<ApproveStepPayload, { type: 'change' }>,
   ) {
     if (row.keyId === null || row.keyName === null || step.type !== 'change') {
-      return yield* Effect.die(`plan ${plan.id}: a change step has no key`);
+      return yield* Effect.die(`ask ${ask.id}: a change step has no key`);
     }
     const keyId = row.keyId;
     const keyName = row.keyName;
@@ -293,8 +293,8 @@ export const planApprovals = ({
     const reads = items.filter(item => item.op === 'read');
     const giveBack = items.filter(item => item.op === 'give-back');
     yield* readGrantsMatch(reads, answer.grants);
-    yield* namesKeyWrapsMatch(answer.namesKeyWraps, plan.org.id, reads.length > 0);
-    const orgId = plan.org.id;
+    yield* namesKeyWrapsMatch(answer.namesKeyWraps, ask.org.id, reads.length > 0);
+    const orgId = ask.org.id;
     return {
       precondition: sql`${keyWorks(keyId, now, true)}
         AND ${allEnvironments(
@@ -351,11 +351,11 @@ export const planApprovals = ({
   });
 
   const secrets = Effect.fnUntraced(function* (
-    { loaded: { plan }, step, items, actor, took, now }: Context,
+    { loaded: { ask }, step, items, actor, took, now }: Context,
     { values }: Extract<ApproveStepPayload, { type: 'secrets' }>,
   ) {
-    if (step.type !== 'secrets') return yield* Effect.die(`plan ${plan.id}: not a secrets step`);
-    const orgId = plan.org.id;
+    if (step.type !== 'secrets') return yield* Effect.die(`ask ${ask.id}: not a secrets step`);
+    const orgId = ask.org.id;
     const sealing = items.filter(
       item => item.op === 'set' || item.op === 'paste' || item.op === 'generate',
     );
@@ -371,7 +371,7 @@ export const planApprovals = ({
       const item = sealing.find(ask => ask.position === value.item);
       const shown = step.items[value.item];
       if (item?.secretName == null || shown === undefined || !('nextVersion' in shown)) {
-        throw new Error(`plan ${plan.id}: value ${value.item} has no item`);
+        throw new Error(`ask ${ask.id}: value ${value.item} has no item`);
       }
       return { value, item, shown, name: item.secretName };
     });
@@ -393,7 +393,7 @@ export const planApprovals = ({
       items
         .filter(item => item.op === op)
         .map(item => {
-          if (item.secretName === null) throw new Error(`plan ${plan.id}: an item names no secret`);
+          if (item.secretName === null) throw new Error(`ask ${ask.id}: an item names no secret`);
           return { item, name: item.secretName };
         });
     const deletes = moved('delete');

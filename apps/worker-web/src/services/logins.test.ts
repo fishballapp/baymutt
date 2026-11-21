@@ -104,7 +104,7 @@ describe('expiry', () => {
 });
 
 describe('a description', () => {
-  it('is kept as its maker wrote it: a CLI login’s optional, a key’s its plan’s reason', async () => {
+  it('is kept as its maker wrote it: a CLI login’s optional, a key’s its ask’s reason', async () => {
     const world = await storeWorld();
     const { w, owner, orgId, pair, ask, approve, environment } = world;
     const login = await pair('laptop', { description: 'Agents on the work laptop' });

@@ -20,9 +20,9 @@ import { Route as AppOrgsIndexRouteImport } from './routes/_app.orgs.index'
 import { Route as AppOrgsSlugRouteImport } from './routes/_app.orgs.$slug'
 import { Route as AppOrgsSlugIndexRouteImport } from './routes/_app.orgs.$slug.index'
 import { Route as AppOrgsSlugActivityRouteImport } from './routes/_app.orgs.$slug.activity'
+import { Route as AppOrgsSlugAsksRouteImport } from './routes/_app.orgs.$slug.asks'
 import { Route as AppOrgsSlugBinRouteImport } from './routes/_app.orgs.$slug.bin'
 import { Route as AppOrgsSlugKeysRouteImport } from './routes/_app.orgs.$slug.keys'
-import { Route as AppOrgsSlugPlansRouteImport } from './routes/_app.orgs.$slug.plans'
 import { Route as AppOrgsSlugAskIdRouteImport } from './routes/_app.orgs.$slug.ask.$id'
 import { Route as AppOrgsSlugEnvironmentsIndexRouteImport } from './routes/_app.orgs.$slug.environments.index'
 import { Route as AppOrgsSlugEnvironmentsIdRouteImport } from './routes/_app.orgs.$slug.environments.$id'
@@ -81,6 +81,11 @@ const AppOrgsSlugActivityRoute = AppOrgsSlugActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => AppOrgsSlugRoute,
 } as any)
+const AppOrgsSlugAsksRoute = AppOrgsSlugAsksRouteImport.update({
+  id: '/asks',
+  path: '/asks',
+  getParentRoute: () => AppOrgsSlugRoute,
+} as any)
 const AppOrgsSlugBinRoute = AppOrgsSlugBinRouteImport.update({
   id: '/bin',
   path: '/bin',
@@ -89,11 +94,6 @@ const AppOrgsSlugBinRoute = AppOrgsSlugBinRouteImport.update({
 const AppOrgsSlugKeysRoute = AppOrgsSlugKeysRouteImport.update({
   id: '/keys',
   path: '/keys',
-  getParentRoute: () => AppOrgsSlugRoute,
-} as any)
-const AppOrgsSlugPlansRoute = AppOrgsSlugPlansRouteImport.update({
-  id: '/plans',
-  path: '/plans',
   getParentRoute: () => AppOrgsSlugRoute,
 } as any)
 const AppOrgsSlugAskIdRoute = AppOrgsSlugAskIdRouteImport.update({
@@ -124,9 +124,9 @@ export interface FileRoutesByFullPath {
   '/orgs/$slug': typeof AppOrgsSlugRouteWithChildren
   '/orgs/': typeof AppOrgsIndexRoute
   '/orgs/$slug/activity': typeof AppOrgsSlugActivityRoute
+  '/orgs/$slug/asks': typeof AppOrgsSlugAsksRoute
   '/orgs/$slug/bin': typeof AppOrgsSlugBinRoute
   '/orgs/$slug/keys': typeof AppOrgsSlugKeysRoute
-  '/orgs/$slug/plans': typeof AppOrgsSlugPlansRoute
   '/orgs/$slug/': typeof AppOrgsSlugIndexRoute
   '/orgs/$slug/ask/$id': typeof AppOrgsSlugAskIdRoute
   '/orgs/$slug/environments/$id': typeof AppOrgsSlugEnvironmentsIdRoute
@@ -141,9 +141,9 @@ export interface FileRoutesByTo {
   '/signin': typeof AppSigninRoute
   '/orgs': typeof AppOrgsIndexRoute
   '/orgs/$slug/activity': typeof AppOrgsSlugActivityRoute
+  '/orgs/$slug/asks': typeof AppOrgsSlugAsksRoute
   '/orgs/$slug/bin': typeof AppOrgsSlugBinRoute
   '/orgs/$slug/keys': typeof AppOrgsSlugKeysRoute
-  '/orgs/$slug/plans': typeof AppOrgsSlugPlansRoute
   '/orgs/$slug': typeof AppOrgsSlugIndexRoute
   '/orgs/$slug/ask/$id': typeof AppOrgsSlugAskIdRoute
   '/orgs/$slug/environments/$id': typeof AppOrgsSlugEnvironmentsIdRoute
@@ -161,9 +161,9 @@ export interface FileRoutesById {
   '/_app/orgs/$slug': typeof AppOrgsSlugRouteWithChildren
   '/_app/orgs/': typeof AppOrgsIndexRoute
   '/_app/orgs/$slug/activity': typeof AppOrgsSlugActivityRoute
+  '/_app/orgs/$slug/asks': typeof AppOrgsSlugAsksRoute
   '/_app/orgs/$slug/bin': typeof AppOrgsSlugBinRoute
   '/_app/orgs/$slug/keys': typeof AppOrgsSlugKeysRoute
-  '/_app/orgs/$slug/plans': typeof AppOrgsSlugPlansRoute
   '/_app/orgs/$slug/': typeof AppOrgsSlugIndexRoute
   '/_app/orgs/$slug/ask/$id': typeof AppOrgsSlugAskIdRoute
   '/_app/orgs/$slug/environments/$id': typeof AppOrgsSlugEnvironmentsIdRoute
@@ -181,9 +181,9 @@ export interface FileRouteTypes {
     | '/orgs/$slug'
     | '/orgs/'
     | '/orgs/$slug/activity'
+    | '/orgs/$slug/asks'
     | '/orgs/$slug/bin'
     | '/orgs/$slug/keys'
-    | '/orgs/$slug/plans'
     | '/orgs/$slug/'
     | '/orgs/$slug/ask/$id'
     | '/orgs/$slug/environments/$id'
@@ -198,9 +198,9 @@ export interface FileRouteTypes {
     | '/signin'
     | '/orgs'
     | '/orgs/$slug/activity'
+    | '/orgs/$slug/asks'
     | '/orgs/$slug/bin'
     | '/orgs/$slug/keys'
-    | '/orgs/$slug/plans'
     | '/orgs/$slug'
     | '/orgs/$slug/ask/$id'
     | '/orgs/$slug/environments/$id'
@@ -217,9 +217,9 @@ export interface FileRouteTypes {
     | '/_app/orgs/$slug'
     | '/_app/orgs/'
     | '/_app/orgs/$slug/activity'
+    | '/_app/orgs/$slug/asks'
     | '/_app/orgs/$slug/bin'
     | '/_app/orgs/$slug/keys'
-    | '/_app/orgs/$slug/plans'
     | '/_app/orgs/$slug/'
     | '/_app/orgs/$slug/ask/$id'
     | '/_app/orgs/$slug/environments/$id'
@@ -312,6 +312,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrgsSlugActivityRouteImport
       parentRoute: typeof AppOrgsSlugRoute
     }
+    '/_app/orgs/$slug/asks': {
+      id: '/_app/orgs/$slug/asks'
+      path: '/asks'
+      fullPath: '/orgs/$slug/asks'
+      preLoaderRoute: typeof AppOrgsSlugAsksRouteImport
+      parentRoute: typeof AppOrgsSlugRoute
+    }
     '/_app/orgs/$slug/bin': {
       id: '/_app/orgs/$slug/bin'
       path: '/bin'
@@ -324,13 +331,6 @@ declare module '@tanstack/react-router' {
       path: '/keys'
       fullPath: '/orgs/$slug/keys'
       preLoaderRoute: typeof AppOrgsSlugKeysRouteImport
-      parentRoute: typeof AppOrgsSlugRoute
-    }
-    '/_app/orgs/$slug/plans': {
-      id: '/_app/orgs/$slug/plans'
-      path: '/plans'
-      fullPath: '/orgs/$slug/plans'
-      preLoaderRoute: typeof AppOrgsSlugPlansRouteImport
       parentRoute: typeof AppOrgsSlugRoute
     }
     '/_app/orgs/$slug/ask/$id': {
@@ -359,9 +359,9 @@ declare module '@tanstack/react-router' {
 
 interface AppOrgsSlugRouteChildren {
   AppOrgsSlugActivityRoute: typeof AppOrgsSlugActivityRoute
+  AppOrgsSlugAsksRoute: typeof AppOrgsSlugAsksRoute
   AppOrgsSlugBinRoute: typeof AppOrgsSlugBinRoute
   AppOrgsSlugKeysRoute: typeof AppOrgsSlugKeysRoute
-  AppOrgsSlugPlansRoute: typeof AppOrgsSlugPlansRoute
   AppOrgsSlugIndexRoute: typeof AppOrgsSlugIndexRoute
   AppOrgsSlugAskIdRoute: typeof AppOrgsSlugAskIdRoute
   AppOrgsSlugEnvironmentsIdRoute: typeof AppOrgsSlugEnvironmentsIdRoute
@@ -370,9 +370,9 @@ interface AppOrgsSlugRouteChildren {
 
 const AppOrgsSlugRouteChildren: AppOrgsSlugRouteChildren = {
   AppOrgsSlugActivityRoute: AppOrgsSlugActivityRoute,
+  AppOrgsSlugAsksRoute: AppOrgsSlugAsksRoute,
   AppOrgsSlugBinRoute: AppOrgsSlugBinRoute,
   AppOrgsSlugKeysRoute: AppOrgsSlugKeysRoute,
-  AppOrgsSlugPlansRoute: AppOrgsSlugPlansRoute,
   AppOrgsSlugIndexRoute: AppOrgsSlugIndexRoute,
   AppOrgsSlugAskIdRoute: AppOrgsSlugAskIdRoute,
   AppOrgsSlugEnvironmentsIdRoute: AppOrgsSlugEnvironmentsIdRoute,

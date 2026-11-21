@@ -1,7 +1,7 @@
 # baymutt
 
 A zero-knowledge secret store for people who run coding agents. An agent asks for everything it
-needs in one plan: environments, a key that reads them, values. The owner decides each step on one
+needs in one ask: environments, a key that reads them, values. The owner decides each step on one
 page. A key only reads, and ends. The store keeps every value and every name sealed, so it cannot
 read them.
 
@@ -17,13 +17,13 @@ and an environment in it. Then, where agents run:
 npm install -g baymutt            # or run any command as `npx baymutt …`
 baymutt auth login                # once per computer: prints a link; the owner opens it and approves
 baymutt env list                  # a CLI login lists names, and opens no value
-baymutt ask plan.json             # prints a link and an id, and returns
-baymutt ask wait <the id it printed>
-baymutt ask --check plan.json     # checks a plan and sends nothing: no login, no network
-baymutt ask schema                # the format of a plan, as JSON Schema
+baymutt ask ask.json             # prints a link and an id, then waits for the owner: run it in the background
+baymutt ask wait <the id it printed>   # picks an ask up again after `ask` was stopped, or run with --no-wait
+baymutt ask --check ask.json     # checks an ask and sends nothing: no login, no network
+baymutt ask schema                # the format of an ask, as JSON Schema
 ```
 
-A plan is JSON: a reason, and steps in the order they are to happen, all in one org.
+An ask is JSON: a reason, and steps in the order they are to happen, all in one org.
 
 ```json
 {
@@ -38,11 +38,12 @@ A plan is JSON: a reason, and steps in the order they are to happen, all in one 
 }
 ```
 
-The owner sees only the agent's reply to them, so the agent ends that reply with the link, alone
-on its last line, and runs `ask wait` in the background or after that reply: a wait that blocks
-first hides the link. Each step waits an hour. The owner sees which CLI login asks, why, and each
-step, and approves or rejects each one, with a note back to the agent if they like.
-`baymutt ask wait` prints each step as it is answered. An approved `access` step gives the path of
+`baymutt ask` sends the ask, prints the link at once, and keeps running until the owner has
+answered every step. The owner sees only the agent's reply to them, so the agent runs it in the
+background and ends its reply with the link, alone on its last line: a command that blocks first
+hides the link until it ends. Each step waits an hour. The owner sees which CLI login asks, why,
+and each step, and approves or rejects each one, with a note back to the agent if they like.
+`ask` prints each step, and finishes it, as the owner answers it. An approved `access` step gives the path of
 a key file of the agent's own:
 
 ```sh
@@ -50,26 +51,26 @@ BAYMUTT_KEY_FILE=<that path> varlock run -- pnpm migrate
 ```
 
 Every command prints JSON on stdout and one JSON error line on stderr, and no command prints or
-writes a value. `baymutt --help` lists them all; `baymutt ask --help` prints a plan with every step,
-`baymutt ask schema` its format as JSON Schema, and `baymutt ask --check` checks a plan without sending it.
+writes a value. `baymutt --help` lists them all; `baymutt ask --help` prints an ask with every step,
+`baymutt ask schema` its format as JSON Schema, and `baymutt ask --check` checks an ask without sending it.
 
 - **An environment belongs to an org** and is named with the org's slug first, `<org>/<name>`. Orgs
   are made in the dashboard; their creator owns them.
 - **A CLI login lists names and holds no environment.** It shows orgs, environments and secret
-  names, and asks with plans. `baymutt auth logout` revokes it and forgets its key.
-- **A plan's steps** are `environments` (create, delete or restore), `access` (a new key that
+  names, and sends asks. `baymutt auth logout` revokes it and forgets its key.
+- **An ask's steps** are `environments` (create, delete or restore), `access` (a new key that
   reads, until an end the owner picks), `change` (a key this login asked for reads more, gives
   some back, or gets a new end) and `secrets` (set a value from a file, an environment variable
   or a dotenv file here; ask the owner to paste one; generate, delete, roll back or restore one).
   A step that needs an environment an earlier step creates waits for it. Nothing carries over to
   the next agent, which asks for itself.
 - **A key only reads.** Every value is written by the owner's browser: on its own, or when the
-  owner approves a `secrets` step. A plan never holds a value: a `set` names where it is, and the
+  owner approves a `secrets` step. An ask never holds a value: a `set` names where it is, and the
   CLI seals it so that only the owner's vault opens it.
-- **A key belongs to the one org of its plan.** Within a task, change the key you hold with a
+- **A key belongs to the one org of its ask.** Within a task, change the key you hold with a
   `change` step rather than ask for another: the same key file keeps working.
-- **A key that stays, for CI,** is an `access` step with a `command`. `baymutt ask wait` hands the
-  key to that command on stdin once the owner has approved, never onto a screen, and the plan page
+- **A key that stays, for CI,** is an `access` step with a `command`. `baymutt ask` hands the
+  key to that command on stdin once the owner has approved, never onto a screen, and the ask page
   shows the command:
 
   ```json
@@ -78,7 +79,8 @@ writes a value. `baymutt --help` lists them all; `baymutt ask --help` prints a p
 
   It works until it is revoked. The owner changes what it reads in the dashboard, and its key
   stays the same. Inside a sandbox, a key file's content works as `BAYMUTT_KEY`.
-- **A CLI before 0.11.0** still loads with a key it holds, and can no longer ask or write: upgrade.
+- **A CLI before 0.12.0** still loads with a key it holds, and can no longer ask: upgrade. One
+  before 0.11.0 can no longer write either.
 
 ### Loading values with varlock
 
@@ -94,8 +96,8 @@ DATABASE_URL=
 SESSION_SECRET=
 ```
 
-Then `varlock run -- <command>`, with `BAYMUTT_KEY_FILE` naming the key file `baymutt ask wait`
-gave (`BAYMUTT_KEY` stays unset), or with `BAYMUTT_KEY` set to a service account's key in CI.
+Then `varlock run -- <command>`, with `BAYMUTT_KEY_FILE` naming the key file `baymutt ask`
+printed (`BAYMUTT_KEY` stays unset), or with `BAYMUTT_KEY` set to a service account's key in CI.
 
 ## How it keeps values from the host
 
@@ -106,8 +108,8 @@ gave (`BAYMUTT_KEY` stays unset), or with `BAYMUTT_KEY` set to a service account
   by someone who already holds it: the owner's browser wraps to a key exactly the environments its
   `access` step named, when the owner approves it, and later exactly what a `change` step adds.
   Nothing is wrapped to a CLI login. The Worker stores ciphertext, sealed names, public keys,
-  wraps, grants, plans and the activity log.
-- **A value a plan proposes is sealed by the CLI login to the owner's account key**, so the store
+  wraps, grants, asks and the activity log.
+- **A value an ask proposes is sealed by the CLI login to the owner's account key**, so the store
   carries it and cannot open it; the owner's browser opens it, shows it masked, and seals it to the
   environment on approval. The owner's note back is sealed to that login alone.
 - **A name is stored as an index and a sealed name**, under one names key per org that the owner's
@@ -120,13 +122,13 @@ gave (`BAYMUTT_KEY` stays unset), or with `BAYMUTT_KEY` set to a service account
   version's ciphertext and opens it with the vault; the store logs the request and never sees the
   value. A session an email link made cannot.
 - **Every write is a new version and a delete goes to the bin**, so what the owner approved can be
-  rolled back. `baymutt bin list` shows what was deleted, for 30 days; a plan's `secrets` step
+  rolled back. `baymutt bin list` shows what was deleted, for 30 days; an ask's `secrets` step
   asks to restore it. Only the owner, in the dashboard, removes something sooner.
 
 What it does not hide: org names, how many environments and secrets there are, sizes, who read
 or wrote what when, and what a person typed as a reason or a key's name. What
 it does not protect yet: a compromised host could swap a value for one of its own or answer with
-an older version, or show a plan's steps other than the agent wrote them; the activity log and the
+an older version, or show an ask's steps other than the agent wrote them; the activity log and the
 version history are what would show it. What an approval cannot do: take back what a key already
 read, or stop agents under one operating-system user from reading each other's key files.
 

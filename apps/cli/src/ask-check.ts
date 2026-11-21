@@ -1,15 +1,15 @@
-// `baymutt ask --check`: what `ask` refuses about a plan before it talks to the store, and nothing
+// `baymutt ask --check`: what `ask` refuses about an ask before it talks to the store, and nothing
 // else. Each `set` source is read as `ask` reads it, to see that it is there, and dropped: no value
 // is kept, printed or named in a message.
 import * as Effect from 'effect/Effect';
-import type { PlanDocument } from './plan-document.ts';
-import { checkCommand, endOf } from './plan-making.ts';
+import type { AskDocument } from './ask-document.ts';
+import { checkCommand, endOf } from './ask-making.ts';
 import { readProposedValue } from './proposed-values.ts';
 
 const HOUR_MS = 3600 * 1000;
 
-export const checkPlan = Effect.fn('plan.check')(function* (plan: PlanDocument) {
-  for (const [index, step] of plan.steps.entries()) {
+export const checkAsk = Effect.fn('ask.check')(function* (ask: AskDocument) {
+  for (const [index, step] of ask.steps.entries()) {
     const path = `steps[${index}]`;
     if (step.type === 'access') {
       if (step.command !== undefined) yield* checkCommand(step.command, path);

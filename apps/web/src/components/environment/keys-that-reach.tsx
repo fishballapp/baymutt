@@ -102,7 +102,7 @@ export const KeysThatReach = ({ environment }: { readonly environment: OpenedEnv
         if (reaching.length === 0) {
           return (
             <EmptyState>
-              Only you, so far. A key reads it once you approve a plan’s step that names it.
+              Only you, so far. A key reads it once you approve an ask’s step that names it.
             </EmptyState>
           );
         }

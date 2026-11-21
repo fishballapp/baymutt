@@ -1,15 +1,15 @@
 import type { Page } from '@playwright/test';
 import {
-  askPlan,
   check,
   followLink,
   keepRecoveryKey,
   keepsVaultOpen,
   PHONE,
   type Run,
+  sendAsk,
   shooter,
   WEB,
-  waitPlan,
+  waitAsk,
   withPasskeys,
 } from '../support.ts';
 import * as environments from './environments.ts';
@@ -78,14 +78,14 @@ export const deleteOrg = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) 
   await environments.environmentsEmpty(page, 'Scratch');
   await environments.createEnvironment(page, 'app/tmp');
   await page.getByRole('link', { name: /scratch\/app\/tmp/ }).waitFor();
-  const scratchAsk = askPlan(laptop, {
+  const scratchAsk = sendAsk(laptop, {
     reason: 'tmp',
     steps: [{ type: 'access', read: ['scratch/app/tmp'] }],
   });
   await page.goto(scratchAsk.url);
   await page.getByRole('button', { name: 'Approve key' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  waitPlan(laptop, scratchAsk.id);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  waitAsk(laptop, scratchAsk.id);
   await page.goto(`${WEB}/orgs/scratch/environments`);
   await page.getByRole('link', { name: /scratch\/app\/tmp/ }).click();
   await page.getByRole('button', { name: 'Delete environment' }).click();

@@ -1418,7 +1418,7 @@ textarea.input {
   font-size: 13px;
   color: var(--muted);
 }
-/* The plan page. The outline: every step on one line, like the nav's items, with no rules; the
+/* The ask page. The outline: every step on one line, like the nav's items, with no rules; the
    step in focus sunken. Each line is a button that opens its step. */
 .outline {
   margin-top: 32px;

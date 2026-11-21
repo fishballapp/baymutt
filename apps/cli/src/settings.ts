@@ -52,7 +52,7 @@ const resolve = Effect.gen(function* () {
     origin: url.origin,
     stateFile: path.join(directory, 'state.json'),
     keyFile: path.join(directory, 'key'),
-    /** One owner-only file per key a plan's `access` step made, named by its id, until it is used up or refused, and each plan's record. */
+    /** One owner-only file per key an ask's `access` step made, named by its id, until it is used up or refused, and each ask's record. */
     keysDirectory: path.join(directory, 'keys'),
     keychainService: `baymutt ${url.origin}`,
   };

@@ -1,23 +1,23 @@
-// Plans: what `baymutt ask` makes. A CLI login asks the owner for anything in one org at once: a
+// Asks: what `baymutt ask` makes. A CLI login asks the owner for anything in one org at once: a
 // reason and ordered steps (create, delete or restore environments; a new key that reads; a change
 // to a key it asked for; values to set, paste, generate, delete, roll back or restore). The owner
 // approves or rejects each step whole; nothing a step names happens before, but for a change that
-// only gives access back. Owns `plan`, `plan_step` and `plan_item`.
+// only gives access back. Owns `ask`, `ask_step` and `ask_item`.
 import {
   type Actor,
   type ActorIdentity,
   AlreadyExistsError,
   type ApproveStepPayload,
+  ASK_WAIT_MS,
+  type AskStep,
   InvalidRequestError,
   LIMITS,
   LimitReachedError,
   LinkSpentError,
-  MAX_PLAN_ITEMS,
-  type NewPlan,
+  MAX_ASK_ITEMS,
+  type NewAsk,
   NotFoundError,
   OwnerRequiredError,
-  PLAN_WAIT_MS,
-  type PlanStep,
   StepNotApprovableError,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
@@ -30,20 +30,20 @@ import type * as Statement from 'effect/sql/Statement';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
 import { secretWrites } from '../secret-writes.ts';
-import { planApprovals, stepWords } from './plan-approvals.ts';
-import { type ItemRow, planRows, StepTypeSchema } from './plan-rows.ts';
+import { askApprovals, stepWords } from './ask-approvals.ts';
+import { askRows, type ItemRow, StepTypeSchema } from './ask-rows.ts';
 import { isLogin, type Lookups, namesNotSealed, outsideKeyOrg } from './rows.ts';
 import { credentialTaken, insertCredential, revokeStatements } from './service-accounts.ts';
 
 /** Who expires a step nobody answered, or rejects one nobody is left to answer. */
-const SYSTEM_ACTOR: Actor = { kind: 'system', id: 'plans', name: 'baymutt' };
+const SYSTEM_ACTOR: Actor = { kind: 'system', id: 'asks', name: 'baymutt' };
 
-/** How long a plan is kept once its last step closed. */
+/** How long an ask is kept once its last step closed. */
 const KEEP_MS = 7 * 24 * 3600 * 1000;
 
 type ItemOp = ItemRow['op'];
 
-/** One item of a new plan as its row is written, and the path an error names it by. */
+/** One item of a new ask as its row is written, and the path an error names it by. */
 type NewItem = {
   readonly path: string;
   readonly stepPosition: number;
@@ -59,7 +59,7 @@ type NewItem = {
   readonly proposedValue: string | null;
 };
 
-type NewStep = NewPlan['steps'][number];
+type NewStep = NewAsk['steps'][number];
 
 const blankItem = {
   environmentName: null,
@@ -136,20 +136,20 @@ const itemsOf = (step: NewStep, stepPosition: number): ReadonlyArray<NewItem> =>
 const isGiveBackOnly = (step: NewStep) =>
   step.type === 'change' && step.read.length === 0 && step.end === 'keep';
 
-const answered = (step: PlanStep) =>
+const answered = (step: AskStep) =>
   new LinkSpentError({
     message: (() => {
       if (step.status === 'expired') {
-        return 'This step expired: nobody answered it within an hour of the plan. Its CLI login asks again.';
+        return 'This step expired: nobody answered it within an hour of the ask. Its CLI login asks again.';
       }
       if (step.status === 'cancelled') {
-        return 'This step was withdrawn: its CLI login cancelled the plan.';
+        return 'This step was withdrawn: its CLI login cancelled the ask.';
       }
       return `This step was already ${step.status}.`;
     })(),
   });
 
-export const plans = ({
+export const asks = ({
   sql,
   audit,
   lookups,
@@ -160,9 +160,9 @@ export const plans = ({
 }) => {
   const { memberOrg, ownedOrg, approvedServiceAccountIn, underLimit, nameTaken, noChangeWaiting } =
     lookups;
-  const { visible, list } = planRows(sql);
+  const { visible, list } = askRows(sql);
   const writes = secretWrites({ sql, audit });
-  const { approval, createTaken } = planApprovals({ sql, audit, writes, lookups });
+  const { approval, createTaken } = askApprovals({ sql, audit, writes, lookups });
 
   const environmentRows = SqlSchema.findAll({
     Request: Schema.Struct({ ids: Schema.String, orgId: Schema.String, names: Schema.String }),
@@ -222,19 +222,19 @@ export const plans = ({
           WHERE g.credential_id = ${keyId} AND e.deleted_at IS NULL`,
   });
 
-  /** Plans of an org with a step still waiting for the owner. */
-  const waitingPlans = SqlSchema.findAll({
+  /** Asks of an org with a step still waiting for the owner. */
+  const waitingAsks = SqlSchema.findAll({
     Request: Schema.Struct({ orgId: Schema.String, expiredBy: Schema.Finite }),
     Result: Schema.Struct({ count: Schema.Finite }),
     execute: ({ orgId, expiredBy }) =>
-      sql`SELECT COUNT(*) AS count FROM plan p
+      sql`SELECT COUNT(*) AS count FROM ask p
           WHERE p.org_id = ${orgId} AND p.cancelled_at IS NULL AND p.created_at > ${expiredBy}
-            AND EXISTS (SELECT 1 FROM plan_step s WHERE s.plan_id = p.id AND s.status = 'pending')`,
+            AND EXISTS (SELECT 1 FROM ask_step s WHERE s.ask_id = p.id AND s.status = 'pending')`,
   });
 
   /**
-   * Steps still pending that the daily run closes: those past their plan's hour, and those of a
-   * plan whose CLI login has ended, which nobody is left to answer.
+   * Steps still pending that the daily run closes: those past their ask's hour, and those of a
+   * ask whose CLI login has ended, which nobody is left to answer.
    */
   const stepsToClose = SqlSchema.findAll({
     Request: Schema.Finite,
@@ -248,41 +248,41 @@ export const plans = ({
     }),
     execute: now =>
       sql`SELECT p.id, p.org_id, s.position, s.type, k.name AS key_name,
-            p.created_at <= ${now - PLAN_WAIT_MS} AS has_expired
-          FROM plan p JOIN plan_step s ON s.plan_id = p.id
+            p.created_at <= ${now - ASK_WAIT_MS} AS has_expired
+          FROM ask p JOIN ask_step s ON s.ask_id = p.id
           JOIN credential m ON m.id = p.credential_id
           LEFT JOIN credential k ON k.id = s.key_id
           WHERE s.status = 'pending'
-            AND (p.created_at <= ${now - PLAN_WAIT_MS}
+            AND (p.created_at <= ${now - ASK_WAIT_MS}
               OR (m.expires_at IS NOT NULL AND m.expires_at <= ${now}))
           ORDER BY p.id, s.position`,
   });
 
-  /** A step still waiting at `now`: pending, in a plan neither withdrawn nor past its hour. */
-  const isStepPending = (planId: string, position: number, now: number) =>
-    sql`EXISTS (SELECT 1 FROM plan_step s JOIN plan p ON p.id = s.plan_id
-      WHERE s.plan_id = ${planId} AND s.position = ${position} AND s.status = 'pending'
-        AND p.cancelled_at IS NULL AND p.created_at > ${now - PLAN_WAIT_MS})`;
+  /** A step still waiting at `now`: pending, in an ask neither withdrawn nor past its hour. */
+  const isStepPending = (askId: string, position: number, now: number) =>
+    sql`EXISTS (SELECT 1 FROM ask_step s JOIN ask p ON p.id = s.ask_id
+      WHERE s.ask_id = ${askId} AND s.position = ${position} AND s.status = 'pending'
+        AND p.cancelled_at IS NULL AND p.created_at > ${now - ASK_WAIT_MS})`;
 
   /** The steps the answer `answerId` took out of pending. */
-  const answeredBy = (planId: string, answerId: string) =>
-    sql`SELECT position FROM plan_step WHERE plan_id = ${planId} AND answer_id = ${answerId}`;
+  const answeredBy = (askId: string, answerId: string) =>
+    sql`SELECT position FROM ask_step WHERE ask_id = ${askId} AND answer_id = ${answerId}`;
 
-  const hasAnswered = (planId: string, answerId: string) =>
-    sql`EXISTS (${answeredBy(planId, answerId)})`;
+  const hasAnswered = (askId: string, answerId: string) =>
+    sql`EXISTS (${answeredBy(askId, answerId)})`;
 
   /**
    * What closing steps unapproved writes beside their status: their proposed values and hints go, and a key
    * an `access` step made is revoked, as a rejected request's is. All only if `answerId` took.
    */
-  const closingStatements = (planId: string, answerId: string, now: number) => [
-    sql`UPDATE plan_item SET proposed_value = NULL, sealed_hint = NULL
-        WHERE plan_id = ${planId} AND step_position IN (${answeredBy(planId, answerId)})`,
+  const closingStatements = (askId: string, answerId: string, now: number) => [
+    sql`UPDATE ask_item SET proposed_value = NULL, sealed_hint = NULL
+        WHERE ask_id = ${askId} AND step_position IN (${answeredBy(askId, answerId)})`,
     ...revokeStatements(sql, {
-      ids: sql`SELECT key_id FROM plan_step
-        WHERE plan_id = ${planId} AND answer_id = ${answerId} AND type = 'access'`,
+      ids: sql`SELECT key_id FROM ask_step
+        WHERE ask_id = ${askId} AND answer_id = ${answerId} AND type = 'access'`,
       now,
-      onlyIf: hasAnswered(planId, answerId),
+      onlyIf: hasAnswered(askId, answerId),
     }),
   ];
 
@@ -298,19 +298,19 @@ export const plans = ({
       });
     }
     const loaded = yield* visible(actor, id);
-    yield* ownedOrg(actor, loaded.plan.org.id, what);
-    const step = loaded.plan.steps[index];
+    yield* ownedOrg(actor, loaded.ask.org.id, what);
+    const step = loaded.ask.steps[index];
     const row = loaded.steps[index];
     if (step === undefined || row === undefined) {
       return yield* new NotFoundError({
-        message: `This plan has ${loaded.plan.steps.length} steps, numbered from 0.`,
+        message: `This ask has ${loaded.ask.steps.length} steps, numbered from 0.`,
       });
     }
     return { loaded, step, row };
   });
 
   /** Why a step cannot be approved now, or nothing when it can. */
-  const notApprovable = (step: PlanStep) => {
+  const notApprovable = (step: AskStep) => {
     if (step.waitsFor.length > 0) {
       return new StepNotApprovableError({
         message: `Step ${step.index} waits for step ${step.waitsFor.join(', ')}, which creates or restores an environment it names. Approve or reject that first.`,
@@ -332,10 +332,10 @@ export const plans = ({
     answer: ApproveStepPayload,
   ) {
     const loaded = yield* visible(actor, id).pipe(Effect.orDie);
-    const { plan } = loaded;
+    const { ask } = loaded;
     const items = loaded.items.filter(item => item.stepPosition === index);
-    const step = plan.steps[index];
-    if (step === undefined) return yield* Effect.die(`plan ${id} lost step ${index}`);
+    const step = ask.steps[index];
+    if (step === undefined) return yield* Effect.die(`ask ${id} lost step ${index}`);
     if (step.status !== 'pending') return yield* answered(step);
     const blocked = notApprovable(step);
     if (blocked !== null) return yield* blocked;
@@ -352,12 +352,12 @@ export const plans = ({
       }
     }
     return yield* new StepNotApprovableError({
-      message: `What step ${index} names changed while it was being approved. Read the plan again.`,
+      message: `What step ${index} names changed while it was being approved. Read the ask again.`,
     });
   });
 
   return {
-    listPlans: Effect.fn('Access.listPlans')(function* ({
+    listAsks: Effect.fn('Access.listAsks')(function* ({
       actor,
       orgId,
     }: {
@@ -367,51 +367,51 @@ export const plans = ({
       return yield* list(actor, orgId);
     }),
 
-    getPlan: Effect.fn('Access.getPlan')(function* ({
+    getAsk: Effect.fn('Access.getAsk')(function* ({
       actor,
       id,
     }: {
       readonly actor: ActorIdentity;
       readonly id: string;
     }) {
-      return (yield* visible(actor, id)).plan;
+      return (yield* visible(actor, id)).ask;
     }),
 
-    createPlan: Effect.fn('Access.createPlan')(function* ({
+    createAsk: Effect.fn('Access.createAsk')(function* ({
       actor,
-      plan,
+      ask,
     }: {
       readonly actor: ActorIdentity;
-      readonly plan: NewPlan;
+      readonly ask: NewAsk;
     }) {
       if (actor._tag !== 'Credential' || !isLogin(actor)) {
         return yield* new OwnerRequiredError({
           message:
             actor._tag === 'Owner'
-              ? 'A plan is a CLI login’s: it asks the owner. The owner does what a plan would from the dashboard.'
+              ? 'An ask is a CLI login’s: it asks the owner. The owner does what an ask would from the dashboard.'
               : 'A key cannot ask the owner. Ask from a CLI login: `baymutt ask`.',
         });
       }
       const login = actor.credentialId;
-      const org = yield* memberOrg(actor, plan.orgId);
+      const org = yield* memberOrg(actor, ask.orgId);
       if (!org.areNamesSealed) return yield* namesNotSealed(org.slug);
       const invalid = (message: string) => new InvalidRequestError({ message });
-      const items = plan.steps.flatMap((step, position) => itemsOf(step, position));
-      if (items.length > MAX_PLAN_ITEMS) {
+      const items = ask.steps.flatMap((step, position) => itemsOf(step, position));
+      if (items.length > MAX_ASK_ITEMS) {
         return yield* invalid(
-          `A plan names up to ${MAX_PLAN_ITEMS} things across its steps, and this one names ${items.length}. Ask for the rest in another plan.`,
+          `An ask names up to ${MAX_ASK_ITEMS} things across its steps, and this one names ${items.length}. Ask for the rest in another ask.`,
         );
       }
 
       const creates = items.filter(item => item.op === 'create');
       const environments = yield* environmentRows({
         ids: JSON.stringify([...new Set(items.map(item => item.environmentId))]),
-        orgId: plan.orgId,
+        orgId: ask.orgId,
         names: JSON.stringify(creates.map(item => item.environmentName)),
       }).pipe(Effect.orDie);
-      /** An environment of the plan's org, as it is now. */
+      /** An environment of the ask's org, as it is now. */
       const inOrg = (environmentId: string) =>
-        environments.find(row => row.id === environmentId && row.orgId === plan.orgId);
+        environments.find(row => row.id === environmentId && row.orgId === ask.orgId);
       /** Whether an earlier step creates or restores it, which leaves it live once approved. */
       const isBrought = (environmentId: string, before: number) =>
         items.some(
@@ -440,7 +440,7 @@ export const plans = ({
         { concurrency: 2 },
       ).pipe(Effect.orDie);
 
-      for (const [index, step] of plan.steps.entries()) {
+      for (const [index, step] of ask.steps.entries()) {
         const own = items.filter(item => item.stepPosition === index);
         const named = own.map(item =>
           step.type === 'secrets'
@@ -486,12 +486,12 @@ export const plans = ({
               environments.some(
                 row =>
                   row.id === item.environmentId ||
-                  (row.orgId === plan.orgId && row.name === item.environmentName),
+                  (row.orgId === ask.orgId && row.name === item.environmentName),
               )
             ) {
               return yield* yield* nameTaken({
                 id: item.environmentId,
-                orgId: plan.orgId,
+                orgId: ask.orgId,
                 orgSlug: org.slug,
                 name: item.environmentName ?? '',
               });
@@ -555,9 +555,9 @@ export const plans = ({
             message: `steps[${index}].keyId: no key this CLI login asked for, approved and not revoked, has this id. List them with \`baymutt key list\`.`,
           });
         }
-        if (key.orgId !== plan.orgId) {
+        if (key.orgId !== ask.orgId) {
           return yield* invalid(
-            `steps[${index}]: ${outsideKeyOrg(key.orgSlug ?? 'another org', 'a plan changes keys of its own org only')}`,
+            `steps[${index}]: ${outsideKeyOrg(key.orgSlug ?? 'another org', 'an ask changes keys of its own org only')}`,
           );
         }
         const now = yield* Clock.currentTimeMillis;
@@ -567,12 +567,12 @@ export const plans = ({
           );
         }
         if (
-          plan.steps.some(
+          ask.steps.some(
             (other, position) =>
               position !== index && other.type === 'change' && other.keyId === step.keyId,
           )
         ) {
-          return yield* invalid(`steps[${index}]: a plan changes each key in one step.`);
+          return yield* invalid(`steps[${index}]: an ask changes each key in one step.`);
         }
         yield* noChangeWaiting(key);
         if (step.read.length === 0 && step.giveBack.length === 0 && step.end === 'keep') {
@@ -598,7 +598,7 @@ export const plans = ({
         }
       }
 
-      const accessSteps = plan.steps.flatMap(step => (step.type === 'access' ? [step] : []));
+      const accessSteps = ask.steps.flatMap(step => (step.type === 'access' ? [step] : []));
       const keyIds = accessSteps.map(step => step.key.id);
       if (new Set(keyIds).size !== keyIds.length) {
         return yield* invalid('Each `access` step makes a key of its own: give each a new id.');
@@ -610,21 +610,21 @@ export const plans = ({
         yield* underLimit(actor.accountId, 'serviceAccounts', accessSteps.length);
       }
       // Counted before the write, so two at once can overshoot by one: a cap on growth.
-      const [waiting] = yield* waitingPlans({
-        orgId: plan.orgId,
-        expiredBy: (yield* Clock.currentTimeMillis) - PLAN_WAIT_MS,
+      const [waiting] = yield* waitingAsks({
+        orgId: ask.orgId,
+        expiredBy: (yield* Clock.currentTimeMillis) - ASK_WAIT_MS,
       }).pipe(Effect.orDie);
-      if ((waiting?.count ?? 0) >= LIMITS.waitingPlansPerOrg) {
+      if ((waiting?.count ?? 0) >= LIMITS.waitingAsksPerOrg) {
         return yield* new LimitReachedError({
-          limit: LIMITS.waitingPlansPerOrg,
-          message: `Up to ${LIMITS.waitingPlansPerOrg} plans wait for the owner in one org at once. Withdraw one with \`baymutt ask cancel <id>\`, or wait for the owner to answer.`,
+          limit: LIMITS.waitingAsksPerOrg,
+          message: `Up to ${LIMITS.waitingAsksPerOrg} asks wait for the owner in one org at once. Withdraw one with \`baymutt ask cancel <id>\`, or wait for the owner to answer.`,
         });
       }
 
       const now = yield* Clock.currentTimeMillis;
       const by = actorOf(actor);
-      const made = sql`EXISTS (SELECT 1 FROM plan
-        WHERE id = ${plan.id} AND credential_id = ${login} AND created_at = ${now})`;
+      const made = sql`EXISTS (SELECT 1 FROM ask
+        WHERE id = ${ask.id} AND credential_id = ${login} AND created_at = ${now})`;
       const keyOf = (step: NewStep) => {
         if (step.type === 'access') return step.key.id;
         if (step.type === 'change') return step.keyId;
@@ -637,7 +637,7 @@ export const plans = ({
         if (typeof step.end === 'number') return { keyEnd: 'after', lifetime: step.end };
         return { keyEnd: step.end, lifetime: null };
       };
-      const stepRows = plan.steps.map((step, position) => ({
+      const stepRows = ask.steps.map((step, position) => ({
         position,
         type: step.type,
         reason: step.reason ?? null,
@@ -651,17 +651,17 @@ export const plans = ({
       // A proposed value is bound on its own: a list of them could outgrow one parameter.
       const withValue = items.filter(item => item.proposedValue !== null);
       const itemStatement = (rows: Statement.Fragment) =>
-        sql`INSERT OR IGNORE INTO plan_item
-              (plan_id, step_position, position, op, environment_id, environment_name,
+        sql`INSERT OR IGNORE INTO ask_item
+              (ask_id, step_position, position, op, environment_id, environment_name,
                environment_sealed_name, secret_name, secret_sealed_name, sealed_hint, version,
                proposed_value)
-            SELECT ${plan.id}, ${field('stepPosition')}, ${field('position')}, ${field('op')},
+            SELECT ${ask.id}, ${field('stepPosition')}, ${field('position')}, ${field('op')},
               ${field('environmentId')}, ${field('environmentName')},
               ${field('environmentSealedName')}, ${field('secretName')},
               ${field('secretSealedName')}, ${field('sealedHint')}, ${field('version')},
               ${field('proposedValue')}
             FROM ${rows} WHERE ${made}`;
-      const giveBacks = plan.steps.flatMap((step, position) =>
+      const giveBacks = ask.steps.flatMap((step, position) =>
         isGiveBackOnly(step) && step.type === 'change'
           ? step.giveBack.map(environmentId => ({ keyId: step.keyId, position, environmentId }))
           : [],
@@ -678,15 +678,15 @@ export const plans = ({
         ),
       );
 
-      // One batch: the plan, the keys its `access` steps make (which hold nothing until their step
+      // One batch: the ask, the keys its `access` steps make (which hold nothing until their step
       // is approved), its steps and items, and what a give-back-only change does at once.
       const [inserted] = yield* sql
         .batch([
-          sql`INSERT INTO plan (id, org_id, credential_id, reason, created_at)
-              SELECT ${plan.id}, ${plan.orgId}, ${login}, ${plan.reason}, ${now}
+          sql`INSERT INTO ask (id, org_id, credential_id, reason, created_at)
+              SELECT ${ask.id}, ${ask.orgId}, ${login}, ${ask.reason}, ${now}
               WHERE NOT EXISTS (SELECT 1 FROM credential
                                 WHERE id IN (SELECT value FROM json_each(${JSON.stringify(keyIds)})))
-                -- The login may have been revoked since this request was recognised: a plan made
+                -- The login may have been revoked since this request was recognised: an ask made
                 -- after that would outlive it, with a key nothing revokes.
                 AND EXISTS (SELECT 1 FROM credential WHERE id = ${login} AND revoked_at IS NULL)
               ON CONFLICT (id) DO NOTHING
@@ -694,20 +694,20 @@ export const plans = ({
           ...accessSteps.map(({ key: { vouchers, ...key }, command, reason }) =>
             insertCredential(sql, {
               accountId: actor.accountId,
-              credential: { ...key, description: reason ?? plan.reason },
+              credential: { ...key, description: reason ?? ask.reason },
               now,
               parentId: login,
               vouchers,
               // A key piped into a command is for another system, one kept in a file for the agent.
               intent: command === null ? 'agent' : 'service-account',
-              orgId: plan.orgId,
+              orgId: ask.orgId,
               onlyIf: made,
             }),
           ),
-          sql`INSERT OR IGNORE INTO plan_step
-                (plan_id, position, type, reason, status, key_id, key_end, lifetime, command,
+          sql`INSERT OR IGNORE INTO ask_step
+                (ask_id, position, type, reason, status, key_id, key_end, lifetime, command,
                  resolved_at)
-              SELECT ${plan.id}, ${field('position')}, ${field('type')}, ${field('reason')},
+              SELECT ${ask.id}, ${field('position')}, ${field('type')}, ${field('reason')},
                 ${field('status')}, ${field('keyId')}, ${field('keyEnd')}, ${field('lifetime')},
                 ${field('command')}, ${field('resolvedAt')}
               FROM json_each(${JSON.stringify(stepRows)}) j WHERE ${made}`,
@@ -725,7 +725,7 @@ export const plans = ({
               return [
                 yield* audit.entry(
                   {
-                    orgId: plan.orgId,
+                    orgId: ask.orgId,
                     actor: by,
                     action: 'grant.remove',
                     environmentId,
@@ -742,7 +742,7 @@ export const plans = ({
             { concurrency: 1 },
           )).flat(),
           yield* audit.entry(
-            { orgId: plan.orgId, actor: by, action: 'plan.create', detail: plan.reason },
+            { orgId: ask.orgId, actor: by, action: 'ask.create', detail: ask.reason },
             made,
           ),
         ])
@@ -752,10 +752,10 @@ export const plans = ({
           return yield* credentialTaken();
         }
         return yield* new AlreadyExistsError({
-          message: 'A plan with this id exists. Ask again: a new plan gets a new id.',
+          message: 'An ask with this id exists. Ask again: a new ask gets a new id.',
         });
       }
-      return (yield* visible(actor, plan.id).pipe(Effect.orDie)).plan;
+      return (yield* visible(actor, ask.id).pipe(Effect.orDie)).ask;
     }),
 
     approveStep: Effect.fn('Access.approveStep')(function* ({
@@ -769,19 +769,19 @@ export const plans = ({
       readonly index: number;
       readonly answer: ApproveStepPayload;
     }) {
-      const { loaded, step, row } = yield* ownersStep(actor, id, index, 'approves a plan’s step');
+      const { loaded, step, row } = yield* ownersStep(actor, id, index, 'approves an ask’s step');
       if (step.status !== 'pending') return yield* answered(step);
       const blocked = notApprovable(step);
       if (blocked !== null) return yield* blocked;
       if (answer.type !== step.type) {
         return yield* new InvalidRequestError({
-          message: `Step ${index} is a \`${step.type}\` step, and this approves a \`${answer.type}\` one. Read the plan again.`,
+          message: `Step ${index} is a \`${step.type}\` step, and this approves a \`${answer.type}\` one. Read the ask again.`,
         });
       }
       const now = yield* Clock.currentTimeMillis;
       const answerId = crypto.randomUUID();
-      const took = sql`EXISTS (SELECT 1 FROM plan_step
-        WHERE plan_id = ${id} AND position = ${index} AND answer_id = ${answerId})`;
+      const took = sql`EXISTS (SELECT 1 FROM ask_step
+        WHERE ask_id = ${id} AND position = ${index} AND answer_id = ${answerId})`;
       const by = actorOf(actor);
       const { precondition, effects, detail } = yield* approval(
         {
@@ -800,23 +800,23 @@ export const plans = ({
       // pending and everything it names is as approving it needs. The rest is conditioned on that.
       const [approved] = yield* sql
         .batch([
-          sql`UPDATE plan_step
+          sql`UPDATE ask_step
               SET status = 'approved', resolved_at = ${now}, note = ${answer.note ?? null},
                 answer_id = ${answerId}
-              WHERE plan_id = ${id} AND position = ${index} AND ${isStepPending(id, index, now)}
+              WHERE ask_id = ${id} AND position = ${index} AND ${isStepPending(id, index, now)}
                 AND ${precondition}
               RETURNING position`,
-          sql`UPDATE plan_item SET proposed_value = NULL, sealed_hint = NULL
-              WHERE plan_id = ${id} AND step_position = ${index} AND ${took}`,
+          sql`UPDATE ask_item SET proposed_value = NULL, sealed_hint = NULL
+              WHERE ask_id = ${id} AND step_position = ${index} AND ${took}`,
           ...effects,
           yield* audit.entry(
-            { orgId: loaded.plan.org.id, actor: by, action: 'step.approve', detail },
+            { orgId: loaded.ask.org.id, actor: by, action: 'step.approve', detail },
             took,
           ),
         ])
         .pipe(Effect.orDie);
       if ((approved ?? []).length === 0) return yield* failure(actor, id, index, answer);
-      return (yield* visible(actor, id).pipe(Effect.orDie)).plan;
+      return (yield* visible(actor, id).pipe(Effect.orDie)).ask;
     }),
 
     rejectStep: Effect.fn('Access.rejectStep')(function* ({
@@ -830,20 +830,20 @@ export const plans = ({
       readonly index: number;
       readonly note: string | null;
     }) {
-      const { loaded, step, row } = yield* ownersStep(actor, id, index, 'rejects a plan’s step');
+      const { loaded, step, row } = yield* ownersStep(actor, id, index, 'rejects an ask’s step');
       if (step.status !== 'pending') return yield* answered(step);
       const now = yield* Clock.currentTimeMillis;
       const answerId = crypto.randomUUID();
       const [rejected] = yield* sql
         .batch([
-          sql`UPDATE plan_step
+          sql`UPDATE ask_step
               SET status = 'rejected', resolved_at = ${now}, note = ${note}, answer_id = ${answerId}
-              WHERE plan_id = ${id} AND position = ${index} AND ${isStepPending(id, index, now)}
+              WHERE ask_id = ${id} AND position = ${index} AND ${isStepPending(id, index, now)}
               RETURNING position`,
           ...closingStatements(id, answerId, now),
           yield* audit.entry(
             {
-              orgId: loaded.plan.org.id,
+              orgId: loaded.ask.org.id,
               actor: actorOf(actor),
               action: 'step.reject',
               detail: stepWords(row),
@@ -853,13 +853,13 @@ export const plans = ({
         ])
         .pipe(Effect.orDie);
       if ((rejected ?? []).length === 0) {
-        const after = (yield* visible(actor, id).pipe(Effect.orDie)).plan.steps[index];
-        return yield* after === undefined ? Effect.die(`plan ${id} lost a step`) : answered(after);
+        const after = (yield* visible(actor, id).pipe(Effect.orDie)).ask.steps[index];
+        return yield* after === undefined ? Effect.die(`ask ${id} lost a step`) : answered(after);
       }
-      return (yield* visible(actor, id).pipe(Effect.orDie)).plan;
+      return (yield* visible(actor, id).pipe(Effect.orDie)).ask;
     }),
 
-    cancelPlan: Effect.fn('Access.cancelPlan')(function* ({
+    cancelAsk: Effect.fn('Access.cancelAsk')(function* ({
       actor,
       id,
     }: {
@@ -869,72 +869,72 @@ export const plans = ({
       if (actor._tag === 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'A plan is withdrawn by the CLI login that made it. The owner rejects its steps instead.',
+            'An ask is withdrawn by the CLI login that made it. The owner rejects its steps instead.',
         });
       }
-      // A CLI login sees only the plans it made, so one it reaches is its own to withdraw.
-      const { plan } = yield* visible(actor, id);
+      // A CLI login sees only the asks it made, so one it reaches is its own to withdraw.
+      const { ask } = yield* visible(actor, id);
       const spent = new LinkSpentError({
-        message: 'No step of this plan still waits: each was answered, withdrawn or has expired.',
+        message: 'No step of this ask still waits: each was answered, withdrawn or has expired.',
       });
-      if (!plan.steps.some(step => step.status === 'pending')) return yield* spent;
+      if (!ask.steps.some(step => step.status === 'pending')) return yield* spent;
       const now = yield* Clock.currentTimeMillis;
       const answerId = crypto.randomUUID();
       const took = hasAnswered(id, answerId);
       const [cancelled] = yield* sql
         .batch([
-          sql`UPDATE plan_step SET status = 'cancelled', resolved_at = ${now}, answer_id = ${answerId}
-              WHERE plan_id = ${id} AND status = 'pending'
-                AND EXISTS (SELECT 1 FROM plan WHERE id = ${id} AND cancelled_at IS NULL
-                  AND created_at > ${now - PLAN_WAIT_MS})
+          sql`UPDATE ask_step SET status = 'cancelled', resolved_at = ${now}, answer_id = ${answerId}
+              WHERE ask_id = ${id} AND status = 'pending'
+                AND EXISTS (SELECT 1 FROM ask WHERE id = ${id} AND cancelled_at IS NULL
+                  AND created_at > ${now - ASK_WAIT_MS})
               RETURNING position`,
-          sql`UPDATE plan SET cancelled_at = ${now} WHERE id = ${id} AND ${took}`,
+          sql`UPDATE ask SET cancelled_at = ${now} WHERE id = ${id} AND ${took}`,
           ...closingStatements(id, answerId, now),
           yield* audit.entry(
             {
-              orgId: plan.org.id,
+              orgId: ask.org.id,
               actor: actorOf(actor),
-              action: 'plan.cancel',
-              detail: plan.reason,
+              action: 'ask.cancel',
+              detail: ask.reason,
             },
             took,
           ),
         ])
         .pipe(Effect.orDie);
       if ((cancelled ?? []).length === 0) return yield* spent;
-      return (yield* visible(actor, id).pipe(Effect.orDie)).plan;
+      return (yield* visible(actor, id).pipe(Effect.orDie)).ask;
     }),
 
     /**
-     * The daily run's part. A step nobody answered within `PLAN_WAIT_MS` of its plan has expired
+     * The daily run's part. A step nobody answered within `ASK_WAIT_MS` of its ask has expired
      * already, as everything that reads it sees: here its row says so, its proposed values and
-     * hints go, and a key it would have made is revoked. A step of a plan whose CLI login has ended is rejected
-     * the same way, as revoking the login does. A plan whose last step closed 7 days ago goes.
+     * hints go, and a key it would have made is revoked. A step of an ask whose CLI login has ended is rejected
+     * the same way, as revoking the login does. An ask whose last step closed 7 days ago goes.
      */
-    sweepPlans: Effect.gen(function* () {
+    sweepAsks: Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const byPlan = Map.groupBy(yield* stepsToClose(now).pipe(Effect.orDie), step => step.id);
-      const plans = [...byPlan].map(([id, steps]) => ({
+      const byAsk = Map.groupBy(yield* stepsToClose(now).pipe(Effect.orDie), step => step.id);
+      const asks = [...byAsk].map(([id, steps]) => ({
         id,
         steps,
         hasExpired: steps.some(step => step.hasExpired === 1),
       }));
       yield* eachIsolated({
-        sweep: 'plan to close',
-        rows: plans,
+        sweep: 'ask to close',
+        rows: asks,
         run: ({ id, steps, hasExpired }) =>
           Effect.gen(function* () {
             const answerId = crypto.randomUUID();
             const isDue = hasExpired
-              ? sql`p.created_at <= ${now - PLAN_WAIT_MS}`
+              ? sql`p.created_at <= ${now - ASK_WAIT_MS}`
               : sql`m.expires_at IS NOT NULL AND m.expires_at <= ${now}`;
             yield* sql
               .batch([
-                sql`UPDATE plan_step
+                sql`UPDATE ask_step
                     SET status = ${hasExpired ? 'expired' : 'rejected'}, resolved_at = ${now},
                       answer_id = ${answerId}
-                    WHERE plan_id = ${id} AND status = 'pending'
-                      AND EXISTS (SELECT 1 FROM plan p JOIN credential m ON m.id = p.credential_id
+                    WHERE ask_id = ${id} AND status = 'pending'
+                      AND EXISTS (SELECT 1 FROM ask p JOIN credential m ON m.id = p.credential_id
                         WHERE p.id = ${id} AND ${isDue})`,
                 ...closingStatements(id, answerId, now),
                 ...(yield* Effect.forEach(
@@ -947,7 +947,7 @@ export const plans = ({
                         action: hasExpired ? 'step.expire' : 'step.reject',
                         detail: stepWords(step),
                       },
-                      sql`EXISTS (SELECT 1 FROM plan_step WHERE plan_id = ${id}
+                      sql`EXISTS (SELECT 1 FROM ask_step WHERE ask_id = ${id}
                         AND position = ${step.position} AND answer_id = ${answerId})`,
                     ),
                   { concurrency: 1 },
@@ -956,16 +956,16 @@ export const plans = ({
               .pipe(Effect.orDie);
           }),
       });
-      const removed = yield* sql`DELETE FROM plan WHERE NOT EXISTS (SELECT 1 FROM plan_step
-          WHERE plan_id = plan.id AND (status = 'pending' OR resolved_at > ${now - KEEP_MS}))
+      const removed = yield* sql`DELETE FROM ask WHERE NOT EXISTS (SELECT 1 FROM ask_step
+          WHERE ask_id = ask.id AND (status = 'pending' OR resolved_at > ${now - KEEP_MS}))
           RETURNING id`.pipe(Effect.orDie);
       const counts = {
-        expired: plans.filter(plan => plan.hasExpired).length,
-        rejected: plans.filter(plan => !plan.hasExpired).length,
+        expired: asks.filter(ask => ask.hasExpired).length,
+        rejected: asks.filter(ask => !ask.hasExpired).length,
         removed: removed.length,
       };
-      yield* Effect.logInfo('plans swept', counts);
+      yield* Effect.logInfo('asks swept', counts);
       return counts;
-    }).pipe(Effect.withSpan('Access.sweepPlans')),
+    }).pipe(Effect.withSpan('Access.sweepAsks')),
   };
 };

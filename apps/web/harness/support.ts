@@ -3,7 +3,7 @@
  * the CLI and varlock, read the local D1, pick from a select and save screens, and `Run`, the state
  * one step leaves for later ones. The drive's own doc is in `drive.ts`.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -98,7 +98,7 @@ export const withPasskeys = async (browser: Browser, colorScheme: 'light' | 'dar
 /** Whose screens a run saves: `DRIVE_SHOTS=lists,account` saves those areas' alone; unset saves all. */
 const shotAreas = process.env.DRIVE_SHOTS?.split(',').map(area => area.trim());
 
-export type Area = 'shell' | 'account' | 'approvals' | 'environments' | 'lists' | 'plans';
+export type Area = 'shell' | 'account' | 'approvals' | 'environments' | 'lists' | 'asks';
 
 /**
  * The shooting functions of one area. `shoot` saves the full page; `shootPhone` the same screen at
@@ -218,37 +218,70 @@ export const pick = async (page: Page, label: string, option: string | RegExp) =
 export type Computer = ReturnType<typeof computer>;
 export type CliResult = ReturnType<Computer['cli']>;
 
-/** A plan `baymutt ask` sent: its id and the plan page's link. */
+/** An ask `baymutt ask` sent: its id and the ask page's link. */
 export type Asked = { readonly id: string; readonly url: string };
 
 /**
- * Sends `plan` with `baymutt ask` from `computer`, its values in files under one directory that
- * `$DIR` in the plan names. Fails the drive when the CLI refuses it.
+ * Sends `ask` with `baymutt ask` from `computer`, its values in files under one directory that
+ * `$DIR` in the ask names. Fails the drive when the CLI refuses it.
  */
-export const askPlan = (
+export const sendAsk = (
   computer: Computer,
-  plan: object,
+  ask: object,
   values: Readonly<Record<string, string>> = {},
 ): Asked => {
-  const asked = askPlanRaw(computer, plan, values);
+  const asked = sendAskRaw(computer, ask, values);
   if (asked.status !== 0 || typeof asked.json?.url !== 'string') {
-    fail(`\`baymutt ask\` refused the plan: ${asked.stderr}`);
+    fail(`\`baymutt ask\` refused the ask: ${asked.stderr}`);
   }
   return asked.json as Asked;
 };
 
-/** `baymutt ask` with `plan`, as it answers: for a plan the CLI is to refuse. */
-export const askPlanRaw = (
+/** `baymutt ask` with `ask`, as it answers: for an ask the CLI is to refuse. */
+export const sendAskRaw = (
   computer: Computer,
-  plan: object,
+  ask: object,
   values: Readonly<Record<string, string>> = {},
 ) => {
-  const dir = mkdtempSync(join(tmpdir(), 'baymutt-drive-plan-'));
+  const dir = mkdtempSync(join(tmpdir(), 'baymutt-drive-ask-'));
   for (const [file, value] of Object.entries(values)) writeFileSync(join(dir, file), value);
-  writeFileSync(join(dir, 'plan.json'), JSON.stringify(plan).replaceAll('$DIR', dir));
-  const asked = computer.cli(['ask', join(dir, 'plan.json')]);
+  writeFileSync(join(dir, 'ask.json'), JSON.stringify(ask).replaceAll('$DIR', dir));
+  const asked = computer.cli(['ask', '--no-wait', join(dir, 'ask.json')]);
   rmSync(dir, { recursive: true, force: true });
   return asked;
+};
+
+/**
+ * `baymutt ask` left running, as an agent's background job is: `printedLink` settles with what it
+ * has printed once it prints the ask's link, `done` with its exit code and every line it printed.
+ */
+export const startAsk = (computer: Computer, ask: object) => {
+  const child = spawn('node', [cliBin, 'ask'], {
+    env: computer.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  child.stdin.end(JSON.stringify(ask));
+  let stdout = '';
+  let stderr = '';
+  const link = Promise.withResolvers<string>();
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+    stdout += chunk;
+    // The first thing it prints is one pretty-printed object.
+    if (stdout.includes('\n}\n')) link.resolve(stdout);
+  });
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const done = new Promise<{ status: number | null; stdout: string; stderr: string }>(resolve => {
+    child.on('close', status => resolve({ status, stdout, stderr }));
+  });
+  return {
+    printedLink: link.promise,
+    isRunning: () => child.exitCode === null,
+    /** Everything printed so far. */
+    output: () => stdout,
+    done,
+  };
 };
 
 export type WaitedStep = {
@@ -262,7 +295,7 @@ export type WaitedStep = {
 };
 
 /** `baymutt ask wait <id>`: its exit code and one JSON line per step. */
-export const waitPlan = (computer: Computer, id: string) => {
+export const waitAsk = (computer: Computer, id: string) => {
   const run = spawnSync('node', [cliBin, 'ask', 'wait', id, '--timeout', '0'], {
     env: computer.env,
     encoding: 'utf8',
@@ -285,9 +318,9 @@ export type Run = {
   readonly laptop: Computer;
   readonly ci: Computer;
   readonly production: CliResult['json'];
-  /** The agent key a one-step plan made ("Stripe webhook check"). */
+  /** The agent key a one-step ask made ("Stripe webhook check"). */
   readonly keyId: string;
-  /** A plan whose `change` step names an environment then removed for good. */
+  /** An ask whose `change` step names an environment then removed for good. */
   readonly toPurged: Asked;
   readonly ciEnv: NodeJS.ProcessEnv;
 };

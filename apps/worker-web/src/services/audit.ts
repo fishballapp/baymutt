@@ -31,7 +31,7 @@ export type AuditEntry = Scope & {
   readonly environmentSealedName?: string | null;
   /** As the store keeps it: the index in an org whose names are sealed. */
   readonly secretName?: string | null;
-  /** For a name no secret row holds yet (one a plan names); otherwise copied from the secret's row. */
+  /** For a name no secret row holds yet (one an ask names); otherwise copied from the secret's row. */
   readonly secretSealedName?: string | null;
   readonly version?: number | null;
   readonly detail?: string | null;

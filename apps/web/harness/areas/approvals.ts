@@ -1,11 +1,10 @@
-// The decision pages beyond the plan drive (`plans.ts`): pairing a CLI login, a service account for
-// CI piped into a command, a plan naming an environment whose name does not open, and the plan page
+// The decision pages beyond the ask drive (`asks.ts`): pairing a CLI login, a service account for
+// CI piped into a command, an ask naming an environment whose name does not open, and the ask page
 // in the dark scheme.
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  askPlan,
   check,
   cliBin,
   computer,
@@ -13,11 +12,12 @@ import {
   d1,
   fail,
   type Run,
+  sendAsk,
   shooter,
   shownIn,
   sqlText,
   varlockLoads,
-  waitPlan,
+  waitAsk,
 } from '../support.ts';
 
 const { shoot, shootPhone } = shooter('approvals');
@@ -86,16 +86,16 @@ export const pairing = async ({ browser, page }: Pick<Run, 'browser' | 'page'>) 
     !varlockLoads(laptop.env, 'acme/app/production', { SIGNING_KEY: 'x' }).isLoaded,
   );
   check(
-    'the CLI has no command that writes a value: it asks for one in a plan',
+    'the CLI has no command that writes a value: it asks for one in an ask',
     laptop.cli(['secret', 'set', 'acme/app/production', 'API_KEY'], { stdin: 'nope' }).status !== 0,
   );
   return { laptop, production };
 };
 
-/** A service account for CI: a plan's `access` step with a command, piped into it once approved. */
+/** A service account for CI: an ask's `access` step with a command, piped into it once approved. */
 export const ciKey = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
   const ciKeyFile = join(laptop.home, 'ci-key');
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'CI: deploy',
     steps: [
       {
@@ -106,17 +106,17 @@ export const ciKey = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
       },
     ],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByRole('button', { name: 'Approve key' }).waitFor();
   check(
     'a key piped into a command is a service account that only reads, with no end as asked',
     (await page.getByText(/^The new service account key can only read\./).count()) === 1 &&
       (await shownIn(page, 'Ends')) === 'Never, as asked',
   );
-  await shoot(page, '08h-plan-piped');
+  await shoot(page, '08h-ask-piped');
   await page.getByRole('button', { name: 'Approve key' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  const delivered = waitPlan(laptop, plan.id);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  const delivered = waitAsk(laptop, ask.id);
   check(
     'the key is piped into the command once approved, and kept nowhere else',
     delivered.status === 0 && delivered.steps[0]?.keyFile === undefined,
@@ -139,13 +139,13 @@ export const ciKey = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
   return { ci, ciEnv };
 };
 
-/** A plan naming an environment whose name does not open: it can only be rejected until it does. */
+/** An ask naming an environment whose name does not open: it can only be rejected until it does. */
 export const unopenedNames = async ({
   laptop,
   page,
   production,
 }: Pick<Run, 'laptop' | 'page' | 'production'>) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'read production',
     steps: [{ type: 'access', name: 'Production reader', read: ['acme/app/production'] }],
   });
@@ -160,35 +160,35 @@ export const unopenedNames = async ({
         WHERE org_id = (SELECT org_id FROM environment WHERE id = ${sqlText(String(productionRow?.id))})
           AND id <> ${sqlText(String(productionRow?.id))} LIMIT 1)
       WHERE id = ${sqlText(String(productionRow?.id))}`);
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByText('acme/name does not open').first().waitFor();
   check(
-    'a plan naming an environment whose name does not open says so, and can only be rejected',
+    'an ask naming an environment whose name does not open says so, and can only be rejected',
     (await page
       .getByText(/could not be opened by your vault\. This step can only be rejected\./)
       .count()) === 1 && (await page.getByRole('button', { name: 'Approve key' }).count()) === 0,
   );
-  await shoot(page, '08i-plan-name-unopened');
+  await shoot(page, '08i-ask-name-unopened');
   await page.goto('about:blank');
   d1(`UPDATE environment SET sealed_name = ${sqlText(String(productionRow?.sealed_name))}
         WHERE id = ${sqlText(String(productionRow?.id))}`);
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByText('acme/app/production', { exact: true }).first().waitFor();
   check(
     'once the name opens again, the step can be approved',
     await page.getByRole('button', { name: 'Approve key' }).isEnabled(),
   );
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
 };
 
 /**
- * The plan page in the dark scheme, desktop and phone: a new key, a value to paste, and the plan
+ * The ask page in the dark scheme, desktop and phone: a new key, a value to paste, and the ask
  * answered. Each step is answered, so nothing is left waiting for later steps.
  */
 export const decisionsDark = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
   await page.emulateMedia({ colorScheme: 'dark' });
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'set up the Stripe webhook and save its signing secret',
     steps: [
       {
@@ -210,25 +210,25 @@ export const decisionsDark = async ({ laptop, page }: Pick<Run, 'laptop' | 'page
       },
     ],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByRole('button', { name: 'Approve key' }).waitFor();
   await page.mouse.move(0, 0);
-  await shoot(page, '19-plan-access-dark');
-  await shootPhone(page, '19b-plan-access-dark-phone');
+  await shoot(page, '19-ask-access-dark');
+  await shootPhone(page, '19b-ask-access-dark-phone');
   await page.getByRole('button', { name: 'Approve key' }).click();
   await page.getByLabel('STRIPE_WEBHOOK_SECRET').waitFor();
   await page.mouse.move(0, 0);
-  await shoot(page, '19g-plan-paste-dark');
-  await shootPhone(page, '19h-plan-paste-dark-phone');
+  await shoot(page, '19g-ask-paste-dark');
+  await shootPhone(page, '19h-ask-paste-dark-phone');
   await page.getByLabel('STRIPE_WEBHOOK_SECRET').fill('whsec_made_up_for_the_drive');
   await page.getByRole('button', { name: 'Approve secret change' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  await shoot(page, '19c-plan-answered-dark');
-  await shootPhone(page, '19d-plan-answered-dark-phone');
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  await shoot(page, '19c-ask-answered-dark');
+  await shootPhone(page, '19d-ask-answered-dark-phone');
   await page.emulateMedia({ colorScheme: 'light' });
   check(
-    'the plan page and its outcome draw in the dark scheme, and both steps go through',
-    waitPlan(laptop, plan.id).status === 0,
+    'the ask page and its outcome draw in the dark scheme, and both steps go through',
+    waitAsk(laptop, ask.id).status === 0,
   );
   await page.setViewportSize(DESKTOP);
 };

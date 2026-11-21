@@ -6,17 +6,17 @@ import { join } from 'node:path';
 import * as environmentSteps from './areas/environments.ts';
 import * as listSteps from './areas/lists.ts';
 import {
-  askPlan,
   check,
   d1,
   fail,
   MINUTE_MS,
   type Run,
+  sendAsk,
   shooter,
   sqlText,
   varlockLoads,
   WEB,
-  waitPlan,
+  waitAsk,
 } from './support.ts';
 
 const shell = shooter('shell');
@@ -39,7 +39,7 @@ export const legacyOrg = async ({ ci, laptop, page }: Pick<Run, 'ci' | 'laptop' 
   await page.getByRole('link', { name: /legacy\/app\/legacy/ }).click();
   await environmentSteps.addSecret(page, 'LEGACY_TOKEN', 'legacy-value');
   const legacyCiKey = join(laptop.home, 'legacy-ci-key');
-  const legacyAsk = askPlan(laptop, {
+  const legacyAsk = sendAsk(laptop, {
     reason: 'CI: legacy deploy',
     steps: [
       {
@@ -52,10 +52,10 @@ export const legacyOrg = async ({ ci, laptop, page }: Pick<Run, 'ci' | 'laptop' 
   });
   await page.goto(legacyAsk.url);
   await page.getByRole('button', { name: 'Approve key' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  waitPlan(laptop, legacyAsk.id);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  waitAsk(laptop, legacyAsk.id);
   const legacyKeyId = String(
-    d1(`SELECT key_id FROM plan_step WHERE plan_id = ${sqlText(legacyAsk.id)}`)[0]?.key_id,
+    d1(`SELECT key_id FROM ask_step WHERE ask_id = ${sqlText(legacyAsk.id)}`)[0]?.key_id,
   );
   const legacyEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(legacyCiKey, 'utf8').trim() };
   const legacyOrg = laptop

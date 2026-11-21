@@ -120,7 +120,7 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
       OpenApi.annotations({
         summary: 'Create an environment',
         description:
-          'An owner of the org only, from the dashboard: the owner’s browser makes the key pair. A CLI login asks for one in a plan’s `environments` step.',
+          'An owner of the org only, from the dashboard: the owner’s browser makes the key pair. A CLI login asks for one in an ask’s `environments` step.',
       }),
     ),
     HttpApiEndpoint.get('get', '/environments/:id', {

@@ -44,3 +44,68 @@ export declare const openName: (
     readonly stored: { readonly name: string; readonly sealedName: string | null };
   },
 ) => Promise<string>;
+
+export declare const generateServiceAccountToken: (issuerPublicKey?: string) => string;
+
+export declare const serviceAccountKeyFromToken: (token: string) => Promise<{
+  readonly credentialId: string;
+  readonly privateKey: PrivateKey;
+  readonly publicKey: string;
+  readonly bearer: string;
+  readonly bearerHash: string;
+}>;
+
+type ItemSlot = {
+  readonly askId: string;
+  readonly stepIndex: number;
+  readonly environmentId: string;
+  readonly name: string;
+};
+
+type NoteStep = {
+  readonly askId: string;
+  readonly stepIndex: number;
+  readonly decision: 'approved' | 'rejected';
+};
+
+export declare const sealProposedValue: (request: {
+  readonly loginKey: PrivateKey;
+  readonly accountPublicKey: string;
+  readonly slot: ItemSlot;
+  readonly value: string;
+}) => Promise<string>;
+
+export declare const openProposedValue: (request: {
+  readonly accountKey: PrivateKey;
+  readonly loginPublicKey: string;
+  readonly slot: ItemSlot;
+  readonly ciphertext: string;
+}) => Promise<string>;
+
+export declare const sealHint: (request: {
+  readonly loginKey: PrivateKey;
+  readonly accountPublicKey: string;
+  readonly slot: ItemSlot;
+  readonly hint: string;
+}) => Promise<string>;
+
+export declare const openHint: (request: {
+  readonly accountKey: PrivateKey;
+  readonly loginPublicKey: string;
+  readonly slot: ItemSlot;
+  readonly ciphertext: string;
+}) => Promise<string>;
+
+export declare const sealNote: (request: {
+  readonly accountKey: PrivateKey;
+  readonly loginPublicKey: string;
+  readonly step: NoteStep;
+  readonly note: string;
+}) => Promise<string>;
+
+export declare const openNote: (request: {
+  readonly loginKey: PrivateKey;
+  readonly accountPublicKey: string;
+  readonly step: NoteStep;
+  readonly ciphertext: string;
+}) => Promise<string>;

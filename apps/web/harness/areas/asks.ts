@@ -1,22 +1,23 @@
-// The plans area's steps: what `baymutt ask` sends, answered on the plan page step by step, and
+// The asks area's steps: what `baymutt ask` sends, answered on the ask page step by step, and
 // each approval checked from the terminal (`ask wait`) and from what it made.
 import type { Page } from '@playwright/test';
 import {
-  askPlan,
   check,
   d1,
   fail,
   MINUTE_MS,
   pick,
   type Run,
+  sendAsk,
   shooter,
   sqlText,
+  startAsk,
   varlockLoads,
   WEB,
-  waitPlan,
+  waitAsk,
 } from '../support.ts';
 
-const shots = shooter('plans');
+const shots = shooter('asks');
 // The pointer leaves the page first, so no line of the outline is drawn hovered.
 const shoot = async (page: Page, name: string) => {
   await page.mouse.move(0, 0);
@@ -27,7 +28,7 @@ const shootPhone = async (page: Page, name: string) => {
   await shots.shootPhone(page, name);
 };
 
-/** Made-up values the plans propose; none is real. */
+/** Made-up values the asks propose; none is real. */
 export const ACCOUNT_ID = '8f3c1a9e27d64b05a1c3e9f7d2b8460e';
 const SENTRY_DSN = 'https://made-up-key@example.test/4504';
 const STRIPE_KEY = 'sk_test_made_up_51Nq8ZbHk2vXcR7tYw4mLp0aQ';
@@ -47,16 +48,16 @@ const focusIs = async (page: Page, number: number, title: string) => {
   );
 };
 
-/** Waits for the outline's line `index` to read `word`: the page has read the plan again. */
+/** Waits for the outline's line `index` to read `word`: the page has read the ask again. */
 const wordIs = (page: Page, index: number, word: string) =>
   outlineItem(page, index).locator('.outline-word').filter({ hasText: word }).waitFor();
 
 const wordOf = async (page: Page, index: number) =>
   (await outlineItem(page, index).locator('.outline-word').innerText()).trim();
 
-/** A plan of three steps, decided one by one: create, reject with a note, then the values. */
+/** An ask of three steps, decided one by one: create, reject with a note, then the values. */
 const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(
+  const ask = sendAsk(
     laptop,
     {
       reason: 'set up the new worker',
@@ -98,31 +99,31 @@ const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =>
     },
     { 'account-id': ACCOUNT_ID, sentry: SENTRY_DSN },
   );
-  check('`baymutt ask` prints the plan page’s link', plan.url.includes('/orgs/acme/ask/'));
+  check('`baymutt ask` prints the ask page’s link', ask.url.includes('/orgs/acme/ask/'));
 
-  await page.goto(`${WEB}/orgs/acme/plans`);
-  await page.getByRole('heading', { name: 'Plans', exact: true }).waitFor();
+  await page.goto(`${WEB}/orgs/acme/asks`);
+  await page.getByRole('heading', { name: 'Asks', exact: true }).waitFor();
   await page.locator('.row-wait').first().waitFor();
   check(
-    'Plans lists the waiting plan with its steps, and the nav counts it',
+    'Asks lists the waiting ask with its steps, and the nav counts it',
     (await page.getByText('“set up the new worker”').count()) === 1 &&
       (await page.locator('.row-wait .about').count()) === 3 &&
       (await page.locator('.nav-item[aria-current] .nav-count').innerText()).startsWith('1'),
   );
-  await shoot(page, 'p01-plans');
+  await shoot(page, 'p01-asks');
   await page.getByRole('link', { name: 'Review' }).click();
   await page.getByRole('heading', { name: '“set up the new worker”' }).waitFor();
-  check('Review opens the plan’s own page', page.url() === plan.url);
+  check('Review opens the ask’s own page', page.url() === ask.url);
   check(
-    'the plan opens on step 1, with the outline saying what waits for it',
+    'the ask opens on step 1, with the outline saying what waits for it',
     (await focusIs(page, 1, 'Create an environment')) &&
       (await wordOf(page, 1)) === 'waits for step 1' &&
       (await wordOf(page, 2)) === 'waits for step 1' &&
-      (await page.title()) === 'Plan: set up the new worker · Acme · baymutt' &&
-      (await page.locator('.dbar-back').innerText()).replace(/\s+/g, ' ') === 'Plans 1 waiting',
+      (await page.title()) === 'Ask: set up the new worker · Acme · baymutt' &&
+      (await page.locator('.dbar-back').innerText()).replace(/\s+/g, ' ') === 'Asks 1 waiting',
   );
-  await shoot(page, 'p02-plan');
-  await shootPhone(page, 'p02b-plan-phone');
+  await shoot(page, 'p02-ask');
+  await shootPhone(page, 'p02b-ask-phone');
 
   await outlineItem(page, 2).click();
   check(
@@ -146,8 +147,8 @@ const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =>
     (await page.getByText('Where to find it: Stripe dashboard, Developers, API keys').count()) ===
       1,
   );
-  await shoot(page, 'p03-plan-ahead');
-  await shootPhone(page, 'p03b-plan-ahead-phone');
+  await shoot(page, 'p03-ask-ahead');
+  await shootPhone(page, 'p03b-ask-ahead-phone');
 
   await outlineItem(page, 0).click();
   await page.getByRole('button', { name: 'Create environment' }).click();
@@ -175,8 +176,8 @@ const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =>
       (await wordOf(page, 1)) === 'rejected' &&
       (await page.getByText('You can approve when both values are pasted.').count()) === 1,
   );
-  await shoot(page, 'p04-plan-next');
-  await shootPhone(page, 'p04b-plan-next-phone');
+  await shoot(page, 'p04-ask-next');
+  await shootPhone(page, 'p04b-ask-next-phone');
 
   await outlineItem(page, 1).click();
   await focusIs(page, 2, 'New key: Deploy the worker');
@@ -186,7 +187,7 @@ const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =>
       (await page.getByText(`Your note: “${NOTE}”`).count()) === 1 &&
       (await page.locator('section.step button').count()) === 0,
   );
-  await shoot(page, 'p05-plan-decided');
+  await shoot(page, 'p05-ask-decided');
 
   await outlineItem(page, 2).click();
   await page
@@ -195,16 +196,16 @@ const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =>
   check('Reveal shows the proposed value', (await page.getByText(ACCOUNT_ID).count()) === 1);
   await page.getByLabel('STRIPE_SECRET_KEY').fill(STRIPE_KEY);
   await page.getByLabel('RESEND_API_KEY').fill(RESEND_KEY);
-  await shoot(page, 'p06-plan-values');
+  await shoot(page, 'p06-ask-values');
   await page.getByRole('button', { name: 'Approve 5 secret changes' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
   check(
-    'once every step is answered, the plan says so with each step’s result',
+    'once every step is answered, the ask says so with each step’s result',
     (await page.locator('.outline-word').allInnerTexts()).join(',') === 'created,rejected,approved',
   );
-  await shoot(page, 'p07-plan-answered');
+  await shoot(page, 'p07-ask-answered');
 
-  const waited = waitPlan(laptop, plan.id);
+  const waited = waitAsk(laptop, ask.id);
   check(
     '`ask wait` prints each step, with the owner’s note opened by the login, and exits 4 on a rejection',
     waited.status === 4 &&
@@ -225,7 +226,7 @@ const setUpTheWorker = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =>
         names('acme/app/production').includes(name),
       ),
   );
-  return plan;
+  return ask;
 };
 
 const shownInEnds = (page: Page) =>
@@ -233,7 +234,7 @@ const shownInEnds = (page: Page) =>
 
 /** A step that needs an environment an earlier step was to create, once that step is rejected. */
 const rejectedDependency = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'add a preview',
     steps: [
       { type: 'environments', items: [{ op: 'create', environment: 'acme/worker/preview' }] },
@@ -243,7 +244,7 @@ const rejectedDependency = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>
       },
     ],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await focusIs(page, 1, 'Create an environment');
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
   await wordIs(page, 1, 'reject only');
@@ -261,15 +262,15 @@ const rejectedDependency = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>
         )) &&
       (await page.locator('.step-answer .btn.primary, .step-answer .btn.danger').count()) === 0,
   );
-  await shoot(page, 'p08-plan-rejected-dependency');
-  await shootPhone(page, 'p08b-plan-rejected-dependency-phone');
+  await shoot(page, 'p08-ask-rejected-dependency');
+  await shootPhone(page, 'p08b-ask-rejected-dependency-phone');
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
 };
 
 /** One step: no outline. Approved with a shorter end than asked; the key file reads. */
 const oneStep = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'check the Stripe webhook config',
     steps: [
       {
@@ -280,21 +281,21 @@ const oneStep = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
       },
     ],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByRole('heading', { name: '“check the Stripe webhook config”' }).waitFor();
   check(
-    'a plan of one step has no outline, and reads as its one decision',
+    'an ask of one step has no outline, and reads as its one decision',
     (await page.locator('.outline').count()) === 0 &&
       (await page.locator('.ask').innerText()) ===
         'Work laptop asks for a new key, Stripe webhook check' &&
       (await page.title()) === 'New key: Stripe webhook check · Acme · baymutt',
   );
-  await shoot(page, 'p09-plan-one');
-  await shootPhone(page, 'p09b-plan-one-phone');
+  await shoot(page, 'p09-ask-one');
+  await shootPhone(page, 'p09b-ask-one-phone');
   await pick(page, 'Ends', /^15 minutes after approval/);
   await page.getByRole('button', { name: 'Approve key' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  const waited = waitPlan(laptop, plan.id);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  const waited = waitAsk(laptop, ask.id);
   const [step] = waited.steps;
   check(
     'the terminal gets the key file, ending when the owner chose',
@@ -307,16 +308,72 @@ const oneStep = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
   const agentEnv = { ...laptop.env, BAYMUTT_KEY_FILE: keyFile };
   const loaded = varlockLoads(agentEnv, 'acme/app/production', { STRIPE_SECRET_KEY: STRIPE_KEY });
   check(
-    `the approved key reads the value pasted on the plan page${loaded.isLoaded ? '' : `: ${loaded.stderr}`}`,
+    `the approved key reads the value pasted on the ask page${loaded.isLoaded ? '' : `: ${loaded.stderr}`}`,
     loaded.isLoaded,
   );
-  const [made] = d1(`SELECT key_id FROM plan_step WHERE plan_id = ${sqlText(plan.id)}`);
+  const [made] = d1(`SELECT key_id FROM ask_step WHERE ask_id = ${sqlText(ask.id)}`);
   const keyId =
     typeof made?.key_id === 'string' ? made.key_id : fail('the access step made no key');
   return { keyId, agentEnv };
 };
 
-/** A change to that key: it adds read on the environment the first plan made. */
+/**
+ * `baymutt ask` as it runs by default: it prints the link at once, and ends once the owner has
+ * answered. Rejected, so it leaves no key for the Keys page to count.
+ */
+const waitsByDefault = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
+  const running = startAsk(laptop, {
+    reason: 'check the webhook once more',
+    steps: [
+      { type: 'access', name: 'Webhook check', read: ['acme/app/production'], expires: '1h' },
+      { type: 'access', name: 'Webhook check, again', read: ['acme/app/production'] },
+    ],
+  });
+  const printed = await running.printedLink;
+  const link: { id?: string; url?: string; next?: string } = JSON.parse(
+    `${printed.split('\n}\n')[0]}\n}`,
+  );
+  check(
+    'a plain `baymutt ask` prints the link and says it is still running, and keeps running',
+    link.url?.includes('/orgs/acme/ask/') === true &&
+      /still running/.test(link.next ?? '') &&
+      running.isRunning(),
+  );
+  const second = laptop.cli(['ask', 'wait', link.id ?? fail('no id'), '--timeout', '0']);
+  check(
+    'an `ask wait` run from habit beside it is refused, naming the process that waits',
+    second.status === 6 && /already waiting on ask/.test(second.stderr),
+  );
+  await page.goto(link.url ?? fail('no link'));
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  const isStepOnePrinted = async () => {
+    const deadline = Date.now() + 30_000;
+    while (!running.output().includes('"rejected"') && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    return running.output().includes('"rejected"');
+  };
+  check(
+    'a step answered is printed at once, while the ask still waits on the next',
+    (await isStepOnePrinted()) && running.isRunning(),
+  );
+  await page.getByRole('button', { name: 'Reject', exact: true }).click();
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  const { status, stdout } = await running.done;
+  const answered = stdout
+    .slice(printed.indexOf('\n}\n') + 3)
+    .split('\n')
+    .filter(line => line.startsWith('{'))
+    .map(line => JSON.parse(line) as { index?: number; status?: string });
+  check(
+    'and ends by itself once the owner has answered the last, with `ask wait`’s lines and exit code',
+    status === 4 &&
+      answered.map(({ index, status: line }) => `${index}:${line}`).join(',') ===
+        '0:rejected,1:rejected',
+  );
+};
+
+/** A change to that key: it adds read on the environment the first ask made. */
 const changeTheKey = async ({
   laptop,
   page,
@@ -326,11 +383,11 @@ const changeTheKey = async ({
   readonly keyId: string;
   readonly agentEnv: NodeJS.ProcessEnv;
 }) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'check the worker’s account too',
     steps: [{ type: 'change', key: keyId, read: ['acme/worker/staging'] }],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByRole('heading', { name: '“check the worker’s account too”' }).waitFor();
   check(
     'a change shows what the key reads now and what it adds, and keeps its end by default',
@@ -339,20 +396,20 @@ const changeTheKey = async ({
       (await shownInEnds(page)).startsWith('Keep as it is: expires in'),
   );
   await page.getByRole('button', { name: 'Approve change' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  check('`ask wait` finishes the change', waitPlan(laptop, plan.id).status === 0);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  check('`ask wait` finishes the change', waitAsk(laptop, ask.id).status === 0);
   const loaded = varlockLoads(agentEnv, 'acme/worker/staging', {
     CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
   });
   check(
-    `the changed key reads the value the first plan proposed, as the owner's browser sealed it${loaded.isLoaded ? '' : `: ${loaded.stderr}`}`,
+    `the changed key reads the value the first ask proposed, as the owner's browser sealed it${loaded.isLoaded ? '' : `: ${loaded.stderr}`}`,
     loaded.isLoaded,
   );
 };
 
 /** A proposed value the store moved to another secret does not open, and blocks its step. */
 const unverifiedValue = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(
+  const ask = sendAsk(
     laptop,
     {
       reason: 'set the mail keys',
@@ -379,10 +436,10 @@ const unverifiedValue = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =
     { a: 'noreply@example.test', b: 'support@example.test' },
   );
   // A store that swaps two proposals: each is bound to its own secret, so neither opens.
-  d1(`UPDATE plan_item SET proposed_value = (
-        SELECT proposed_value FROM plan_item WHERE plan_id = ${sqlText(plan.id)} AND position = 1)
-      WHERE plan_id = ${sqlText(plan.id)} AND position = 0`);
-  await page.goto(plan.url);
+  d1(`UPDATE ask_item SET proposed_value = (
+        SELECT proposed_value FROM ask_item WHERE ask_id = ${sqlText(ask.id)} AND position = 1)
+      WHERE ask_id = ${sqlText(ask.id)} AND position = 0`);
+  await page.goto(ask.url);
   await page.getByText('Proposed value could not be verified').waitFor();
   check(
     'a proposed value that does not open is shown as unverifiable, and the step is blocked',
@@ -391,14 +448,14 @@ const unverifiedValue = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) =
         'Your vault could not verify that the proposed value came from Work laptop. This step can only be rejected.' &&
       (await page.locator('.step-answer .btn.primary, .step-answer .btn.danger').count()) === 0,
   );
-  await shoot(page, 'p10-plan-unverified');
+  await shoot(page, 'p10-ask-unverified');
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
 };
 
 /** A secret written after the page read it: refused, re-read, and approved again as typed. */
 const writtenSince = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'rotate the Resend key',
     steps: [
       {
@@ -407,19 +464,19 @@ const writtenSince = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
       },
     ],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await page.getByLabel('RESEND_API_KEY').fill(`${RESEND_KEY}-rotated`);
   await page.getByRole('button', { name: 'Add a note' }).click();
   await page.getByLabel('Note to Work laptop').fill('rotated');
   d1(`UPDATE secret SET latest_version = latest_version + 1
       WHERE (environment_id, name) = (
-        SELECT environment_id, secret_name FROM plan_item WHERE plan_id = ${sqlText(plan.id)})`);
+        SELECT environment_id, secret_name FROM ask_item WHERE ask_id = ${sqlText(ask.id)})`);
   await page.getByRole('button', { name: 'Approve secret change' }).click();
   await page
     .getByRole('alert')
     .filter({
       hasText:
-        'Something changed since this plan was made. The plan has been refreshed; review the step and try again.',
+        'Something changed since this ask was made. The ask has been refreshed; review the step and try again.',
     })
     .waitFor();
   check(
@@ -427,19 +484,19 @@ const writtenSince = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
     (await page.getByLabel('RESEND_API_KEY').inputValue()) === `${RESEND_KEY}-rotated` &&
       (await page.getByLabel('Note to Work laptop').inputValue()) === 'rotated',
   );
-  await shoot(page, 'p11-plan-written-since');
+  await shoot(page, 'p11-ask-written-since');
   await page.getByRole('button', { name: 'Approve secret change' }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  const waited = waitPlan(laptop, plan.id);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  const waited = waitAsk(laptop, ask.id);
   check(
     'approved again, it goes through, with the note',
     waited.status === 0 && waited.steps[0]?.note === 'rotated',
   );
 };
 
-/** A long plan, drawn as it arrives, then withdrawn by its agent while the page is open. */
+/** A long ask, drawn as it arrives, then withdrawn by its agent while the page is open. */
 const withdrawn = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'hand CI its key and clean up',
     steps: [
       {
@@ -464,14 +521,14 @@ const withdrawn = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
       { type: 'environments', items: [{ op: 'delete', environment: 'acme/worker/staging' }] },
     ],
   });
-  await page.goto(plan.url);
+  await page.goto(ask.url);
   await focusIs(page, 1, 'New key: App CI');
   check(
     'a key piped into a command is a service account, with no end as asked',
     (await page.getByText(/^The new service account key can only read\./).count()) === 1 &&
       (await shownInEnds(page)) === 'Never, as asked',
   );
-  await shoot(page, 'p12-plan-service-account');
+  await shoot(page, 'p12-ask-service-account');
   await outlineItem(page, 2).click();
   check(
     'deleting an environment is the danger button, and says what follows',
@@ -480,52 +537,53 @@ const withdrawn = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
     )?.includes('danger') === true &&
       (await page.getByText('The environment goes to the bin for 30 days.').count()) === 1,
   );
-  check('`ask cancel` withdraws it', laptop.cli(['ask', 'cancel', plan.id]).status === 0);
+  check('`ask cancel` withdraws it', laptop.cli(['ask', 'cancel', ask.id]).status === 0);
   await page.getByRole('button', { name: 'Delete environment' }).click();
-  await page.getByRole('heading', { name: 'Plan withdrawn' }).waitFor();
+  await page.getByRole('heading', { name: 'Ask withdrawn' }).waitFor();
   check(
-    'an answer to a withdrawn plan reads it again, and says it was withdrawn',
+    'an answer to a withdrawn ask reads it again, and says it was withdrawn',
     (await page.locator('.outline-word').allInnerTexts()).join(',') ===
       'withdrawn,withdrawn,withdrawn',
   );
-  await shoot(page, 'p13-plan-withdrawn');
+  await shoot(page, 'p13-ask-withdrawn');
 };
 
-/** A plan nobody answered within the hour. */
+/** An ask nobody answered within the hour. */
 const expired = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
-  const plan = askPlan(laptop, {
+  const ask = sendAsk(laptop, {
     reason: 'make a scratch environment',
     steps: [{ type: 'environments', items: [{ op: 'create', environment: 'acme/scratch' }] }],
   });
-  d1(`UPDATE plan SET created_at = created_at - 2 * 3600 * 1000 WHERE id = ${sqlText(plan.id)}`);
-  await page.goto(plan.url);
-  await page.getByRole('heading', { name: 'Plan expired' }).waitFor();
+  d1(`UPDATE ask SET created_at = created_at - 2 * 3600 * 1000 WHERE id = ${sqlText(ask.id)}`);
+  await page.goto(ask.url);
+  await page.getByRole('heading', { name: 'Ask expired' }).waitFor();
   check(
-    'an expired plan says nobody answered it in time',
+    'an expired ask says nobody answered it in time',
     (await page
       .getByText('Work laptop asked for it, and nobody answered step 1 within an hour.')
       .count()) === 1,
   );
-  await shoot(page, 'p14-plan-expired');
-  await shootPhone(page, 'p14b-plan-expired-phone');
+  await shoot(page, 'p14-ask-expired');
+  await shootPhone(page, 'p14b-ask-expired-phone');
 };
 
 /**
- * Every step type approved and rejected on the plan page, and what the terminal then reads. Leaves
+ * Every step type approved and rejected on the ask page, and what the terminal then reads. Leaves
  * the agent key it made and the env that loads with it for later steps.
  */
-export const plans = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
+export const asks = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) => {
   await setUpTheWorker({ laptop, page });
   await rejectedDependency({ laptop, page });
   const { keyId, agentEnv } = await oneStep({ laptop, page });
+  await waitsByDefault({ laptop, page });
   await changeTheKey({ laptop, page, keyId, agentEnv });
   await unverifiedValue({ laptop, page });
   await writtenSince({ laptop, page });
   await withdrawn({ laptop, page });
   await expired({ laptop, page });
-  await page.goto(`${WEB}/orgs/acme/plans`);
-  await page.getByText('No plans waiting').waitFor();
-  check('with nothing waiting, Plans shows its empty state', true);
-  await shoot(page, 'p15-plans-empty');
+  await page.goto(`${WEB}/orgs/acme/asks`);
+  await page.getByText('No asks waiting').waitFor();
+  check('with nothing waiting, Asks shows its empty state', true);
+  await shoot(page, 'p15-asks-empty');
   return { keyId };
 };

@@ -26,13 +26,13 @@ const listCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'The environments this key reaches, across its orgs, and whether it reads each. A CLI login lists every environment of its orgs and holds none: a plan’s `access` step gets one (`baymutt ask`). Deleted ones are in `baymutt bin list`',
+    'The environments this key reaches, across its orgs, and whether it reads each. A CLI login lists every environment of its orgs and holds none: an ask’s `access` step gets one (`baymutt ask`). Deleted ones are in `baymutt bin list`',
   ),
 );
 
 export const envCommand = Command.make('env').pipe(
   Command.withDescription(
-    'List environments. A plan’s `environments` step asks the owner for a new one (`baymutt ask`)',
+    'List environments. An ask’s `environments` step asks the owner for a new one (`baymutt ask`)',
   ),
   Command.withAlias('environment'),
   Command.withSubcommands([listCommand]),

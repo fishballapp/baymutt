@@ -2,6 +2,7 @@
 import {
   type ActorIdentity,
   AlreadyExistsError,
+  ASK_WAIT_MS,
   type Environment,
   LIMITS,
   LimitReachedError,
@@ -9,7 +10,6 @@ import {
   NoAccessError,
   NotFoundError,
   OwnerRequiredError,
-  PLAN_WAIT_MS,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
 import * as Clock from 'effect/Clock';
@@ -99,7 +99,7 @@ export const mayListNamesIn = (
 
 /** What a key is told when it reaches past the one org it belongs to. */
 export const outsideKeyOrg = (keyOrgSlug: string, what: string) =>
-  `A key belongs to one org, and this one belongs to ${keyOrgSlug}: ${what}. Ask once per org: a key for another org is asked for in a plan of its own.`;
+  `A key belongs to one org, and this one belongs to ${keyOrgSlug}: ${what}. Ask once per org: a key for another org is asked for in an ask of its own.`;
 
 /** A CLI login: made by `baymutt auth login` and approved by the owner, so it has no parent. It holds no environment. */
 export const isLogin = (actor: ActorIdentity): boolean =>
@@ -120,7 +120,7 @@ export const addressOf = (environment: {
 
 /** What a CLI login is told when it reaches for a read only a key holds. */
 export const loginHoldsNothing = (environment: Parameters<typeof addressOf>[0]) =>
-  `A CLI login holds no environment. Ask for a key that reads ${addressOf(environment)} in a plan's \`access\` step (\`baymutt ask --help\`); the owner approves, and the key reads it. If this task already holds a key, ask to add it to that one in a \`change\` step instead.`;
+  `A CLI login holds no environment. Ask for a key that reads ${addressOf(environment)} in an ask's \`access\` step (\`baymutt ask --help\`); the owner approves, and the key reads it. If this task already holds a key, ask to add it to that one in a \`change\` step instead.`;
 
 /**
  * The orgs a person belongs to, by their account: a subquery for `IN (…)`. A credential reaches only
@@ -184,7 +184,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         secretCount: row.secretCount,
         keyProof: isOwner ? null : row.keyProof,
         canRead: isOwner ? row.memberWrap !== null : row.readWrap !== null,
-        // A key only reads: the owner writes, and an agent asks for a write in a plan.
+        // A key only reads: the owner writes, and an agent asks for a write in an ask.
         canWrite: isOrgOwner,
       },
       areNamesSealed: row.areNamesSealed !== 0,
@@ -221,7 +221,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         message:
           actor._tag === 'Owner' || isLogin(actor)
             ? 'No environment of your orgs has this id. List them with `baymutt env list`.'
-            : 'No environment with this id is granted to this key. List what it holds with `baymutt env list`; the CLI login that asked for it asks to add more in a plan’s `change` step.',
+            : 'No environment with this id is granted to this key. List what it holds with `baymutt env list`; the CLI login that asked for it asks to add more in an ask’s `change` step.',
       });
     }
     return access;
@@ -258,7 +258,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         need: 'read',
         message: access.readerIsLogin
           ? loginHoldsNothing(access.environment)
-          : `This key does not read ${addressOf(access.environment)}. The CLI login that asked for it asks to add it, on the same key, in a plan's \`change\` step for key ${access.readerId}.`,
+          : `This key does not read ${addressOf(access.environment)}. The CLI login that asked for it asks to add it, on the same key, in an ask's \`change\` step for key ${access.readerId}.`,
       }),
     );
   };
@@ -275,13 +275,13 @@ export const lookups = (sql: D1Client.D1Client) => {
           FROM credential c LEFT JOIN organization o ON o.id = c.org_id
           WHERE c.id = ${id} AND c.account_id = ${accountId} AND c.revoked_at IS NULL
             AND (${isAnsweredOnly ? 1 : 0} = 0 OR NOT EXISTS (
-              SELECT 1 FROM plan_step WHERE key_id = c.id AND type = 'access'
+              SELECT 1 FROM ask_step WHERE key_id = c.id AND type = 'access'
                 AND status <> 'approved'))`,
   });
 
   const notFound = () => new NotFoundError({ message: 'No CLI login or key has this id.' });
 
-  /** A working CLI login or key of the account, or a plan's key still waiting. */
+  /** A working CLI login or key of the account, or an ask's key still waiting. */
   const serviceAccountIn = Effect.fnUntraced(function* (accountId: string, id: string) {
     const found = yield* serviceAccountRow({ accountId, id, isAnsweredOnly: false }).pipe(
       Effect.orDie,
@@ -291,7 +291,7 @@ export const lookups = (sql: D1Client.D1Client) => {
   });
 
   /**
-   * A CLI login or key whose access the owner may change: a plan's key is not a key until its
+   * A CLI login or key whose access the owner may change: an ask's key is not a key until its
    * `access` step is approved.
    */
   const approvedServiceAccountIn = Effect.fnUntraced(function* (accountId: string, id: string) {
@@ -311,7 +311,7 @@ export const lookups = (sql: D1Client.D1Client) => {
   /**
    * Refuses once the account would hold more than the beta allows, `adding` more. Counted before
    * the write, so two requests at once can pass together and overshoot: a cap on growth, not an
-   * invariant. A credential counts while it works: not revoked, not expired, and not a plan's key
+   * invariant. A credential counts while it works: not revoked, not expired, and not an ask's key
    * past its hour that the daily run has yet to tidy.
    */
   const underLimit = Effect.fnUntraced(function* (
@@ -327,9 +327,9 @@ export const lookups = (sql: D1Client.D1Client) => {
       serviceAccounts: sql`SELECT COUNT(*) AS held FROM credential
         WHERE account_id = ${accountId} AND revoked_at IS NULL
           AND (expires_at IS NULL OR expires_at > ${now})
-          AND NOT EXISTS (SELECT 1 FROM plan_step s JOIN plan p ON p.id = s.plan_id
+          AND NOT EXISTS (SELECT 1 FROM ask_step s JOIN ask p ON p.id = s.ask_id
             WHERE s.key_id = credential.id AND s.type = 'access' AND s.status = 'pending'
-              AND p.created_at <= ${now - PLAN_WAIT_MS})`,
+              AND p.created_at <= ${now - ASK_WAIT_MS})`,
     }[what];
     const [row] = yield* held.pipe(Effect.orDie);
     if (Number(row?.held ?? 0) + adding > LIMITS[what]) {
@@ -412,12 +412,12 @@ export const lookups = (sql: D1Client.D1Client) => {
     Request: Schema.Struct({ keyId: Schema.String, now: Schema.Finite }),
     Result: Schema.Struct({ id: Schema.String }),
     execute: ({ keyId, now }) =>
-      sql`SELECT p.id FROM plan_step s JOIN plan p ON p.id = s.plan_id
+      sql`SELECT p.id FROM ask_step s JOIN ask p ON p.id = s.ask_id
           WHERE s.key_id = ${keyId} AND s.type = 'change' AND s.status = 'pending'
-            AND p.cancelled_at IS NULL AND p.created_at > ${now - PLAN_WAIT_MS}`,
+            AND p.cancelled_at IS NULL AND p.created_at > ${now - ASK_WAIT_MS}`,
   });
 
-  /** Refuses a change to a key while another plan's step waits to change it: one at a time. */
+  /** Refuses a change to a key while another ask's step waits to change it: one at a time. */
   const noChangeWaiting = Effect.fnUntraced(function* (key: {
     readonly id: string;
     readonly name: string;
@@ -426,7 +426,7 @@ export const lookups = (sql: D1Client.D1Client) => {
     const [waiting] = yield* waitingChanges({ keyId: key.id, now }).pipe(Effect.orDie);
     if (waiting === undefined) return;
     return yield* new AlreadyExistsError({
-      message: `Plan ${waiting.id} still waits for the owner to change ${key.name}. Wait for it (\`baymutt ask wait ${waiting.id}\`) or withdraw it (\`baymutt ask cancel ${waiting.id}\`) first.`,
+      message: `Ask ${waiting.id} still waits for the owner to change ${key.name}. Wait for it (\`baymutt ask wait ${waiting.id}\`) or withdraw it (\`baymutt ask cancel ${waiting.id}\`) first.`,
     });
   });
 

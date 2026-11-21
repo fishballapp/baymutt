@@ -19,9 +19,9 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { type Browser, chromium } from '@playwright/test';
 import * as account from './areas/account.ts';
 import * as approvals from './areas/approvals.ts';
+import * as asks from './areas/asks.ts';
 import * as environments from './areas/environments.ts';
 import * as lists from './areas/lists.ts';
-import * as plans from './areas/plans.ts';
 import * as spine from './spine.ts';
 import { shots } from './support.ts';
 
@@ -31,7 +31,7 @@ const main = async (browser: Browser) => {
   const { context, page, recoveryKey } = await account.signUp({ browser });
   await environments.firstSecret({ context, page });
   const { laptop, production } = await approvals.pairing({ browser, page });
-  const { keyId } = await plans.plans({ laptop, page });
+  const { keyId } = await asks.asks({ laptop, page });
   await approvals.unopenedNames({ laptop, page, production });
   const { ci, ciEnv } = await approvals.ciKey({ laptop, page });
   await lists.keysPage({ ciEnv, keyId, laptop, page });

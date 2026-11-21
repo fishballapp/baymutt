@@ -1,12 +1,12 @@
-// What the plan page says about a step and where its focus goes, from the step alone: plain
+// What the ask page says about a step and where its focus goes, from the step alone: plain
 // functions over the API's shapes, so a step reads the same in the outline, its heading, the
-// Plans list and an outcome.
-import type { PlanStep, StepStatus } from '@baymutt/api';
+// Asks list and an outcome.
+import type { AskStep, StepStatus } from '@baymutt/api';
 
-type EnvironmentOp = Extract<PlanStep, { type: 'environments' }>['items'][number]['op'];
+type EnvironmentOp = Extract<AskStep, { type: 'environments' }>['items'][number]['op'];
 
 /** The one op every item of an environments step has, or null when they differ. */
-const soleOp = (step: Extract<PlanStep, { type: 'environments' }>): EnvironmentOp | null => {
+const soleOp = (step: Extract<AskStep, { type: 'environments' }>): EnvironmentOp | null => {
   const ops = new Set(step.items.map(({ op }) => op));
   const [op] = ops;
   return ops.size === 1 && op !== undefined ? op : null;
@@ -45,10 +45,10 @@ export const isValueItem = (item: { readonly op: string }): boolean =>
   item.op === 'set' || item.op === 'paste' || item.op === 'generate';
 
 /**
- * What a step does, in a few words: its heading, its line in the outline and on the Plans list.
+ * What a step does, in a few words: its heading, its line in the outline and on the Asks list.
  * One placeholder per wording.
  */
-export const stepTitle = (step: PlanStep): string => {
+export const stepTitle = (step: AskStep): string => {
   if (step.type === 'access') return `New key: ${step.key.name}`;
   if (step.type === 'change') return `Change key: ${step.key.name}`;
   const count = step.items.length;
@@ -64,7 +64,7 @@ export const stepTitle = (step: PlanStep): string => {
 
 /** The step's primary button, and what it says while it runs. */
 export const approveLabel = (
-  step: PlanStep,
+  step: AskStep,
 ): { readonly label: string; readonly working: string; readonly isDanger: boolean } => {
   if (step.type === 'access') {
     return { label: 'Approve key', working: 'Approving…', isDanger: false };
@@ -100,7 +100,7 @@ export const approveLabel = (
 };
 
 /** How an answered step reads: "Created", "Approved", "Rejected". Null while it waits. */
-export const statusWord = (step: PlanStep): string | null => {
+export const statusWord = (step: AskStep): string | null => {
   const word: Record<StepStatus, string | null> = {
     pending: null,
     approved: (() => {
@@ -130,7 +130,7 @@ export const stepsWords = (indexes: ReadonlyArray<number>): string => {
 export type Blocked = 'gone' | 'unopened' | 'unverified' | null;
 
 /** A step the owner can answer now: pending, and not waiting for an earlier one (or only rejectable). */
-export const isDecidable = (step: PlanStep, blocked: Blocked): boolean =>
+export const isDecidable = (step: AskStep, blocked: Blocked): boolean =>
   step.status === 'pending' && (step.waitsFor.length === 0 || blocked !== null);
 
 /**
@@ -138,7 +138,7 @@ export const isDecidable = (step: PlanStep, blocked: Blocked): boolean =>
  * the first such step before it; with none, the first still pending; null when none waits.
  * `after` is -1 when the page opens.
  */
-export const nextFocus = <S extends PlanStep>(
+export const nextFocus = <S extends AskStep>(
   steps: ReadonlyArray<S>,
   blockedOf: (step: S) => Blocked,
   after: number,

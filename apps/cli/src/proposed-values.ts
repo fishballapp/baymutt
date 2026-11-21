@@ -1,5 +1,5 @@
-// A value a plan proposes, read on this computer from where its `set` item says it is: a file, an
-// environment variable, or one variable of a dotenv file. The plan names only where; the value goes
+// A value an ask proposes, read on this computer from where its `set` item says it is: a file, an
+// environment variable, or one variable of a dotenv file. The ask names only where; the value goes
 // nowhere but into a box sealed to the owner's account key, and no message here carries it.
 import { parseEnv } from 'node:util';
 import { MAX_VALUE_BYTES } from '@baymutt/api';
@@ -8,8 +8,8 @@ import * as Effect from 'effect/Effect';
 import * as FileSystem from 'effect/FileSystem';
 import * as Option from 'effect/Option';
 import * as Redacted from 'effect/Redacted';
+import type { ValueSource } from './ask-document.ts';
 import { usage } from './errors.ts';
-import type { ValueSource } from './plan-document.ts';
 
 /** A file's whole content; refused, naming `path`, when there is none to read. */
 const readFile = Effect.fnUntraced(function* (file: string, path: string) {

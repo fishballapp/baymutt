@@ -215,8 +215,8 @@ export const storeWorld = async (userId = 'user-1') => {
     )?.org_id ?? orgId;
 
   /**
-   * A key a CLI login asks for in a plan of one `access` step, reading `read`: it holds nothing
-   * until the owner approves the step. `id` is the key's; `planId` the plan's.
+   * A key a CLI login asks for in an ask of one `access` step, reading `read`: it holds nothing
+   * until the owner approves the step. `id` is the key's; `askId` the ask's.
    */
   const ask = async (
     login: Credential,
@@ -234,14 +234,14 @@ export const storeWorld = async (userId = 'user-1') => {
     } = {},
   ) => {
     const { headers, ...key } = await newKey(name);
-    const planId = crypto.randomUUID();
-    const answer = await call(w, 'POST', '/plans', login.headers, {
-      id: planId,
+    const askId = crypto.randomUUID();
+    const answer = await call(w, 'POST', '/asks', login.headers, {
+      id: askId,
       orgId: orgOf(read[0] ?? ''),
       reason,
       steps: [{ type: 'access', key: { ...key, vouchers: VOUCHERS }, command, end, read }],
     });
-    return { id: key.id, planId, name, headers, answer };
+    return { id: key.id, askId, name, headers, answer };
   };
 
   /** What the owner's dashboard sends to approve an `access` step exactly as it was asked. */
@@ -258,12 +258,12 @@ export const storeWorld = async (userId = 'user-1') => {
   });
 
   const approve = (
-    asked: { readonly planId: string },
+    asked: { readonly askId: string },
     read: ReadonlyArray<string>,
     expiresAt: number | null = null,
-  ) => call(w, 'POST', `/plans/${asked.planId}/steps/0/approve`, owner, approval(read, expiresAt));
+  ) => call(w, 'POST', `/asks/${asked.askId}/steps/0/approve`, owner, approval(read, expiresAt));
 
-  /** A key that reads `read`: asked for by a CLI login in a plan, and approved by the owner. */
+  /** A key that reads `read`: asked for by a CLI login in an ask, and approved by the owner. */
   const serviceAccount = async (
     read: ReadonlyArray<string>,
     {

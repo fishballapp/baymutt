@@ -1,14 +1,14 @@
 /**
- * What passes between a CLI login and the owner over a plan, through a store that may read and make
+ * What passes between a CLI login and the owner over an ask, through a store that may read and make
  * neither. Both are vouched boxes, so opening one proves which of the two sealed it:
  *
  * ```
  * proposedValue = vouched(loginPriv → accountPub, value, info "baymutt-proposed-value",
- *                         aad = [planId, stepIndex, environmentId, name])         → stored on the item
+ *                         aad = [askId, stepIndex, environmentId, name])         → stored on the item
  * hint          = vouched(loginPriv → accountPub, text, info "baymutt-paste-hint",
- *                         aad = [planId, stepIndex, environmentId, name])         → stored on the item
+ *                         aad = [askId, stepIndex, environmentId, name])         → stored on the item
  * note          = vouched(accountPriv → loginPub, text, info "baymutt-decision-note",
- *                         aad = [planId, stepIndex, decision])                    → stored on the step
+ *                         aad = [askId, stepIndex, decision])                    → stored on the step
  * ```
  *
  * A login holds no environment, so it cannot seal a value to one: it seals what it proposes to the
@@ -16,8 +16,8 @@
  * endorsement, opens it and seals it to the environment on approval. A paste item's hint, where the
  * owner finds the value, is sealed the same way under its own label: an agent may write a value
  * into it, and the store must not be able to read that either. The binding names the secret's
- * plain name, as a value's does, so the store cannot move a proposal or a hint to another plan,
- * step, environment or secret, nor pass one off as the other, nor a note to another step or plan,
+ * plain name, as a value's does, so the store cannot move a proposal or a hint to another ask,
+ * step, environment or secret, nor pass one off as the other, nor a note to another step or ask,
  * nor show a note beside the opposite decision.
  *
  * Either holder of a vouched box's two keys can make it: each side knows the other wrote one
@@ -51,28 +51,28 @@ export const MAX_NOTE_BYTES = 2048;
 export const MAX_HINT_BYTES = 1500;
 
 /**
- * The item a proposed value or a hint belongs to: a step of a plan (its index, from 0) names each
+ * The item a proposed value or a hint belongs to: a step of an ask (its index, from 0) names each
  * secret once. `name` is the secret's plain name, never its index.
  */
 export type ItemSlot = {
-  readonly planId: string;
+  readonly askId: string;
   readonly stepIndex: number;
   readonly environmentId: string;
   readonly name: string;
 };
 
-/** The step a note answers (its index in the plan, from 0) and what the owner decided on it. */
+/** The step a note answers (its index in the ask, from 0) and what the owner decided on it. */
 export type NoteStep = {
-  readonly planId: string;
+  readonly askId: string;
   readonly stepIndex: number;
   readonly decision: 'approved' | 'rejected';
 };
 
-const itemAad = ({ planId, stepIndex, environmentId, name }: ItemSlot) =>
-  tuple(planId, String(stepIndex), environmentId, name);
+const itemAad = ({ askId, stepIndex, environmentId, name }: ItemSlot) =>
+  tuple(askId, String(stepIndex), environmentId, name);
 
-const noteAad = ({ planId, stepIndex, decision }: NoteStep) =>
-  tuple(planId, String(stepIndex), decision);
+const noteAad = ({ askId, stepIndex, decision }: NoteStep) =>
+  tuple(askId, String(stepIndex), decision);
 
 const utf8Within = (text: string, maxBytes: number, what: string): Uint8Array<ArrayBuffer> => {
   const bytes = utf8(text);
@@ -185,7 +185,7 @@ export const openHint = async ({
   );
 };
 
-/** The owner's note on a step, to the login that made the plan. `loginPublicKey` must come from the vault's endorsement. */
+/** The owner's note on a step, to the login that made the ask. `loginPublicKey` must come from the vault's endorsement. */
 export const sealNote = async ({
   accountKey,
   loginPublicKey,

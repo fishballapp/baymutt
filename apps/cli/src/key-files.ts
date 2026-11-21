@@ -1,5 +1,5 @@
 // The key an `access` step makes, on this computer, from `baymutt ask` to the owner's answer. The
-// key is written to an owner-only file before the plan is sent, and leaves it when it is piped
+// key is written to an owner-only file before the ask is sent, and leaves it when it is piped
 // into the command it was asked for, refused, or no longer live at the store. The command, when
 // there is one, waits in an owner-only file of its own beside the key, so asks running at once
 // never share a file.
@@ -24,7 +24,7 @@ import { Settings } from './settings.ts';
 /** One key is handed out at a time: steps finished together would otherwise share a command's output. */
 const handingOut = Semaphore.makeUnsafe(1);
 
-/** A key file younger than this may belong to an `ask` in another terminal that has not sent its plan yet. */
+/** A key file younger than this may belong to an `ask` in another terminal that has not sent its ask yet. */
 const SETTLING_MS = 10 * 60 * 1000;
 
 /** What a command file's name ends in: the rest is its key's id, the name of its key file. */
@@ -63,7 +63,7 @@ const readCommand = Effect.fn('keyFiles.readCommand')(function* (id: string) {
   return Option.some(command);
 });
 
-/** Keeps a new key, and the command it is to be piped into, before the plan that asks for it is sent. */
+/** Keeps a new key, and the command it is to be piped into, before the ask that asks for it is sent. */
 export const keepKey = Effect.fn('keyFiles.keep')(function* ({
   id,
   token,
@@ -102,7 +102,7 @@ export const forgetKey = Effect.fn('keyFiles.forget')(function* (id: string) {
   );
 });
 
-/** Forgets every key and plan kept here, for a logout: the store revoked them all. */
+/** Forgets every key and ask kept here, for a logout: the store revoked them all. */
 export const forgetAllKeys = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const { keysDirectory } = yield* Settings;
@@ -124,18 +124,18 @@ export const forgetDeadKeys = Effect.fn('keyFiles.forgetDead')(function* () {
   );
   if (files.length === 0) return;
   const now = yield* Clock.currentTimeMillis;
-  // A key still waiting for the owner is an `access` step, not yet a listed credential. The plans
+  // A key still waiting for the owner is an `access` step, not yet a listed credential. The asks
   // are read first and the credentials only after: a step approved between the two reads is then
   // pending in the first and live in the second. Read the other way round, or at once, it can be
   // in neither, and its only key file would be deleted.
-  const { plans } = yield* api.plans.list({ query: {} });
+  const { asks } = yield* api.asks.list({ query: {} });
   const { credentials } = yield* api.credentials.list();
   const live = new Set([
     ...credentials
       .filter(credential => credential.expiresAt === null || credential.expiresAt > now)
       .map(credential => credential.id),
-    ...plans.flatMap(plan =>
-      plan.steps.flatMap(step =>
+    ...asks.flatMap(ask =>
+      ask.steps.flatMap(step =>
         step.type === 'access' && step.status === 'pending' ? [step.key.id] : [],
       ),
     ),
@@ -144,7 +144,7 @@ export const forgetDeadKeys = Effect.fn('keyFiles.forgetDead')(function* () {
     files,
     Effect.fnUntraced(function* (file) {
       const id = file.endsWith(COMMAND_SUFFIX) ? file.slice(0, -COMMAND_SUFFIX.length) : file;
-      // Not a key file: a plan's record, or a file baymutt does not keep. Left alone.
+      // Not a key file: an ask's record, or a file baymutt does not keep. Left alone.
       if (!isId(id) || live.has(id)) return;
       const info = yield* fs.stat(path.join(keysDirectory, file)).pipe(
         Effect.asSome,

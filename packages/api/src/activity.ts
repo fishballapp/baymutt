@@ -26,8 +26,8 @@ export const LOGGED_ACTIONS = [
   'credential.create',
   'credential.revoke',
   'credential.expiry',
-  'plan.create',
-  'plan.cancel',
+  'ask.create',
+  'ask.cancel',
   'step.approve',
   'step.reject',
   'step.expire',
@@ -49,10 +49,13 @@ export const LOGGED_ACTIONS = [
 ] as const;
 
 /**
- * What only an entry from before 0.11.0 says: the asks a plan replaced. Nothing logs them now, and
- * the log is never rewritten, so they are read for as long as such an entry is kept.
+ * What only an older entry says: before 0.11.0, the kinds of ask one ask replaced; in 0.11.0, an
+ * ask made or withdrawn, logged as `plan.*`. Nothing logs them now, and the log is never
+ * rewritten, so they are read for as long as such an entry is kept.
  */
 export const PAST_ACTIONS = [
+  'plan.create',
+  'plan.cancel',
   'request.create',
   'request.approve',
   'request.reject',

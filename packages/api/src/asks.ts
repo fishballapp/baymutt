@@ -1,7 +1,7 @@
-// Plans: how a CLI login asks the owner for anything. `baymutt ask` sends one plan: a reason and
+// Asks: how a CLI login asks the owner for anything. `baymutt ask` sends one ask: a reason and
 // ordered steps, all in one org. The owner decides each step whole, on one page, and may leave a
 // note for the agent. A step that needs an environment an earlier step makes waits for that one.
-// Nothing a plan names happens before its step is approved, but for a step that only gives access
+// Nothing an ask names happens before its step is approved, but for a step that only gives access
 // back.
 
 import { coded, ErrorMessageSchema } from '@internal/effect-api';
@@ -47,13 +47,13 @@ import {
 } from './fields.ts';
 import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
-/** How long a plan waits for the owner, in milliseconds. A step unanswered by then has expired. */
-export const PLAN_WAIT_MS = 3600 * 1000;
+/** How long an ask waits for the owner, in milliseconds. A step unanswered by then has expired. */
+export const ASK_WAIT_MS = 3600 * 1000;
 
-export const MAX_PLAN_STEPS = 20;
+export const MAX_ASK_STEPS = 20;
 export const MAX_STEP_ITEMS = 50;
-/** Across every step: a plan is one write, and each value it proposes is a statement of it. */
-export const MAX_PLAN_ITEMS = 200;
+/** Across every step: an ask is one write, and each value it proposes is a statement of it. */
+export const MAX_ASK_ITEMS = 200;
 
 /** How long a key works once approved, as its maker asks for it: a minute to ten years. */
 export const LifetimeSchema = Schema.Int.check(
@@ -106,17 +106,17 @@ export const StepStatusSchema = Schema.Literals([
   /** It only gave access back, which needs no approval. */
   'applied',
   'rejected',
-  /** Its maker withdrew the plan before it was answered. */
+  /** Its maker withdrew the ask before it was answered. */
   'cancelled',
-  /** Nobody answered it within `PLAN_WAIT_MS` of the plan's `createdAt`. */
+  /** Nobody answered it within `ASK_WAIT_MS` of the ask's `createdAt`. */
   'expired',
 ]);
 export type StepStatus = typeof StepStatusSchema.Type;
 
-// ── What a plan asks for (`POST /plans`) ────────────────────────────────────────────────────────
+// ── What an ask asks for (`POST /asks`) ────────────────────────────────────────────────────────
 
 const stepReason = {
-  /** Why this step, when it needs a why of its own; the plan's reason stands otherwise. */
+  /** Why this step, when it needs a why of its own; the ask's reason stands otherwise. */
   reason: Schema.optionalKey(DescriptionSchema),
 };
 
@@ -127,7 +127,7 @@ const newEnvironmentsStep = Schema.Struct({
     Schema.Union([
       Schema.Struct({
         op: Schema.Literal('create'),
-        /** The id the environment is to have. Later steps of this plan name it by this id. */
+        /** The id the environment is to have. Later steps of this ask name it by this id. */
         environmentId: IdSchema,
         name: NameIndexSchema,
         sealedName: SealedNameSchema,
@@ -156,7 +156,7 @@ const newAccessStep = Schema.Struct({
 const newChangeStep = Schema.Struct({
   type: Schema.Literal('change'),
   ...stepReason,
-  /** A key this CLI login asked for, of the plan's org, approved and not ended. */
+  /** A key this CLI login asked for, of the ask's org, approved and not ended. */
   keyId: Schema.String,
   end: NewKeyEndSchema,
   /** Environments to add, to read. */
@@ -202,30 +202,30 @@ const newSecretsStep = Schema.Struct({
   ).check(Schema.isMaxLength(MAX_STEP_ITEMS)),
 });
 
-export const NewPlanSchema = Schema.Struct({
+export const NewAskSchema = Schema.Struct({
   id: IdSchema,
   orgId: Schema.String,
   /** The task, in its maker's words. A claim. */
   reason: DescriptionSchema,
   steps: Schema.NonEmptyArray(
     Schema.Union([newEnvironmentsStep, newAccessStep, newChangeStep, newSecretsStep]),
-  ).check(Schema.isMaxLength(MAX_PLAN_STEPS)),
-}).annotate({ identifier: 'NewPlan' });
-export type NewPlan = typeof NewPlanSchema.Type;
+  ).check(Schema.isMaxLength(MAX_ASK_STEPS)),
+}).annotate({ identifier: 'NewAsk' });
+export type NewAsk = typeof NewAskSchema.Type;
 
-// ── A plan as it stands (`GET /plans/:id`) ──────────────────────────────────────────────────────
+// ── An ask as it stands (`GET /asks/:id`) ──────────────────────────────────────────────────────
 
 /** An environment an item names. Its names are null once it was removed for good. */
-const planEnvironment = {
+const askEnvironment = {
   environmentId: Schema.String,
   environmentName: Schema.NullOr(StoredEnvironmentNameSchema),
   environmentSealedName: Schema.NullOr(SealedNameSchema),
 };
 
 const step = {
-  /** Its place in the plan, from 0. */
+  /** Its place in the ask, from 0. */
   index: Schema.Int,
-  /** Its own why; null when the plan's reason stands. */
+  /** Its own why; null when the ask's reason stands. */
   reason: Schema.NullOr(DescriptionSchema),
   status: StepStatusSchema,
   /** The owner's note. For the owner and the CLI login that asked; null for anyone else. */
@@ -244,7 +244,7 @@ const step = {
 };
 
 const slot = {
-  ...planEnvironment,
+  ...askEnvironment,
   name: StoredSecretNameSchema,
   sealedName: Schema.NullOr(SealedNameSchema),
 };
@@ -267,7 +267,7 @@ export const EnvironmentsStepSchema = Schema.Struct({
   type: Schema.Literal('environments'),
   ...step,
   items: Schema.Array(
-    Schema.Struct({ op: Schema.Literals(['create', 'delete', 'restore']), ...planEnvironment }),
+    Schema.Struct({ op: Schema.Literals(['create', 'delete', 'restore']), ...askEnvironment }),
   ),
 }).annotate({ identifier: 'EnvironmentsStep' });
 
@@ -286,7 +286,7 @@ export const AccessStepSchema = Schema.Struct({
   }),
   command: Schema.NullOr(CommandSchema),
   end: KeyEndSchema,
-  read: Schema.Array(Schema.Struct(planEnvironment)),
+  read: Schema.Array(Schema.Struct(askEnvironment)),
 }).annotate({ identifier: 'AccessStep' });
 
 export const ChangeStepSchema = Schema.Struct({
@@ -306,8 +306,8 @@ export const ChangeStepSchema = Schema.Struct({
   /** What the key holds now. */
   holds: Schema.Array(CredentialGrantSchema),
   end: NewKeyEndSchema,
-  read: Schema.Array(Schema.Struct(planEnvironment)),
-  giveBack: Schema.Array(Schema.Struct(planEnvironment)),
+  read: Schema.Array(Schema.Struct(askEnvironment)),
+  giveBack: Schema.Array(Schema.Struct(askEnvironment)),
 }).annotate({ identifier: 'ChangeStep' });
 
 export const SecretsStepSchema = Schema.Struct({
@@ -336,15 +336,15 @@ export const SecretsStepSchema = Schema.Struct({
   ),
 }).annotate({ identifier: 'SecretsStep' });
 
-export const PlanStepSchema = Schema.Union([
+export const AskStepSchema = Schema.Union([
   EnvironmentsStepSchema,
   AccessStepSchema,
   ChangeStepSchema,
   SecretsStepSchema,
 ]);
-export type PlanStep = typeof PlanStepSchema.Type;
+export type AskStep = typeof AskStepSchema.Type;
 
-export const PlanSchema = Schema.Struct({
+export const AskSchema = Schema.Struct({
   id: IdSchema,
   org: KeyOrgSchema,
   /** The task, in its maker's words. A claim. */
@@ -352,12 +352,12 @@ export const PlanSchema = Schema.Struct({
   /** The CLI login that asked. */
   maker: keyMaker,
   createdAt: TimestampSchema,
-  /** `createdAt` plus `PLAN_WAIT_MS`: a step still pending then has expired. */
+  /** `createdAt` plus `ASK_WAIT_MS`: a step still pending then has expired. */
   expiresAt: TimestampSchema,
   cancelledAt: Schema.NullOr(TimestampSchema),
-  steps: Schema.Array(PlanStepSchema),
-}).annotate({ identifier: 'Plan' });
-export type Plan = typeof PlanSchema.Type;
+  steps: Schema.Array(AskStepSchema),
+}).annotate({ identifier: 'Ask' });
+export type Ask = typeof AskSchema.Type;
 
 // ── The owner's answer to one step ──────────────────────────────────────────────────────────────
 
@@ -397,7 +397,7 @@ export const ApproveStepPayloadSchema = Schema.Union([
     expiresAt: Schema.NullOr(ExpirySchema),
     /** One per environment it reads. */
     grants: Schema.Array(readGrant),
-    /** The names key of the plan's org, wrapped to the new key. */
+    /** The names key of the ask's org, wrapped to the new key. */
     namesKeyWraps: Schema.Array(OrgNamesKeyWrapSchema),
   }),
   Schema.Struct({
@@ -439,40 +439,40 @@ export class StepNotApprovableError extends Schema.TaggedError<StepNotApprovable
   { httpApiStatus: 409 },
 ) {}
 
-const planParam = { id: Schema.String };
+const askParam = { id: Schema.String };
 const stepParams = {
-  ...planParam,
+  ...askParam,
   index: Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 };
 
-export class PlansGroup extends HttpApiGroup.make('plans')
+export class AsksGroup extends HttpApiGroup.make('asks')
   .add(
-    HttpApiEndpoint.get('list', '/plans', {
+    HttpApiEndpoint.get('list', '/asks', {
       query: {
-        orgId: Schema.optionalKey(Schema.String).annotate({ description: 'One org’s plans.' }),
+        orgId: Schema.optionalKey(Schema.String).annotate({ description: 'One org’s asks.' }),
       },
-      success: Schema.Struct({ plans: Schema.Array(PlanSchema) }),
+      success: Schema.Struct({ asks: Schema.Array(AskSchema) }),
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'List plans waiting for the owner',
+        summary: 'List asks waiting for the owner',
         description:
           'Those with a step still pending. The owner sees every one in their orgs; a CLI login sees those it made.',
       }),
     ),
-    HttpApiEndpoint.get('get', '/plans/:id', {
-      params: planParam,
-      success: PlanSchema,
+    HttpApiEndpoint.get('get', '/asks/:id', {
+      params: askParam,
+      success: AskSchema,
       error: coded(NotFoundError),
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Get a plan',
+        summary: 'Get an ask',
         description:
           'Answered or not, to the owner or the CLI login that made it. It is how a terminal learns what the owner decided, step by step.',
       }),
     ),
-    HttpApiEndpoint.post('create', '/plans', {
-      payload: NewPlanSchema,
-      success: PlanSchema.pipe(HttpApiSchema.status(201)),
+    HttpApiEndpoint.post('create', '/asks', {
+      payload: NewAskSchema,
+      success: AskSchema.pipe(HttpApiSchema.status(201)),
       error: [
         coded(OwnerRequiredError),
         coded(AlreadyExistsError),
@@ -484,13 +484,13 @@ export class PlansGroup extends HttpApiGroup.make('plans')
       OpenApi.annotations({
         summary: 'Ask the owner',
         description:
-          'A CLI login only, in an org of its person whose names are sealed. Every environment a step names exists, or an earlier step of the plan creates or restores it. Nothing happens until the owner approves a step, but for a `change` step that only gives access back, which takes effect at once (`applied`). A step left unanswered for an hour expires.',
+          'A CLI login only, in an org of its person whose names are sealed. Every environment a step names exists, or an earlier step of the ask creates or restores it. Nothing happens until the owner approves a step, but for a `change` step that only gives access back, which takes effect at once (`applied`). A step left unanswered for an hour expires.',
       }),
     ),
-    HttpApiEndpoint.post('approveStep', '/plans/:id/steps/:index/approve', {
+    HttpApiEndpoint.post('approveStep', '/asks/:id/steps/:index/approve', {
       params: stepParams,
       payload: ApproveStepPayloadSchema,
-      success: PlanSchema,
+      success: AskSchema,
       error: [
         coded(NotFoundError),
         coded(OwnerRequiredError),
@@ -507,10 +507,10 @@ export class PlansGroup extends HttpApiGroup.make('plans')
           'Owner only. Everything the step names happens in one write, exactly as asked; for a key, the owner changes only when it ends. `LinkSpentError` when it was already answered, withdrawn or has expired; `StepNotApprovableError` while a step it waits for is undecided, or when what it names is gone; `VersionConflictError` when a secret was written since the page read it.',
       }),
     ),
-    HttpApiEndpoint.post('rejectStep', '/plans/:id/steps/:index/reject', {
+    HttpApiEndpoint.post('rejectStep', '/asks/:id/steps/:index/reject', {
       params: stepParams,
       payload: Schema.Struct(answer),
-      success: PlanSchema,
+      success: AskSchema,
       error: [coded(NotFoundError), coded(OwnerRequiredError), coded(LinkSpentError)],
     }).annotateMerge(
       OpenApi.annotations({
@@ -519,13 +519,13 @@ export class PlansGroup extends HttpApiGroup.make('plans')
           'Owner only. Nothing the step names happens; a key it would have made is revoked.',
       }),
     ),
-    HttpApiEndpoint.delete('cancel', '/plans/:id', {
-      params: planParam,
-      success: PlanSchema,
+    HttpApiEndpoint.delete('cancel', '/asks/:id', {
+      params: askParam,
+      success: AskSchema,
       error: [coded(NotFoundError), coded(OwnerRequiredError), coded(LinkSpentError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Withdraw a plan',
+        summary: 'Withdraw an ask',
         description:
           'The CLI login that made it. Every step still pending is cancelled; one already answered stays answered. `LinkSpentError` when none is pending.',
       }),
@@ -533,4 +533,4 @@ export class PlansGroup extends HttpApiGroup.make('plans')
   )
   .middleware(Authenticated)
   .middleware(Credentials)
-  .annotateMerge(OpenApi.annotations({ title: 'Plans' })) {}
+  .annotateMerge(OpenApi.annotations({ title: 'Asks' })) {}

@@ -1,9 +1,9 @@
-// A plan document made into what the store takes (`POST /plans`), on this computer: each address
+// An ask document made into what the store takes (`POST /asks`), on this computer: each address
 // found as an environment id, each new name sealed, each `access` step's key made and vouched for,
 // and each proposed value read and each hint taken, and sealed to the owner's account key. Nothing is sent from here,
 // and anything that cannot be resolved is refused, naming its path, before anything is.
 import { hostname } from 'node:os';
-import { CommandSchema, LifetimeSchema, type NewPlan } from '@baymutt/api';
+import { CommandSchema, LifetimeSchema, type NewAsk } from '@baymutt/api';
 import {
   generateServiceAccountToken,
   type NamesKey,
@@ -18,12 +18,12 @@ import * as Effect from 'effect/Effect';
 import * as Redacted from 'effect/Redacted';
 import * as Schema from 'effect/Schema';
 import { durationMs } from './about.ts';
+import type { AskDocument, AskDocumentStep, SecretsItem } from './ask-document.ts';
+import type { AskedStep, KeptAsk } from './asks.ts';
 import { listEnvironments } from './environments.ts';
 import { crypto_, usage } from './errors.ts';
 import { commandLine } from './key-files.ts';
 import { openStoredName } from './names.ts';
-import type { PlanDocument, PlanDocumentStep, SecretsItem } from './plan-document.ts';
-import type { AskedStep, KeptPlan } from './plans.ts';
 import { readProposedValue } from './proposed-values.ts';
 import { ServiceAccount } from './service-account.ts';
 
@@ -35,9 +35,9 @@ const isCommand = Schema.is(CommandSchema);
 /** "Agent on <this computer's name>", within a name's 60 characters. */
 const defaultName = () => `Agent on ${hostname().slice(0, 51).trim() || 'this computer'}`;
 
-type NewStep = NewPlan['steps'][number];
+type NewStep = NewAsk['steps'][number];
 
-/** A key an `access` step makes: kept in a file here before the plan is sent. */
+/** A key an `access` step makes: kept in a file here before the ask is sent. */
 export type NewKey = {
   readonly id: string;
   readonly token: Redacted.Redacted<string>;
@@ -47,7 +47,7 @@ export type NewKey = {
 /** A list the document guarantees is not empty, as the API's non-empty array type. */
 const nonEmpty = <A>(items: ReadonlyArray<A>) => {
   const [first, ...rest] = items;
-  if (first === undefined) throw new Error('a plan document held an empty list');
+  if (first === undefined) throw new Error('an ask document held an empty list');
   return [first, ...rest] as const;
 };
 
@@ -76,14 +76,14 @@ export const checkCommand = (command: ReadonlyArray<string>, path: string) =>
       );
 
 /**
- * The org of a plan that names no environment: that of the keys its `change` steps name, each one
+ * The org of an ask that names no environment: that of the keys its `change` steps name, each one
  * this login asked for, all in one org.
  */
-const orgOfKeys = Effect.fnUntraced(function* (plan: PlanDocument) {
+const orgOfKeys = Effect.fnUntraced(function* (ask: AskDocument) {
   const { api, key } = yield* ServiceAccount;
   const { credentials } = yield* api.credentials.list();
   const slugs = yield* Effect.forEach(
-    plan.steps,
+    ask.steps,
     (step, index) => {
       if (step.type !== 'change') return Effect.succeed(null);
       const found = credentials.find(
@@ -102,32 +102,32 @@ const orgOfKeys = Effect.fnUntraced(function* (plan: PlanDocument) {
   );
   const [first, ...rest] = slugs.flatMap(each => (each === null ? [] : [each]));
   if (first === undefined) {
-    return yield* Effect.die('a plan named neither an environment nor a key');
+    return yield* Effect.die('an ask named neither an environment nor a key');
   }
   const elsewhere = rest.find(({ slug }) => slug !== first.slug);
   if (elsewhere !== undefined) {
     return yield* usage(
-      `steps[${elsewhere.index}].key: a plan asks in one org, and this one changes keys of ${first.slug} and ${elsewhere.slug}. Make one plan per org.`,
+      `steps[${elsewhere.index}].key: an ask is for one org, and this one changes keys of ${first.slug} and ${elsewhere.slug}. Make one ask per org.`,
     );
   }
   return first.slug;
 });
 
 /**
- * `plan`, all of whose addresses name `orgSlug`, as the store takes it, with what this computer
+ * `ask`, all of whose addresses name `orgSlug`, as the store takes it, with what this computer
  * keeps of it before it is sent: the record `ask wait` checks the answer against, and each new key.
- * With no `orgSlug` (no address named), the plan is in the org of the keys it changes.
+ * With no `orgSlug` (no address named), the ask is in the org of the keys it changes.
  */
-export const makePlan = Effect.fn('plans.make')(function* ({
-  plan,
+export const makeAsk = Effect.fn('asks.make')(function* ({
+  ask,
   orgSlug: named,
 }: {
-  readonly plan: PlanDocument;
+  readonly ask: AskDocument;
   readonly orgSlug: string | null;
 }) {
   const serviceAccount = yield* ServiceAccount;
   const { api, key } = serviceAccount;
-  const orgSlug = named ?? (yield* orgOfKeys(plan));
+  const orgSlug = named ?? (yield* orgOfKeys(ask));
   // The account key this login pinned at pairing: never one taken on the store's word.
   const account = yield* serviceAccount.pinnedAccount;
   const [{ orgs }, { environments, namesKeys }] = yield* Effect.all(
@@ -137,18 +137,18 @@ export const makePlan = Effect.fn('plans.make')(function* ({
   const org = orgs.find(({ slug }) => slug === orgSlug);
   if (org === undefined) {
     return yield* usage(
-      `The plan names environments of ${orgSlug}, and none of your orgs is ${orgSlug}. See them with \`baymutt org list\`.`,
+      `The ask names environments of ${orgSlug}, and none of your orgs is ${orgSlug}. See them with \`baymutt org list\`.`,
       'notFound',
     );
   }
   const namesKey: NamesKey | null = namesKeys.get(org.id) ?? null;
   if (namesKey === null) {
     return yield* usage(
-      `The names in ${orgSlug} are not sealed yet, so it takes no plan. The owner's dashboard seals them the next time it is opened; then ask again.`,
+      `The names in ${orgSlug} are not sealed yet, so it takes no ask. The owner's dashboard seals them the next time it is opened; then ask again.`,
       'conflict',
     );
   }
-  const isRestoring = plan.steps.some(
+  const isRestoring = ask.steps.some(
     step => step.type === 'environments' && step.items.some(({ op }) => op === 'restore'),
   );
   const binned = isRestoring
@@ -165,7 +165,7 @@ export const makePlan = Effect.fn('plans.make')(function* ({
       )
     : [];
 
-  const planId = crypto.randomUUID();
+  const askId = crypto.randomUUID();
   /** Environments earlier steps create or restore, by address: later steps name them by these ids. */
   const brought = new Map<string, string>();
   const live = (address: string) =>
@@ -201,7 +201,7 @@ export const makePlan = Effect.fn('plans.make')(function* ({
     const slot = { environmentId, name: sealed.name, sealedName: sealed.sealedName };
     // Sealed like a proposed value: an agent may have written one into it.
     const sealTo = { loginKey: key.privateKey, accountPublicKey: account.publicKey };
-    const itemSlot = { planId, stepIndex, environmentId, name: item.name };
+    const itemSlot = { askId, stepIndex, environmentId, name: item.name };
     if (item.op === 'paste') {
       const { hint } = item;
       if (hint === undefined) return { op: item.op, ...slot };
@@ -217,7 +217,7 @@ export const makePlan = Effect.fn('plans.make')(function* ({
   });
 
   /** One step as the store takes it, what is kept of it, and the key it makes. */
-  const makeStep = Effect.fnUntraced(function* (step: PlanDocumentStep, index: number) {
+  const makeStep = Effect.fnUntraced(function* (step: AskDocumentStep, index: number) {
     const path = `steps[${index}]`;
     const reason = step.reason === undefined ? {} : { reason: step.reason };
     switch (step.type) {
@@ -348,19 +348,19 @@ export const makePlan = Effect.fn('plans.make')(function* ({
   });
 
   // In order: a step finds an environment by the id an earlier one gave it.
-  const made = yield* Effect.forEach(plan.steps, makeStep, { concurrency: 1 });
+  const made = yield* Effect.forEach(ask.steps, makeStep, { concurrency: 1 });
   return {
     org,
     payload: {
-      id: planId,
+      id: askId,
       orgId: org.id,
-      reason: plan.reason,
+      reason: ask.reason,
       steps: nonEmpty(made.map(({ step }) => step)),
-    } satisfies NewPlan,
+    } satisfies NewAsk,
     kept: {
-      id: planId,
+      id: askId,
       steps: made.map(({ asked }) => ({ asked })),
-    } satisfies KeptPlan,
+    } satisfies KeptAsk,
     keys: made.flatMap(({ key: made }) => (made === null ? [] : [made])),
   };
 });

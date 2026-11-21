@@ -1,4 +1,4 @@
-// The bin: what was deleted. Bringing something back is asked for in a plan (`baymutt ask`), and
+// The bin: what was deleted. Bringing something back is asked for in an ask (`baymutt ask`), and
 // removing it for good is the owner's alone, in the dashboard.
 import * as Command from 'effect/cli/Command';
 import * as Effect from 'effect/Effect';
@@ -63,7 +63,7 @@ const listCommand = Command.make(
 
 export const binCommand = Command.make('bin').pipe(
   Command.withDescription(
-    'What was deleted. For 30 days a plan can ask the owner to restore it (`baymutt ask`), then it is removed for good',
+    'What was deleted. For 30 days an ask can ask the owner to restore it (`baymutt ask`), then it is removed for good',
   ),
   Command.withSubcommands([listCommand]),
   Command.provide(ServiceAccount.layer),

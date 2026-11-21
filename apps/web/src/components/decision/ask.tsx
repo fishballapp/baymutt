@@ -1,4 +1,4 @@
-// What the plan page reads an ask with, and the Ends an `access` or `change` step offers.
+// What the ask page reads an ask with, and the Ends an `access` or `change` step offers.
 import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { durationWords, MINUTE_MS } from '../../lib/format.ts';

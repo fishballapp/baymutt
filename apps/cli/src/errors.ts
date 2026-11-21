@@ -22,6 +22,13 @@ export const EXIT_CODES = {
   differs: 9,
 } as const;
 type ExitKind = keyof typeof EXIT_CODES;
+const isExitKind = (kind: string): kind is ExitKind => Object.hasOwn(EXIT_CODES, kind);
+
+/** The kind an exit code means; `failure` for one that none does. */
+export const kindOfExitCode = (exitCode: number): ExitKind =>
+  Object.keys(EXIT_CODES)
+    .filter(isExitKind)
+    .find(kind => EXIT_CODES[kind] === exitCode) ?? 'failure';
 
 /** The command was used wrongly, or this computer is not logged in for it. */
 export class UsageError extends Schema.TaggedError<UsageError>()('UsageError', {

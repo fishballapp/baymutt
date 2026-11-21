@@ -1,4 +1,4 @@
-/** Credentials, plans, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
+/** Credentials, asks, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
 import { Api, CurrentActor } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
@@ -126,25 +126,25 @@ const EnvironmentsHandlers = HttpApiBuilder.group(
   }),
 );
 
-const PlansHandlers = HttpApiBuilder.group(
+const AsksHandlers = HttpApiBuilder.group(
   Api,
-  'plans',
+  'asks',
   Effect.fn(function* (handlers) {
     const access = yield* Access;
     return handlers.handleAll({
       list: Effect.fn(function* ({ query }) {
         return {
-          plans: yield* access.listPlans({
+          asks: yield* access.listAsks({
             actor: yield* CurrentActor,
             orgId: query.orgId ?? null,
           }),
         };
       }),
       get: Effect.fn(function* ({ params }) {
-        return yield* access.getPlan({ actor: yield* CurrentActor, id: params.id });
+        return yield* access.getAsk({ actor: yield* CurrentActor, id: params.id });
       }),
       create: Effect.fn(function* ({ payload }) {
-        return yield* access.createPlan({ actor: yield* CurrentActor, plan: payload });
+        return yield* access.createAsk({ actor: yield* CurrentActor, ask: payload });
       }),
       approveStep: Effect.fn(function* ({ params, payload }) {
         return yield* access.approveStep({
@@ -161,7 +161,7 @@ const PlansHandlers = HttpApiBuilder.group(
         });
       }),
       cancel: Effect.fn(function* ({ params }) {
-        return yield* access.cancelPlan({ actor: yield* CurrentActor, id: params.id });
+        return yield* access.cancelAsk({ actor: yield* CurrentActor, id: params.id });
       }),
     });
   }),
@@ -195,7 +195,7 @@ const BinHandlers = HttpApiBuilder.group(
 
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
-  PlansHandlers,
+  AsksHandlers,
   OrgsHandlers,
   EnvironmentsHandlers,
   ActivityHandlers,

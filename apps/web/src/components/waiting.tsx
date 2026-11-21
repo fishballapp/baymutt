@@ -1,4 +1,4 @@
-// Things that wait on the owner, as rows at the top of the page they wait under: plans, on Plans.
+// Things that wait on the owner, as rows at the top of the page they wait under: asks, on Asks.
 import type { ReactNode } from 'react';
 import { List, Rows } from './ui/list.tsx';
 import { RelativeTime } from './ui/page.tsx';

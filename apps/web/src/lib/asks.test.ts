@@ -1,4 +1,4 @@
-import type { PlanStep } from '@baymutt/api';
+import type { AskStep } from '@baymutt/api';
 import { describe, expect, it } from 'vitest';
 import {
   approveLabel,
@@ -7,19 +7,19 @@ import {
   statusWord,
   stepsWords,
   stepTitle,
-} from './plans.ts';
+} from './asks.ts';
 
 const environments = (ops: ReadonlyArray<'create' | 'delete' | 'restore'>) =>
   ({
     type: 'environments',
     items: ops.map((op, at) => ({ op, environmentId: `e${at}` })),
-  }) as never as PlanStep;
+  }) as never as AskStep;
 
 const secrets = (environmentIds: ReadonlyArray<string>) =>
   ({
     type: 'secrets',
     items: environmentIds.map(environmentId => ({ op: 'generate', environmentId })),
-  }) as never as PlanStep;
+  }) as never as AskStep;
 
 describe('stepTitle', () => {
   it('says what each step does', () => {
@@ -60,12 +60,12 @@ describe('approveLabel', () => {
 
 describe('statusWord', () => {
   it('says how a step was answered, and nothing while it waits', () => {
-    const created = { ...(environments(['create']) as object), status: 'approved' } as PlanStep;
+    const created = { ...(environments(['create']) as object), status: 'approved' } as AskStep;
     expect(statusWord(created)).toBe('Created');
-    expect(statusWord({ ...(secrets(['a']) as object), status: 'cancelled' } as PlanStep)).toBe(
+    expect(statusWord({ ...(secrets(['a']) as object), status: 'cancelled' } as AskStep)).toBe(
       'Withdrawn',
     );
-    expect(statusWord({ ...(secrets(['a']) as object), status: 'pending' } as PlanStep)).toBe(null);
+    expect(statusWord({ ...(secrets(['a']) as object), status: 'pending' } as AskStep)).toBe(null);
   });
 });
 
@@ -78,10 +78,10 @@ describe('stepsWords', () => {
 });
 
 describe('nextFocus', () => {
-  type Step = PlanStep & { readonly blocked?: Blocked };
+  type Step = AskStep & { readonly blocked?: Blocked };
   const step = (
     index: number,
-    status: PlanStep['status'],
+    status: AskStep['status'],
     { waitsFor = [], blocked = null }: { waitsFor?: number[]; blocked?: Blocked } = {},
   ) => ({ index, status, waitsFor, blocked }) as never as Step;
   const blockedOf = (each: Step) => each.blocked ?? null;

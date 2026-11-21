@@ -1,4 +1,4 @@
-/** Plans: a CLI login asks the owner for anything at once, in ordered steps the owner decides one by one. */
+/** Asks: a CLI login asks the owner for anything at once, in ordered steps the owner decides one by one. */
 import { LIMITS } from '@baymutt/api';
 import { tokenHash } from '@baymutt/keys/wire';
 import * as Effect from 'effect/Effect';
@@ -43,7 +43,7 @@ type Step = {
   key?: { id: string; expiresAt: number | null; keyVoucher: string | null };
   holds?: { environmentId: string }[];
 };
-type Plan = { id: string; createdAt: number; cancelledAt: number | null; steps: Step[] };
+type Ask = { id: string; createdAt: number; cancelledAt: number | null; steps: Step[] };
 
 let keyCount = 0;
 
@@ -70,8 +70,8 @@ const setup = async () => {
   const login = await world.pair('laptop');
   const { w, owner, orgId } = world;
 
-  /** What `baymutt ask` sends: a plan of `steps` in the world's org. */
-  const ask = (
+  /** What `baymutt ask` sends: an ask of `steps` in the world's org. */
+  const send = (
     steps: unknown[],
     {
       by = login,
@@ -79,27 +79,27 @@ const setup = async () => {
       inOrg = orgId,
     }: { by?: Credential; id?: string; inOrg?: string } = {},
   ) =>
-    call(w, 'POST', '/plans', by.headers, {
+    call(w, 'POST', '/asks', by.headers, {
       id,
       orgId: inOrg,
       reason: 'set up the preview',
       steps,
     });
 
-  const asked = async (steps: unknown[], options: Parameters<typeof ask>[1] = {}) => {
-    const answer = await ask(steps, options);
+  const asked = async (steps: unknown[], options: Parameters<typeof send>[1] = {}) => {
+    const answer = await send(steps, options);
     expect(answer).toMatchObject({ status: 201 });
-    return answer.body as Plan;
+    return answer.body as Ask;
   };
 
   const read = (id: string, headers: Record<string, string> = owner) =>
-    ok<Plan>(w, 'GET', `/plans/${id}`, headers);
+    ok<Ask>(w, 'GET', `/asks/${id}`, headers);
 
   const approve = (id: string, index: number, payload: unknown, headers = owner) =>
-    call(w, 'POST', `/plans/${id}/steps/${index}/approve`, headers, payload);
+    call(w, 'POST', `/asks/${id}/steps/${index}/approve`, headers, payload);
 
   const reject = (id: string, index: number, payload: unknown = {}, headers = owner) =>
-    call(w, 'POST', `/plans/${id}/steps/${index}/reject`, headers, payload);
+    call(w, 'POST', `/asks/${id}/steps/${index}/reject`, headers, payload);
 
   /** An `environments` step that creates `name`, with the id it is to have. */
   const creating = (name: string, environmentId = crypto.randomUUID()) => ({
@@ -165,7 +165,7 @@ const setup = async () => {
     production,
     staging,
     login,
-    ask,
+    send,
     asked,
     read,
     approve,
@@ -180,7 +180,7 @@ const setup = async () => {
 
 const sweep = ({ w }: Pick<StoreWorld, 'w'>) =>
   Effect.runPromise(
-    Effect.flatMap(Access, access => access.sweepPlans).pipe(Effect.provide(w.services)),
+    Effect.flatMap(Access, access => access.sweepAsks).pipe(Effect.provide(w.services)),
   );
 
 const actions = ({ w }: Pick<StoreWorld, 'w'>) =>
@@ -198,18 +198,18 @@ const actions = ({ w }: Pick<StoreWorld, 'w'>) =>
     detail,
   }));
 
-const age = ({ w }: Pick<StoreWorld, 'w'>, planId: string, by: number) =>
-  w.sqlite.prepare('UPDATE plan SET created_at = created_at - ? WHERE id = ?').run(by, planId);
+const age = ({ w }: Pick<StoreWorld, 'w'>, askId: string, by: number) =>
+  w.sqlite.prepare('UPDATE ask SET created_at = created_at - ? WHERE id = ?').run(by, askId);
 
 describe('asking', () => {
   it('is a CLI login’s, and nothing happens until a step is approved', async () => {
     const world = await setup();
-    const { w, owner, production, login, ask, asked, read, serviceAccount, pair } = world;
+    const { w, owner, production, login, send, asked, read, serviceAccount, pair } = world;
     const key = await newKey('deploy');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: DAY, read: [production] },
     ]);
-    expect(plan).toMatchObject({
+    expect(ask).toMatchObject({
       reason: 'set up the preview',
       maker: { id: login.id, endorsement: null },
       cancelledAt: null,
@@ -225,7 +225,7 @@ describe('asking', () => {
         },
       ],
     });
-    expect(plan.createdAt + HOUR).toBe((plan as unknown as { expiresAt: number }).expiresAt);
+    expect(ask.createdAt + HOUR).toBe((ask as unknown as { expiresAt: number }).expiresAt);
     // The key is real and holds nothing; it is not listed as a key until approved.
     expect(await call(w, 'GET', '/environments', key.headers)).toEqual({
       status: 200,
@@ -234,24 +234,24 @@ describe('asking', () => {
     const listed = await ok<{ credentials: { id: string }[] }>(w, 'GET', '/credentials', owner);
     expect(listed.credentials.map(({ id }) => id)).not.toContain(key.payload.id);
     // The owner sees the maker's voucher; listed for the owner and the maker, not another login.
-    expect(await read(plan.id)).toMatchObject({
+    expect(await read(ask.id)).toMatchObject({
       steps: [{ key: { keyVoucher: VOUCHERS.keyToOwner } }],
       maker: { endorsement: sealedLike('endorsement') },
     });
     expect(actions(world).at(-1)).toEqual({
-      action: 'plan.create',
+      action: 'ask.create',
       actor: 'credential',
       detail: 'set up the preview',
     });
     const other = await pair('desktop');
     const ids = async (headers: Record<string, string>) =>
-      (await ok<{ plans: Plan[] }>(w, 'GET', '/plans', headers)).plans.map(({ id }) => id);
-    expect(await ids(owner)).toEqual([plan.id]);
-    expect(await ids(login.headers)).toEqual([plan.id]);
+      (await ok<{ asks: Ask[] }>(w, 'GET', '/asks', headers)).asks.map(({ id }) => id);
+    expect(await ids(owner)).toEqual([ask.id]);
+    expect(await ids(login.headers)).toEqual([ask.id]);
     expect(await ids(other.headers)).toEqual([]);
     expect(await ids(key.headers)).toEqual([]);
-    expect(await call(w, 'GET', `/plans/${plan.id}`, other.headers)).toMatchObject({ status: 404 });
-    expect(await call(w, 'GET', `/plans/${plan.id}`, key.headers)).toMatchObject({ status: 404 });
+    expect(await call(w, 'GET', `/asks/${ask.id}`, other.headers)).toMatchObject({ status: 404 });
+    expect(await call(w, 'GET', `/asks/${ask.id}`, key.headers)).toMatchObject({ status: 404 });
 
     // The owner and a key never ask.
     const made = await serviceAccount([production]);
@@ -265,7 +265,7 @@ describe('asking', () => {
       },
     ];
     for (const headers of [owner, made.headers]) {
-      expect(await ask(steps, { by: { id: 'x', headers } })).toMatchObject({
+      expect(await send(steps, { by: { id: 'x', headers } })).toMatchObject({
         status: 403,
         body: { code: 'OwnerRequiredError' },
       });
@@ -274,7 +274,7 @@ describe('asking', () => {
 
   it('is refused what it cannot name', async () => {
     const world = await setup();
-    const { production, staging, ask, org, environment, creating, w, orgId } = world;
+    const { production, staging, send, org, environment, creating, w, orgId } = world;
     const elsewhere = await environment('other/production', await org('other'));
     const key = await newKey('k');
     const access = (read: string[]) => ({
@@ -286,13 +286,13 @@ describe('asking', () => {
     });
 
     // An environment of another org, or none at all.
-    expect(await ask([access([elsewhere])])).toMatchObject({
+    expect(await send([access([elsewhere])])).toMatchObject({
       status: 404,
       body: { message: expect.stringContaining('steps[0].read[0]') },
     });
-    expect(await ask([access([crypto.randomUUID()])])).toMatchObject({ status: 404 });
+    expect(await send([access([crypto.randomUUID()])])).toMatchObject({ status: 404 });
     // Each environment once per step, and each secret once.
-    expect(await ask([access([production, production])])).toMatchObject({ status: 400 });
+    expect(await send([access([production, production])])).toMatchObject({ status: 400 });
     const set = {
       op: 'set',
       environmentId: staging,
@@ -301,37 +301,37 @@ describe('asking', () => {
       value: sealedLike('v'),
     };
     expect(
-      await ask([{ type: 'secrets', items: [set, { ...set, op: 'generate', value: undefined }] }]),
+      await send([{ type: 'secrets', items: [set, { ...set, op: 'generate', value: undefined }] }]),
     ).toMatchObject({ status: 400 });
     // A name the org already has, live or in the bin.
-    expect(await ask([creating('app/production').step])).toMatchObject({
+    expect(await send([creating('app/production').step])).toMatchObject({
       status: 409,
       body: { code: 'AlreadyExistsError' },
     });
     // Two of one name in a step: one would be made, and the step approved as both.
     const twice = [creating('app/twin').step.items[0], creating('app/twin').step.items[0]];
-    expect(await ask([{ type: 'environments', items: twice }])).toMatchObject({
+    expect(await send([{ type: 'environments', items: twice }])).toMatchObject({
       status: 409,
       body: { message: expect.stringContaining('this step already creates') },
     });
     // A step that needs an environment only a later step creates.
     const later = creating('app/preview');
     expect(
-      await ask([
+      await send([
         { type: 'secrets', items: [{ ...set, environmentId: later.environmentId }] },
         later.step,
       ]),
     ).toMatchObject({ status: 404 });
     // A secret that is not there to delete, and a version that never was.
     expect(
-      await ask([
+      await send([
         {
           type: 'secrets',
           items: [{ op: 'delete', environmentId: staging, name: indexOf(staging, 'NONE') }],
         },
       ]),
     ).toMatchObject({ status: 404 });
-    // More than a plan holds, across its steps.
+    // More than an ask holds, across its steps.
     const many = (step: number) => ({
       type: 'secrets',
       items: Array.from({ length: 50 }, (_, index) => ({
@@ -341,17 +341,17 @@ describe('asking', () => {
         sealedName: sealedOf(`S${step}_${index}`),
       })),
     });
-    expect(await ask([many(0), many(1), many(2), many(3), access([production])])).toMatchObject({
+    expect(await send([many(0), many(1), many(2), many(3), access([production])])).toMatchObject({
       status: 400,
       body: { message: expect.stringContaining('up to 200') },
     });
     // An org whose names are not sealed.
     const unsealed = await org('old', { isSealed: false });
-    expect(await ask([access([production])], { inOrg: unsealed })).toMatchObject({
+    expect(await send([access([production])], { inOrg: unsealed })).toMatchObject({
       status: 409,
       body: { code: 'NamesNotSealedError' },
     });
-    expect(w.sqlite.prepare('SELECT COUNT(*) AS n FROM plan').get()).toEqual({ n: 0 });
+    expect(w.sqlite.prepare('SELECT COUNT(*) AS n FROM ask').get()).toEqual({ n: 0 });
     expect(orgId).toBeDefined();
   });
 });
@@ -359,7 +359,7 @@ describe('asking', () => {
 describe('the beta limits', () => {
   it('count each key an access step makes, as a request’s', async () => {
     const world = await setup();
-    const { w, production, ask, accountId } = world;
+    const { w, production, send, accountId } = world;
     const held = (w.sqlite.prepare('SELECT COUNT(*) AS n FROM credential').get() as { n: number })
       .n;
     const fill = w.sqlite.prepare(
@@ -382,16 +382,16 @@ describe('the beta limits', () => {
       end: 'never',
       read: [production],
     });
-    expect(await ask([await access(), await access()])).toMatchObject({
+    expect(await send([await access(), await access()])).toMatchObject({
       status: 403,
       body: { code: 'LimitReachedError', limit: LIMITS.serviceAccounts },
     });
-    expect(await ask([await access()])).toMatchObject({ status: 201 });
+    expect(await send([await access()])).toMatchObject({ status: 201 });
   });
 
-  it('hold up to 20 plans waiting in one org', async () => {
+  it('hold up to 20 asks waiting in one org', async () => {
     const world = await setup();
-    const { staging, ask, asked } = world;
+    const { staging, send, asked } = world;
     const generate = (name: string) => [
       {
         type: 'secrets',
@@ -405,19 +405,19 @@ describe('the beta limits', () => {
         ],
       },
     ];
-    const plans = [];
-    for (const index of Array.from({ length: LIMITS.waitingPlansPerOrg }, (_, i) => i)) {
-      plans.push(await asked(generate(`S${index}`)));
+    const asks = [];
+    for (const index of Array.from({ length: LIMITS.waitingAsksPerOrg }, (_, i) => i)) {
+      asks.push(await asked(generate(`S${index}`)));
     }
-    expect(await ask(generate('ONE_MORE'))).toMatchObject({
+    expect(await send(generate('ONE_MORE'))).toMatchObject({
       status: 403,
-      body: { code: 'LimitReachedError', limit: LIMITS.waitingPlansPerOrg },
+      body: { code: 'LimitReachedError', limit: LIMITS.waitingAsksPerOrg },
     });
     // One that stops waiting makes room.
-    const [first] = plans;
-    if (first === undefined) throw new Error('no plan was made');
+    const [first] = asks;
+    if (first === undefined) throw new Error('no ask was made');
     age(world, first.id, HOUR);
-    expect(await ask(generate('ONE_MORE'))).toMatchObject({ status: 201 });
+    expect(await send(generate('ONE_MORE'))).toMatchObject({ status: 201 });
   });
 });
 
@@ -427,13 +427,13 @@ describe('each step, approved', () => {
     const { w, owner, staging, asked, approve, read, creating, keyPairs, orgId } = world;
     await ok(w, 'DELETE', `/environments/${staging}`, owner);
     const preview = creating('app/preview');
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'environments',
         items: [...preview.step.items, { op: 'restore', environmentId: staging }],
       },
     ]);
-    expect(await approve(plan.id, 0, keyPairs(preview.environmentId))).toMatchObject({
+    expect(await approve(ask.id, 0, keyPairs(preview.environmentId))).toMatchObject({
       status: 200,
     });
     const listed = await ok<{ environments: { id: string; name: string }[] }>(
@@ -445,7 +445,7 @@ describe('each step, approved', () => {
     expect(listed.environments.map(({ id }) => id)).toEqual(
       expect.arrayContaining([preview.environmentId, staging]),
     );
-    expect((await read(plan.id)).steps[0]).toMatchObject({ status: 'approved' });
+    expect((await read(ask.id)).steps[0]).toMatchObject({ status: 'approved' });
     expect(actions(world).slice(-3)).toEqual([
       { action: 'environment.create', actor: 'owner', detail: null },
       { action: 'environment.restore', actor: 'owner', detail: null },
@@ -464,13 +464,13 @@ describe('each step, approved', () => {
     const world = await setup();
     const { w, asked, approve, read, creating, keyPairs, environment } = world;
     const preview = creating('app/preview');
-    const plan = await asked([preview.step]);
+    const ask = await asked([preview.step]);
     await environment('app/preview');
-    expect(await approve(plan.id, 0, keyPairs(preview.environmentId))).toMatchObject({
+    expect(await approve(ask.id, 0, keyPairs(preview.environmentId))).toMatchObject({
       status: 409,
       body: { code: 'AlreadyExistsError' },
     });
-    expect((await read(plan.id)).steps[0]).toMatchObject({ status: 'pending' });
+    expect((await read(ask.id)).steps[0]).toMatchObject({ status: 'pending' });
     expect(
       w.sqlite
         .prepare('SELECT COUNT(*) AS n FROM environment WHERE id = ?')
@@ -482,7 +482,7 @@ describe('each step, approved', () => {
     const world = await setup();
     const { w, owner, production, asked, approve, reading } = world;
     const key = await newKey('deploy');
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'access',
         key: key.payload,
@@ -493,7 +493,7 @@ describe('each step, approved', () => {
     ]);
     const end = Date.now() + 2 * DAY;
     expect(
-      await approve(plan.id, 0, reading('access', [production], { expiresAt: end })),
+      await approve(ask.id, 0, reading('access', [production], { expiresAt: end })),
     ).toMatchObject({
       status: 200,
       body: { steps: [{ status: 'approved', key: { expiresAt: end } }] },
@@ -531,19 +531,19 @@ describe('each step, approved', () => {
       maker: login,
       name: 'agent',
     });
-    const plan = await asked([
+    const ask = await asked([
       { type: 'change', keyId: agent.id, end: 'keep', read: [production], giveBack: [] },
     ]);
-    expect(plan.steps[0]).toMatchObject({
+    expect(ask.steps[0]).toMatchObject({
       status: 'pending',
       holds: [{ environmentId: staging }],
     });
-    expect((await approve(plan.id, 0, reading('change', [production]))).status).toBe(200);
+    expect((await approve(ask.id, 0, reading('change', [production]))).status).toBe(200);
     expect(await call(w, 'GET', `/environments/${production}/bundle`, agent.headers)).toMatchObject(
       { status: 200 },
     );
 
-    // Giving back alone needs nobody: it is `applied` in the write that makes the plan.
+    // Giving back alone needs nobody: it is `applied` in the write that makes the ask.
     const back = await asked([
       { type: 'change', keyId: agent.id, end: 'keep', read: [], giveBack: [staging] },
     ]);
@@ -553,9 +553,9 @@ describe('each step, approved', () => {
     });
     expect(actions(world).slice(-2)).toEqual([
       { action: 'grant.remove', actor: 'credential', detail: 'agent' },
-      { action: 'plan.create', actor: 'credential', detail: 'set up the preview' },
+      { action: 'ask.create', actor: 'credential', detail: 'set up the preview' },
     ]);
-    expect(await ok<{ plans: Plan[] }>(w, 'GET', '/plans', owner)).toEqual({ plans: [] });
+    expect(await ok<{ asks: Ask[] }>(w, 'GET', '/asks', owner)).toEqual({ asks: [] });
   });
 
   it('writes, deletes, rolls back and restores secrets in one write', async () => {
@@ -573,7 +573,7 @@ describe('each step, approved', () => {
     );
     const slot = (name: string) => ({ environmentId: staging, name: secretName(staging, name) });
     const fresh = (name: string) => ({ ...slot(name), sealedName: sealedOf(name) });
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'secrets',
         items: [
@@ -586,7 +586,7 @@ describe('each step, approved', () => {
       },
       { type: 'secrets', items: [{ op: 'rollback', ...slot('OLD'), version: 1 }] },
     ]);
-    const shown = (await read(plan.id)).steps[0] as Step;
+    const shown = (await read(ask.id)).steps[0] as Step;
     expect(shown.items).toMatchObject([
       { op: 'set', nextVersion: 1, keyVersion: 1, value: sealedLike('proposed') },
       { op: 'paste', nextVersion: 1, sealedHint: sealedLike('hint') },
@@ -594,7 +594,7 @@ describe('each step, approved', () => {
       { op: 'delete' },
       { op: 'restore' },
     ]);
-    expect((await approve(plan.id, 0, sealing(shown))).status).toBe(200);
+    expect((await approve(ask.id, 0, sealing(shown))).status).toBe(200);
     const after = Object.fromEntries((await secrets(staging)).map(s => [s.name, s.currentVersion]));
     expect(after).toEqual({
       [secretName(staging, 'API_KEY')]: 1,
@@ -603,7 +603,7 @@ describe('each step, approved', () => {
       [secretName(staging, 'GONE')]: null,
       [secretName(staging, 'BINNED')]: 1,
     });
-    expect((await approve(plan.id, 1, { type: 'secrets', values: [] })).status).toBe(200);
+    expect((await approve(ask.id, 1, { type: 'secrets', values: [] })).status).toBe(200);
     expect(
       Object.fromEntries((await secrets(staging)).map(s => [s.name, s.currentVersion])),
     ).toMatchObject({
@@ -629,7 +629,7 @@ describe('deciding', () => {
     const world = await setup();
     const { w, production, staging, asked, reject, read, secrets, login } = world;
     const key = await newKey('deploy');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: 'never', read: [production] },
       {
         type: 'secrets',
@@ -645,21 +645,19 @@ describe('deciding', () => {
       },
     ]);
     const note = sealedLike('note', 80);
-    expect(await reject(plan.id, 0, { note })).toMatchObject({
+    expect(await reject(ask.id, 0, { note })).toMatchObject({
       status: 200,
       body: { steps: [{ status: 'rejected', note }, {}] },
     });
-    expect(await reject(plan.id, 1)).toMatchObject({ status: 200 });
+    expect(await reject(ask.id, 1)).toMatchObject({ status: 200 });
     expect(await call(w, 'GET', '/me', key.headers)).toMatchObject({ status: 401 });
     expect(await secrets(staging)).toEqual([]);
     expect(
-      w.sqlite
-        .prepare('SELECT COUNT(*) AS n FROM plan_item WHERE proposed_value IS NOT NULL')
-        .get(),
+      w.sqlite.prepare('SELECT COUNT(*) AS n FROM ask_item WHERE proposed_value IS NOT NULL').get(),
     ).toEqual({ n: 0 });
-    expect((await read(plan.id, login.headers)).steps[0]).toMatchObject({ note });
+    expect((await read(ask.id, login.headers)).steps[0]).toMatchObject({ note });
     // Answered once.
-    expect(await reject(plan.id, 0)).toMatchObject({
+    expect(await reject(ask.id, 0)).toMatchObject({
       status: 410,
       body: { code: 'LinkSpentError' },
     });
@@ -677,7 +675,7 @@ describe('deciding', () => {
     const other = creating('app/other');
     const key = await newKey('preview');
     const key2 = await newKey('other');
-    const plan = await asked([
+    const ask = await asked([
       preview.step,
       other.step,
       {
@@ -695,35 +693,33 @@ describe('deciding', () => {
         read: [other.environmentId],
       },
     ]);
-    expect(plan.steps.map(({ waitsFor, canOnlyReject }) => ({ waitsFor, canOnlyReject }))).toEqual([
+    expect(ask.steps.map(({ waitsFor, canOnlyReject }) => ({ waitsFor, canOnlyReject }))).toEqual([
       { waitsFor: [], canOnlyReject: false },
       { waitsFor: [], canOnlyReject: false },
       { waitsFor: [0], canOnlyReject: false },
       { waitsFor: [1], canOnlyReject: false },
     ]);
-    expect(await approve(plan.id, 2, reading('access', [preview.environmentId]))).toMatchObject({
+    expect(await approve(ask.id, 2, reading('access', [preview.environmentId]))).toMatchObject({
       status: 409,
       body: {
         code: 'StepNotApprovableError',
         message: expect.stringContaining('waits for step 0'),
       },
     });
-    expect((await approve(plan.id, 0, keyPairs(preview.environmentId))).status).toBe(200);
-    expect((await read(plan.id)).steps[2]).toMatchObject({ waitsFor: [], canOnlyReject: false });
-    expect((await approve(plan.id, 2, reading('access', [preview.environmentId]))).status).toBe(
-      200,
-    );
+    expect((await approve(ask.id, 0, keyPairs(preview.environmentId))).status).toBe(200);
+    expect((await read(ask.id)).steps[2]).toMatchObject({ waitsFor: [], canOnlyReject: false });
+    expect((await approve(ask.id, 2, reading('access', [preview.environmentId]))).status).toBe(200);
 
-    expect((await reject(plan.id, 1)).status).toBe(200);
-    expect((await read(plan.id)).steps[3]).toMatchObject({ waitsFor: [], canOnlyReject: true });
-    expect(await approve(plan.id, 3, reading('access', [other.environmentId]))).toMatchObject({
+    expect((await reject(ask.id, 1)).status).toBe(200);
+    expect((await read(ask.id)).steps[3]).toMatchObject({ waitsFor: [], canOnlyReject: true });
+    expect(await approve(ask.id, 3, reading('access', [other.environmentId]))).toMatchObject({
       status: 409,
       body: {
         code: 'StepNotApprovableError',
         message: expect.stringContaining('only be rejected'),
       },
     });
-    expect((await reject(plan.id, 3)).status).toBe(200);
+    expect((await reject(ask.id, 3)).status).toBe(200);
   });
 
   it('a step does not wait on a secret’s restore for an environment that has gone', async () => {
@@ -736,7 +732,7 @@ describe('deciding', () => {
       `/environments/${staging}/secrets/${secretName(staging, 'BINNED')}`,
       owner,
     );
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'secrets',
         items: [{ op: 'restore', environmentId: staging, name: secretName(staging, 'BINNED') }],
@@ -751,7 +747,7 @@ describe('deciding', () => {
     ]);
     await ok(w, 'DELETE', `/environments/${staging}`, owner);
     expect(
-      (await read(plan.id)).steps.map(({ waitsFor, canOnlyReject }) => ({
+      (await read(ask.id)).steps.map(({ waitsFor, canOnlyReject }) => ({
         waitsFor,
         canOnlyReject,
       })),
@@ -765,7 +761,7 @@ describe('deciding', () => {
     const world = await setup();
     const { production, asked, approve, reject, read, sealing, secrets } = world;
     const key = await newKey('k');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: 'never', read: [production] },
       {
         type: 'secrets',
@@ -779,16 +775,16 @@ describe('deciding', () => {
         ],
       },
     ]);
-    expect((await reject(plan.id, 0)).status).toBe(200);
-    const step = (await read(plan.id)).steps[1] as Step;
+    expect((await reject(ask.id, 0)).status).toBe(200);
+    const step = (await read(ask.id)).steps[1] as Step;
     expect(step).toMatchObject({ waitsFor: [], canOnlyReject: false });
-    expect((await approve(plan.id, 1, sealing(step))).status).toBe(200);
+    expect((await approve(ask.id, 1, sealing(step))).status).toBe(200);
     expect(await secrets(production)).toHaveLength(1);
   });
 
   it('revoking a key rejects a change waiting on it, and one change waits per key', async () => {
     const world = await setup();
-    const { w, owner, production, staging, login, asked, ask, read, serviceAccount } = world;
+    const { w, owner, production, staging, login, asked, send, read, serviceAccount } = world;
     const agent = await serviceAccount([staging], {
       maker: login,
       name: 'agent',
@@ -800,13 +796,13 @@ describe('deciding', () => {
       read: [production],
       giveBack: [],
     };
-    const plan = await asked([change]);
-    expect(await ask([change])).toMatchObject({
+    const ask = await asked([change]);
+    expect(await send([change])).toMatchObject({
       status: 409,
-      body: { code: 'AlreadyExistsError', message: expect.stringContaining(plan.id) },
+      body: { code: 'AlreadyExistsError', message: expect.stringContaining(ask.id) },
     });
     await ok(w, 'DELETE', `/credentials/${agent.id}`, owner);
-    expect((await read(plan.id)).steps[0]).toMatchObject({ status: 'rejected' });
+    expect((await read(ask.id)).steps[0]).toMatchObject({ status: 'rejected' });
   });
 });
 
@@ -833,31 +829,31 @@ describe('a CLI login that is gone', () => {
     },
   ];
   const pendingValues = ({ w }: Pick<StoreWorld, 'w'>) =>
-    w.sqlite.prepare('SELECT COUNT(*) AS n FROM plan_item WHERE proposed_value IS NOT NULL').get();
+    w.sqlite.prepare('SELECT COUNT(*) AS n FROM ask_item WHERE proposed_value IS NOT NULL').get();
 
-  it('revoked, rejects every step still waiting in its plans, in the same write', async () => {
+  it('revoked, rejects every step still waiting in its asks, in the same write', async () => {
     const world = await setup();
     const { w, owner, login, asked, read, approve, sealing } = world;
-    const plan = await asked(await twoSteps(world));
+    const ask = await asked(await twoSteps(world));
     await ok(w, 'DELETE', `/credentials/${login.id}`, owner);
-    expect((await read(plan.id)).steps.map(({ status }) => status)).toEqual([
+    expect((await read(ask.id)).steps.map(({ status }) => status)).toEqual([
       'rejected',
       'rejected',
     ]);
     expect(pendingValues(world)).toEqual({ n: 0 });
-    const step = (await read(plan.id)).steps[1] as Step;
-    expect(await approve(plan.id, 1, sealing(step))).toMatchObject({ status: 410 });
+    const step = (await read(ask.id)).steps[1] as Step;
+    expect(await approve(ask.id, 1, sealing(step))).toMatchObject({ status: 410 });
   });
 
-  it('ended, has its plans’ steps rejected by the daily run', async () => {
+  it('ended, has its asks’ steps rejected by the daily run', async () => {
     const world = await setup();
     const { w, login, asked, read } = world;
-    const plan = await asked(await twoSteps(world));
+    const ask = await asked(await twoSteps(world));
     w.sqlite
       .prepare('UPDATE credential SET expires_at = ? WHERE id = ?')
       .run(Date.now() - 1, login.id);
     expect(await sweep(world)).toEqual({ expired: 0, rejected: 1, removed: 0 });
-    expect((await read(plan.id)).steps.map(({ status }) => status)).toEqual([
+    expect((await read(ask.id)).steps.map(({ status }) => status)).toEqual([
       'rejected',
       'rejected',
     ]);
@@ -875,24 +871,24 @@ describe('the owner’s answer', () => {
     const { w, production, login, locked, asked, approve, reject, reading, serviceAccount, pair } =
       world;
     const key = await newKey('k');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: 'never', read: [production] },
     ]);
     const made = await serviceAccount([production]);
     const other = await pair('desktop');
     for (const headers of [login.headers, made.headers]) {
-      expect(await approve(plan.id, 0, reading('access', [production]), headers)).toMatchObject({
+      expect(await approve(ask.id, 0, reading('access', [production]), headers)).toMatchObject({
         status: 403,
         body: { code: 'OwnerRequiredError' },
       });
-      expect(await reject(plan.id, 0, {}, headers)).toMatchObject({ status: 403 });
+      expect(await reject(ask.id, 0, {}, headers)).toMatchObject({ status: 403 });
     }
-    expect(await reject(plan.id, 0, {}, other.headers)).toMatchObject({ status: 403 });
-    expect(await approve(plan.id, 0, reading('access', [production]), locked)).toMatchObject({
+    expect(await reject(ask.id, 0, {}, other.headers)).toMatchObject({ status: 403 });
+    expect(await approve(ask.id, 0, reading('access', [production]), locked)).toMatchObject({
       status: 403,
       body: { code: 'VaultLockedError' },
     });
-    expect(await approve(plan.id, 5, reading('access', [production]))).toMatchObject({
+    expect(await approve(ask.id, 5, reading('access', [production]))).toMatchObject({
       status: 404,
     });
     // Another account's owner does not reach it.
@@ -907,26 +903,26 @@ describe('the owner’s answer', () => {
       201,
     );
     const strangerOwner = { ...strangerLocked, 'x-baymutt-vault-proof': VAULT_PROOF };
-    expect(await reject(plan.id, 0, {}, strangerOwner)).toMatchObject({ status: 404 });
-    expect(await call(w, 'GET', `/plans/${plan.id}`, strangerOwner)).toMatchObject({ status: 404 });
-    expect(w.sqlite.prepare('SELECT status FROM plan_step WHERE plan_id = ?').all(plan.id)).toEqual(
-      [{ status: 'pending' }],
-    );
+    expect(await reject(ask.id, 0, {}, strangerOwner)).toMatchObject({ status: 404 });
+    expect(await call(w, 'GET', `/asks/${ask.id}`, strangerOwner)).toMatchObject({ status: 404 });
+    expect(w.sqlite.prepare('SELECT status FROM ask_step WHERE ask_id = ?').all(ask.id)).toEqual([
+      { status: 'pending' },
+    ]);
   });
 
   it('must match the step', async () => {
     const world = await setup();
     const { production, staging, asked, approve, reading } = world;
     const key = await newKey('k');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: 'never', read: [production] },
     ]);
-    expect(await approve(plan.id, 0, reading('access', [staging]))).toMatchObject({ status: 400 });
-    expect(await approve(plan.id, 0, reading('change', [production]))).toMatchObject({
+    expect(await approve(ask.id, 0, reading('access', [staging]))).toMatchObject({ status: 400 });
+    expect(await approve(ask.id, 0, reading('change', [production]))).toMatchObject({
       status: 400,
     });
     expect(
-      await approve(plan.id, 0, reading('access', [production], { expiresAt: 1 })),
+      await approve(ask.id, 0, reading('access', [production], { expiresAt: 1 })),
     ).toMatchObject({ status: 400 });
   });
 
@@ -940,32 +936,32 @@ describe('the owner’s answer', () => {
       name: indexOf(staging, name),
       sealedName: sealedOf(name),
     });
-    const plan = await asked([{ type: 'secrets', items: [fresh('A'), fresh('B'), fresh('C')] }]);
-    const shown = (await read(plan.id)).steps[0] as Step;
+    const ask = await asked([{ type: 'secrets', items: [fresh('A'), fresh('B'), fresh('C')] }]);
+    const shown = (await read(ask.id)).steps[0] as Step;
     // Written after the page read it: its slot moved on.
     await write(staging, 'B', 2);
-    expect(await approve(plan.id, 0, sealing(shown))).toMatchObject({
+    expect(await approve(ask.id, 0, sealing(shown))).toMatchObject({
       status: 409,
       body: { code: 'VersionConflictError', latestVersion: 2 },
     });
     expect((await secrets(staging)).map(({ name }) => name)).toEqual([indexOf(staging, 'B')]);
 
     // And a write that lands between the read and the batch: the batch's own check refuses it.
-    const again = (await read(plan.id)).steps[0] as Step;
-    w.beforeStatement(/UPDATE plan_step\s+SET status = 'approved'/, () => {
+    const again = (await read(ask.id)).steps[0] as Step;
+    w.beforeStatement(/UPDATE ask_step\s+SET status = 'approved'/, () => {
       w.sqlite
         .prepare('UPDATE secret SET latest_version = latest_version + 1 WHERE name = ?')
         .run(indexOf(staging, 'B'));
     });
-    expect(await approve(plan.id, 0, sealing(again))).toMatchObject({ status: 409 });
+    expect(await approve(ask.id, 0, sealing(again))).toMatchObject({ status: 409 });
     expect((await secrets(staging)).map(({ name }) => name)).toEqual([indexOf(staging, 'B')]);
-    expect((await read(plan.id)).steps[0]).toMatchObject({ status: 'pending' });
+    expect((await read(ask.id)).steps[0]).toMatchObject({ status: 'pending' });
   });
 
   it('answers a step once, whatever reaches it first', async () => {
     const world = await setup();
     const { w, staging, asked, approve, read, sealing, secrets } = world;
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'secrets',
         items: [
@@ -978,12 +974,12 @@ describe('the owner’s answer', () => {
         ],
       },
     ]);
-    const shown = (await read(plan.id)).steps[0] as Step;
+    const shown = (await read(ask.id)).steps[0] as Step;
     // A rejection lands between this approval's read and its write.
-    w.beforeStatement(/UPDATE plan_step\s+SET status = 'approved'/, () => {
-      w.sqlite.prepare("UPDATE plan_step SET status = 'rejected', resolved_at = 1").run();
+    w.beforeStatement(/UPDATE ask_step\s+SET status = 'approved'/, () => {
+      w.sqlite.prepare("UPDATE ask_step SET status = 'rejected', resolved_at = 1").run();
     });
-    expect(await approve(plan.id, 0, sealing(shown))).toMatchObject({ status: 410 });
+    expect(await approve(ask.id, 0, sealing(shown))).toMatchObject({ status: 410 });
     expect(await secrets(staging)).toEqual([]);
   });
 });
@@ -992,7 +988,7 @@ describe('what it shows', () => {
   it('a proposed value to the owner while pending, and a note to the owner and its maker', async () => {
     const world = await setup();
     const { w, staging, asked, approve, read, sealing, login } = world;
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'secrets',
         items: [
@@ -1006,21 +1002,21 @@ describe('what it shows', () => {
         ],
       },
     ]);
-    expect(((await read(plan.id)).steps[0] as Step).items?.[0]).toMatchObject({
+    expect(((await read(ask.id)).steps[0] as Step).items?.[0]).toMatchObject({
       value: sealedLike('proposed'),
     });
-    expect(((await read(plan.id, login.headers)).steps[0] as Step).items?.[0]).toMatchObject({
+    expect(((await read(ask.id, login.headers)).steps[0] as Step).items?.[0]).toMatchObject({
       value: null,
     });
     const note = sealedLike('use the test key', 80);
-    const shown = (await read(plan.id)).steps[0] as Step;
-    expect((await approve(plan.id, 0, { ...sealing(shown), note })).status).toBe(200);
-    expect((await read(plan.id)).steps[0] as Step).toMatchObject({
+    const shown = (await read(ask.id)).steps[0] as Step;
+    expect((await approve(ask.id, 0, { ...sealing(shown), note })).status).toBe(200);
+    expect((await read(ask.id)).steps[0] as Step).toMatchObject({
       note,
       items: [{ value: null }],
     });
-    expect((await read(plan.id, login.headers)).steps[0]).toMatchObject({ note });
-    expect(w.sqlite.prepare('SELECT proposed_value FROM plan_item').all()).toEqual([
+    expect((await read(ask.id, login.headers)).steps[0]).toMatchObject({ note });
+    expect(w.sqlite.prepare('SELECT proposed_value FROM ask_item').all()).toEqual([
       { proposed_value: null },
     ]);
     const logged = JSON.stringify(w.sqlite.prepare('SELECT * FROM activity_event').all());
@@ -1030,7 +1026,7 @@ describe('what it shows', () => {
 
   it('a sealed hint, as it was given, to the owner while pending, and never plain text', async () => {
     const world = await setup();
-    const { w, staging, asked, ask, reject, read, login } = world;
+    const { w, staging, asked, send, reject, read, login } = world;
     const paste = {
       op: 'paste',
       environmentId: staging,
@@ -1042,22 +1038,22 @@ describe('what it shows', () => {
       { ...paste, sealedHint: 'Stripe dashboard, Developers, API keys' },
       { ...paste, sealedHint: sealedLike('h', 2081) },
     ]) {
-      expect(await ask([{ type: 'secrets', items: [item] }])).toMatchObject({ status: 400 });
+      expect(await send([{ type: 'secrets', items: [item] }])).toMatchObject({ status: 400 });
     }
     // A plain `hint` is no field of the API: it is dropped, never stored.
     const words = await asked([
       { type: 'secrets', items: [{ ...paste, hint: 'sk_live_planted' }] },
     ]);
     expect(JSON.stringify(await read(words.id))).not.toContain('sk_live_planted');
-    expect(JSON.stringify(w.sqlite.prepare('SELECT * FROM plan_item').all())).not.toContain(
+    expect(JSON.stringify(w.sqlite.prepare('SELECT * FROM ask_item').all())).not.toContain(
       'sk_live_planted',
     );
     const hintsOf = (id: string) =>
       w.sqlite
-        .prepare('SELECT sealed_hint FROM plan_item WHERE plan_id = ? ORDER BY position')
+        .prepare('SELECT sealed_hint FROM ask_item WHERE ask_id = ? ORDER BY position')
         .all(id);
     const hint = sealedLike('hint', 2080);
-    const plan = await asked([
+    const ask = await asked([
       {
         type: 'secrets',
         items: [
@@ -1066,17 +1062,17 @@ describe('what it shows', () => {
         ],
       },
     ]);
-    expect(hintsOf(plan.id)).toEqual([{ sealed_hint: hint }, { sealed_hint: null }]);
-    expect(((await read(plan.id)).steps[0] as Step).items).toMatchObject([
+    expect(hintsOf(ask.id)).toEqual([{ sealed_hint: hint }, { sealed_hint: null }]);
+    expect(((await read(ask.id)).steps[0] as Step).items).toMatchObject([
       { sealedHint: hint },
       { sealedHint: null },
     ]);
-    expect(((await read(plan.id, login.headers)).steps[0] as Step).items?.[0]).toMatchObject({
+    expect(((await read(ask.id, login.headers)).steps[0] as Step).items?.[0]).toMatchObject({
       sealedHint: null,
     });
-    expect((await reject(plan.id, 0)).status).toBe(200);
-    expect(((await read(plan.id)).steps[0] as Step).items?.[0]).toMatchObject({ sealedHint: null });
-    expect(hintsOf(plan.id)).toEqual([{ sealed_hint: null }, { sealed_hint: null }]);
+    expect((await reject(ask.id, 0)).status).toBe(200);
+    expect(((await read(ask.id)).steps[0] as Step).items?.[0]).toMatchObject({ sealedHint: null });
+    expect(hintsOf(ask.id)).toEqual([{ sealed_hint: null }, { sealed_hint: null }]);
   });
 });
 
@@ -1085,7 +1081,7 @@ describe('withdrawing', () => {
     const world = await setup();
     const { w, owner, production, staging, login, asked, reject, read, pair } = world;
     const key = await newKey('k');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: 'never', read: [production] },
       {
         type: 'secrets',
@@ -1100,13 +1096,13 @@ describe('withdrawing', () => {
         ],
       },
     ]);
-    expect((await reject(plan.id, 1)).status).toBe(200);
+    expect((await reject(ask.id, 1)).status).toBe(200);
     const other = await pair('desktop');
-    expect(await call(w, 'DELETE', `/plans/${plan.id}`, other.headers)).toMatchObject({
+    expect(await call(w, 'DELETE', `/asks/${ask.id}`, other.headers)).toMatchObject({
       status: 404,
     });
-    expect(await call(w, 'DELETE', `/plans/${plan.id}`, owner)).toMatchObject({ status: 403 });
-    const cancelled = await call(w, 'DELETE', `/plans/${plan.id}`, login.headers);
+    expect(await call(w, 'DELETE', `/asks/${ask.id}`, owner)).toMatchObject({ status: 403 });
+    const cancelled = await call(w, 'DELETE', `/asks/${ask.id}`, login.headers);
     expect(cancelled).toMatchObject({
       status: 200,
       body: {
@@ -1115,11 +1111,11 @@ describe('withdrawing', () => {
       },
     });
     expect(await call(w, 'GET', '/me', key.headers)).toMatchObject({ status: 401 });
-    expect(await call(w, 'DELETE', `/plans/${plan.id}`, login.headers)).toMatchObject({
+    expect(await call(w, 'DELETE', `/asks/${ask.id}`, login.headers)).toMatchObject({
       status: 410,
     });
-    expect((await read(plan.id)).steps[0]).toMatchObject({ status: 'cancelled' });
-    expect(actions(world).at(-1)).toMatchObject({ action: 'plan.cancel', actor: 'credential' });
+    expect((await read(ask.id)).steps[0]).toMatchObject({ status: 'cancelled' });
+    expect(actions(world).at(-1)).toMatchObject({ action: 'ask.cancel', actor: 'credential' });
   });
 });
 
@@ -1128,7 +1124,7 @@ describe('an hour on', () => {
     const world = await setup();
     const { w, owner, production, staging, asked, approve, reading, read, login } = world;
     const key = await newKey('k');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: 'never', read: [production] },
       {
         type: 'secrets',
@@ -1143,30 +1139,28 @@ describe('an hour on', () => {
         ],
       },
     ]);
-    age(world, plan.id, HOUR);
-    const { createdAt } = await read(plan.id);
-    expect((await read(plan.id, login.headers)).steps[0]).toMatchObject({
+    age(world, ask.id, HOUR);
+    const { createdAt } = await read(ask.id);
+    expect((await read(ask.id, login.headers)).steps[0]).toMatchObject({
       status: 'expired',
       resolvedAt: createdAt + HOUR,
     });
-    expect(((await read(plan.id)).steps[1] as Step).items?.[0]).toMatchObject({ value: null });
-    expect(await ok(w, 'GET', '/plans', owner)).toEqual({ plans: [] });
-    expect(await approve(plan.id, 0, reading('access', [production]))).toMatchObject({
+    expect(((await read(ask.id)).steps[1] as Step).items?.[0]).toMatchObject({ value: null });
+    expect(await ok(w, 'GET', '/asks', owner)).toEqual({ asks: [] });
+    expect(await approve(ask.id, 0, reading('access', [production]))).toMatchObject({
       status: 410,
     });
-    expect(await call(w, 'DELETE', `/plans/${plan.id}`, login.headers)).toMatchObject({
+    expect(await call(w, 'DELETE', `/asks/${ask.id}`, login.headers)).toMatchObject({
       status: 410,
     });
 
     expect(await sweep(world)).toEqual({ expired: 1, rejected: 0, removed: 0 });
-    expect(w.sqlite.prepare('SELECT status FROM plan_step ORDER BY position').all()).toEqual([
+    expect(w.sqlite.prepare('SELECT status FROM ask_step ORDER BY position').all()).toEqual([
       { status: 'expired' },
       { status: 'expired' },
     ]);
     expect(
-      w.sqlite
-        .prepare('SELECT COUNT(*) AS n FROM plan_item WHERE proposed_value IS NOT NULL')
-        .get(),
+      w.sqlite.prepare('SELECT COUNT(*) AS n FROM ask_item WHERE proposed_value IS NOT NULL').get(),
     ).toEqual({ n: 0 });
     expect(await call(w, 'GET', '/me', key.headers)).toMatchObject({ status: 401 });
     expect(actions(world).slice(-2)).toEqual([
@@ -1174,24 +1168,24 @@ describe('an hour on', () => {
       { action: 'step.expire', actor: 'system', detail: 'step 2: secrets' },
     ]);
 
-    // A week after its last step closed, the plan goes.
-    w.sqlite.prepare('UPDATE plan_step SET resolved_at = resolved_at - ?').run(8 * DAY);
+    // A week after its last step closed, the ask goes.
+    w.sqlite.prepare('UPDATE ask_step SET resolved_at = resolved_at - ?').run(8 * DAY);
     expect(await sweep(world)).toEqual({ expired: 0, rejected: 0, removed: 1 });
-    expect(await call(w, 'GET', `/plans/${plan.id}`, owner)).toMatchObject({ status: 404 });
+    expect(await call(w, 'GET', `/asks/${ask.id}`, owner)).toMatchObject({ status: 404 });
   });
 
-  it('an approved key is revoked by the daily run once it has ended, plan or not', async () => {
+  it('an approved key is revoked by the daily run once it has ended, ask or not', async () => {
     const world = await setup();
     const { w, production, asked, approve, reading } = world;
     const key = await newKey('k');
-    const plan = await asked([
+    const ask = await asked([
       { type: 'access', key: key.payload, command: null, end: HOUR, read: [production] },
     ]);
     expect(
-      (await approve(plan.id, 0, reading('access', [production], { expiresAt: Date.now() + HOUR })))
+      (await approve(ask.id, 0, reading('access', [production], { expiresAt: Date.now() + HOUR })))
         .status,
     ).toBe(200);
-    w.sqlite.prepare('DELETE FROM plan').run();
+    w.sqlite.prepare('DELETE FROM ask').run();
     w.sqlite
       .prepare('UPDATE credential SET expires_at = ? WHERE id = ?')
       .run(Date.now() - 1, key.payload.id);

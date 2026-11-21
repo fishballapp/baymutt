@@ -1,5 +1,5 @@
 // CLI logins and keys: what the CLI acts as. The owner approves a CLI login, which lists names and
-// holds no environment; a key comes from a plan's `access` step the owner approved (`plans.ts`) and
+// holds no environment; a key comes from an ask's `access` step the owner approved (`asks.ts`) and
 // reads the environments the owner granted it. A key only reads.
 
 import { coded } from '@internal/effect-api';
@@ -168,7 +168,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Approve a CLI login',
         description:
-          'The owner’s approval of the link `baymutt auth login` prints. A CLI login lists the orgs, environments and secret names of the person’s orgs, asks with plans, and holds no environment: it opens no value and writes none.',
+          'The owner’s approval of the link `baymutt auth login` prints. A CLI login lists the orgs, environments and secret names of the person’s orgs, sends asks, and holds no environment: it opens no value and writes none.',
       }),
     ),
     HttpApiEndpoint.put('setAccess', '/credentials/:id/grants/:environmentId', {

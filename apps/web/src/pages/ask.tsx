@@ -1,9 +1,9 @@
-// The page `baymutt ask` links to: one plan, a reason and ordered steps, each decided whole here.
+// The page `baymutt ask` links to: one ask, a reason and ordered steps, each decided whole here.
 // Who asks and why, an outline of the steps, then one step open; answering it opens the next that
 // can be answered. Everything a step makes is made in this browser (data.ts: `approveStepAtom`).
 
 import { Button as BaseButton } from '@base-ui/react/button';
-import type { Plan } from '@baymutt/api';
+import type { Ask } from '@baymutt/api';
 import { MAX_NOTE_BYTES } from '@baymutt/keys';
 import { useAtomSet, useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
@@ -16,8 +16,6 @@ import {
   lifetimeOf,
   lifetimeOptions,
 } from '../components/decision/ask.tsx';
-import { DecisionColumn, DecisionLoading, Outcome } from '../components/decision/frame.tsx';
-import { ExactTime, Vouch } from '../components/decision/parts.tsx';
 import {
   AskWords,
   blockedWords,
@@ -27,7 +25,9 @@ import {
   StepGrants,
   thenOf,
   waitsOf,
-} from '../components/decision/plan-step.tsx';
+} from '../components/decision/ask-step.tsx';
+import { DecisionColumn, DecisionLoading, Outcome } from '../components/decision/frame.tsx';
+import { ExactTime, Vouch } from '../components/decision/parts.tsx';
 import { useOwner } from '../components/gate.tsx';
 import { useOrg } from '../components/org-scope.tsx';
 import { useTitle } from '../components/shell.tsx';
@@ -37,28 +37,28 @@ import { RelativeTime } from '../components/ui/page.tsx';
 import { Select } from '../components/ui/select.tsx';
 import { Code } from '../components/ui/text.tsx';
 import {
-  approveStepAtom,
-  type OpenedPlan,
-  type OpenedPlanStep,
-  planAtom,
-  rejectStepAtom,
-} from '../lib/data.ts';
-import { expiryWords } from '../lib/format.ts';
-import {
   approveLabel,
   type Blocked,
   nextFocus,
   statusWord,
   stepsWords,
   stepTitle,
-} from '../lib/plans.ts';
+} from '../lib/asks.ts';
+import {
+  approveStepAtom,
+  askAtom,
+  type OpenedAsk,
+  type OpenedAskStep,
+  rejectStepAtom,
+} from '../lib/data.ts';
+import { expiryWords } from '../lib/format.ts';
 import { failureMessage } from '../lib/result.ts';
 
 /**
  * Why a pending step is blocked: the store says something it needs is gone, a name it
  * shows does not open here, or a value it proposes did not open as its login's.
  */
-const blockedOf = (step: OpenedPlanStep): Blocked => {
+const blockedOf = (step: OpenedAskStep): Blocked => {
   if (step.status !== 'pending') return null;
   if (step.canOnlyReject) return 'gone';
   const names = (() => {
@@ -82,7 +82,7 @@ const blockedOf = (step: OpenedPlanStep): Blocked => {
 /** Ends on a key step: as asked, another length, never; on a change also its end as it is. */
 type End = 'as-it-is' | Lifetime;
 
-const askedEnd = (step: OpenedPlanStep): End | null => {
+const askedEnd = (step: OpenedAskStep): End | null => {
   if (step.type !== 'access' && step.type !== 'change') return null;
   if (step.end === 'keep') return 'as-it-is';
   return step.end === 'never' ? 'never' : lifetimeOf(step.end);
@@ -103,12 +103,12 @@ const noteBytes = (note: string) => new TextEncoder().encode(note).length;
 
 /** How an answered step reads in place of its answer: its word, when, what followed, the note. */
 const Decided = ({
-  plan,
+  ask,
   step,
   sentNote,
 }: {
-  readonly plan: OpenedPlan;
-  readonly step: OpenedPlanStep;
+  readonly ask: OpenedAsk;
+  readonly step: OpenedAskStep;
   readonly sentNote: string | undefined;
 }) => {
   const after = (() => {
@@ -136,7 +136,7 @@ const Decided = ({
   })();
   const said = (() => {
     if (sentNote !== undefined && sentNote !== '') return `Your note: “${sentNote}”`;
-    if (step.note !== null) return `You sent a note to ${plan.maker.name}.`;
+    if (step.note !== null) return `You sent a note to ${ask.maker.name}.`;
     return null;
   })();
   return (
@@ -164,25 +164,25 @@ const Decided = ({
  * closed or what stays after.
  */
 const OpenStep = ({
-  plan,
+  ask,
   step,
   draft,
   onDraft,
   onAnswered,
 }: {
-  readonly plan: OpenedPlan;
-  readonly step: OpenedPlanStep;
+  readonly ask: OpenedAsk;
+  readonly step: OpenedAskStep;
   readonly draft: Draft;
   readonly onDraft: (draft: Draft) => void;
-  readonly onAnswered: (answered: Plan, note: string) => void;
+  readonly onAnswered: (answered: Ask, note: string) => void;
 }) => {
   const owner = useOwner();
-  const atomKey = `${plan.id}/${step.index}`;
+  const atomKey = `${ask.id}/${step.index}`;
   const approving = useAtomValue(approveStepAtom(atomKey));
   const rejecting = useAtomValue(rejectStepAtom(atomKey));
   const approve = useAtomSet(approveStepAtom(atomKey), { mode: 'promiseExit' });
   const reject = useAtomSet(rejectStepAtom(atomKey), { mode: 'promiseExit' });
-  const makers = makersOf(plan);
+  const makers = makersOf(ask);
   const blocked = blockedOf(step);
   const isBlocked = blocked !== null;
   const asked = askedEnd(step);
@@ -190,9 +190,9 @@ const OpenStep = ({
   const note = draft.note ?? '';
   const isNoteTooLong = noteBytes(note) > MAX_NOTE_BYTES;
   const isBusy = approving.waiting || rejecting.waiting;
-  const waits = isBlocked ? null : waitsOf({ plan, step, makers, pasted: draft.pasted });
+  const waits = isBlocked ? null : waitsOf({ ask, step, makers, pasted: draft.pasted });
   const { label, working, isDanger } = approveLabel(step);
-  const makes = isBlocked ? null : makesOf(step, plan.maker.name);
+  const makes = isBlocked ? null : makesOf(step, ask.maker.name);
   const then =
     isBlocked || waits !== null
       ? null
@@ -205,16 +205,16 @@ const OpenStep = ({
               step.giveBack.some(({ environmentId }) => environmentId === held.environmentId),
             ),
         });
-  const answered = (exit: Exit.Exit<Plan, unknown>) => {
+  const answered = (exit: Exit.Exit<Ask, unknown>) => {
     if (Exit.isSuccess(exit)) onAnswered(exit.value, note);
   };
   return (
     <>
       <StepGrants
-        plan={plan}
+        ask={ask}
         step={step}
         makers={makers}
-        isOnly={plan.steps.length === 1}
+        isOnly={ask.steps.length === 1}
         answer={{
           pasted: draft.pasted,
           onPaste: (position, value) =>
@@ -244,7 +244,7 @@ const OpenStep = ({
         />
       )}
       {blocked !== null && (
-        <p className="warnline">{blockedWords({ plan, step, makers, blocked })}</p>
+        <p className="warnline">{blockedWords({ ask, step, makers, blocked })}</p>
       )}
       <div className="step-answer">
         {!isBlocked && (
@@ -263,7 +263,7 @@ const OpenStep = ({
               answered(
                 await approve({
                   owner,
-                  plan,
+                  ask,
                   index: step.index,
                   note,
                   pasted: draft.pasted,
@@ -280,7 +280,7 @@ const OpenStep = ({
           disabled={isBusy || isNoteTooLong}
           isPending={rejecting.waiting}
           pendingLabel="Rejecting…"
-          onClick={async () => answered(await reject({ owner, plan, index: step.index, note }))}
+          onClick={async () => answered(await reject({ owner, ask, index: step.index, note }))}
         >
           Reject
         </Button>
@@ -305,12 +305,12 @@ const OpenStep = ({
       {draft.note !== null && (
         <TextField
           className="step-note"
-          label={`Note to ${plan.maker.name}`}
+          label={`Note to ${ask.maker.name}`}
           value={draft.note}
           onValueChange={(value: string) => onDraft({ ...draft, note: value })}
           disabled={isBusy}
           autoFocus
-          hint={`Sealed in your browser to ${plan.maker.name}; baymutt cannot read it.`}
+          hint={`Sealed in your browser to ${ask.maker.name}; baymutt cannot read it.`}
           error={
             isNoteTooLong
               ? `The note can be at most ${MAX_NOTE_BYTES.toLocaleString('en')} bytes; this is ${noteBytes(note).toLocaleString('en')} bytes.`
@@ -323,7 +323,7 @@ const OpenStep = ({
 };
 
 /** The outline: every step on one line, its number, what it does and how it stands. */
-const OutlineWord = ({ step }: { readonly step: OpenedPlanStep }) => {
+const OutlineWord = ({ step }: { readonly step: OpenedAskStep }) => {
   const word = statusWord(step);
   if (word !== null) return word.toLowerCase();
   if (blockedOf(step) !== null) return <span className="warn">reject only</span>;
@@ -331,28 +331,28 @@ const OutlineWord = ({ step }: { readonly step: OpenedPlanStep }) => {
   return null;
 };
 
-const PlanDecision = ({ plan }: { readonly plan: OpenedPlan }) => {
+const AskDecision = ({ ask }: { readonly ask: OpenedAsk }) => {
   const [focus, setFocus] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<ReadonlyMap<number, Draft>>(new Map());
   const [sentNotes, setSentNotes] = useState<ReadonlyMap<number, string>>(new Map());
   // Moving focus by an answer or the outline takes keyboard focus to the step's heading.
   const [hasMoved, setMoved] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const shown = focus ?? nextFocus(plan.steps, blockedOf, -1) ?? 0;
-  const step = plan.steps[shown];
+  const shown = focus ?? nextFocus(ask.steps, blockedOf, -1) ?? 0;
+  const step = ask.steps[shown];
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new step in focus is the reason to move.
   useEffect(() => {
     if (hasMoved) headingRef.current?.focus();
   }, [shown, hasMoved]);
   if (step === undefined) return <DecisionLoading />;
-  const isOne = plan.steps.length === 1;
+  const isOne = ask.steps.length === 1;
   const moveTo = (index: number) => {
     setFocus(index);
     setMoved(true);
   };
-  const onAnswered = (answered: Plan, note: string) => {
+  const onAnswered = (answered: Ask, note: string) => {
     setSentNotes(new Map(sentNotes).set(step.index, note));
-    const after = plan.steps.map(each => {
+    const after = ask.steps.map(each => {
       const fresh = answered.steps[each.index];
       return fresh === undefined
         ? each
@@ -367,13 +367,13 @@ const PlanDecision = ({ plan }: { readonly plan: OpenedPlan }) => {
     if (next !== null) moveTo(next);
   };
   const expires = (
-    <RelativeTime at={plan.expiresAt}>{() => expiryWords(plan.expiresAt, Date.now())}</RelativeTime>
+    <RelativeTime at={ask.expiresAt}>{() => expiryWords(ask.expiresAt, Date.now())}</RelativeTime>
   );
   const body =
     step.status === 'pending' ? (
       <OpenStep
         key={step.index}
-        plan={plan}
+        ask={ask}
         step={step}
         draft={drafts.get(step.index) ?? EMPTY_DRAFT}
         onDraft={draft => setDrafts(new Map(drafts).set(step.index, draft))}
@@ -382,26 +382,26 @@ const PlanDecision = ({ plan }: { readonly plan: OpenedPlan }) => {
     ) : (
       <>
         <StepGrants
-          plan={plan}
+          ask={ask}
           step={step}
-          makers={makersOf(plan)}
+          makers={makersOf(ask)}
           answer={null}
-          isOnly={plan.steps.length === 1}
+          isOnly={ask.steps.length === 1}
         />
-        <Decided plan={plan} step={step} sentNote={sentNotes.get(step.index)} />
+        <Decided ask={ask} step={step} sentNote={sentNotes.get(step.index)} />
       </>
     );
   if (isOne) {
     return (
       <DecisionColumn>
         <p className="ask">
-          <AskWords plan={plan} />
+          <AskWords ask={ask} />
         </p>
-        <h1 className="claim">“{plan.reason}”</h1>
+        <h1 className="claim">“{ask.reason}”</h1>
         {step.reason !== null && <p className="claim-sub">“{step.reason}”</p>}
         {body}
-        <Vouch askedAt={plan.createdAt} maker={plan.maker}>
-          This plan {expires}.
+        <Vouch askedAt={ask.createdAt} maker={ask.maker}>
+          This ask {expires}.
         </Vouch>
       </DecisionColumn>
     );
@@ -409,14 +409,14 @@ const PlanDecision = ({ plan }: { readonly plan: OpenedPlan }) => {
   return (
     <DecisionColumn>
       <p className="ask">
-        <AskWords plan={plan} />
+        <AskWords ask={ask} />
       </p>
-      <h1 className="claim">“{plan.reason}”</h1>
-      <Vouch askedAt={plan.createdAt} maker={plan.maker}>
-        This plan {expires}.
+      <h1 className="claim">“{ask.reason}”</h1>
+      <Vouch askedAt={ask.createdAt} maker={ask.maker}>
+        This ask {expires}.
       </Vouch>
-      <ol className="outline" aria-label="Plan steps">
-        {plan.steps.map(each => (
+      <ol className="outline" aria-label="Steps of this ask">
+        {ask.steps.map(each => (
           <li key={each.index}>
             <BaseButton
               className="outline-item"
@@ -443,10 +443,10 @@ const PlanDecision = ({ plan }: { readonly plan: OpenedPlan }) => {
   );
 };
 
-/** An answered plan's outline: each step's result on its line, the note this page sent under it. */
-const Results = ({ plan }: { readonly plan: OpenedPlan }) => (
+/** An answered ask's outline: each step's result on its line, the note this page sent under it. */
+const Results = ({ ask }: { readonly ask: OpenedAsk }) => (
   <ol className="outline">
-    {plan.steps.map(step => (
+    {ask.steps.map(step => (
       <li key={step.index}>
         <span className="outline-item">
           <span className="num">{step.index + 1}</span>
@@ -458,57 +458,57 @@ const Results = ({ plan }: { readonly plan: OpenedPlan }) => (
   </ol>
 );
 
-const SeePlans = () => (
+const SeeAsks = () => (
   <Link
-    to="/orgs/$slug/plans"
+    to="/orgs/$slug/asks"
     params={{ slug: useOrg().slug }}
     className={buttonClass({ size: 'lg' })}
   >
-    See plans
+    See asks
   </Link>
 );
 
-/** The plan once no step waits: answered, expired, or withdrawn by the agent. */
-const answeredScreen = (plan: OpenedPlan): { readonly title: string; readonly body: ReactNode } => {
-  const unanswered = (status: OpenedPlanStep['status']) =>
-    plan.steps.filter(step => step.status === status).map(({ index }) => index);
+/** The ask once no step waits: answered, expired, or withdrawn by the agent. */
+const answeredScreen = (ask: OpenedAsk): { readonly title: string; readonly body: ReactNode } => {
+  const unanswered = (status: OpenedAskStep['status']) =>
+    ask.steps.filter(step => step.status === status).map(({ index }) => index);
   const outcome = (title: string, sentence: ReactNode) => ({
     title,
     body: (
       <DecisionColumn isOutcome>
         <h1>{title}</h1>
         <p>{sentence}</p>
-        <Results plan={plan} />
-        <SeePlans />
+        <Results ask={ask} />
+        <SeeAsks />
       </DecisionColumn>
     ),
   });
   const withdrawn = unanswered('cancelled');
   if (withdrawn.length > 0) {
     return outcome(
-      'Plan withdrawn',
+      'Ask withdrawn',
       (() => {
         const which = stepsWords(withdrawn);
         const one = withdrawn.length === 1;
-        if (plan.cancelledAt === null) {
+        if (ask.cancelledAt === null) {
           return one ? (
             <>
-              {plan.maker.name} withdrew {which}. Earlier approvals still apply.
+              {ask.maker.name} withdrew {which}. Earlier approvals still apply.
             </>
           ) : (
             <>
-              {plan.maker.name} withdrew {which}. Earlier approvals still apply.
+              {ask.maker.name} withdrew {which}. Earlier approvals still apply.
             </>
           );
         }
-        const at = <ExactTime at={plan.cancelledAt} />;
+        const at = <ExactTime at={ask.cancelledAt} />;
         return one ? (
           <>
-            {plan.maker.name} withdrew it before {which} was answered: {at}.
+            {ask.maker.name} withdrew it before {which} was answered: {at}.
           </>
         ) : (
           <>
-            {plan.maker.name} withdrew it before {which} were answered: {at}.
+            {ask.maker.name} withdrew it before {which} were answered: {at}.
           </>
         );
       })(),
@@ -517,55 +517,55 @@ const answeredScreen = (plan: OpenedPlan): { readonly title: string; readonly bo
   const expired = unanswered('expired');
   if (expired.length > 0) {
     return outcome(
-      'Plan expired',
-      `${plan.maker.name} asked for it, and nobody answered ${stepsWords(expired)} within an hour.`,
+      'Ask expired',
+      `${ask.maker.name} asked for it, and nobody answered ${stepsWords(expired)} within an hour.`,
     );
   }
   return outcome(
-    'Plan answered',
-    `${plan.maker.name} can see your decisions. Each approved step has taken effect.`,
+    'Ask answered',
+    `${ask.maker.name} can see your decisions. Each approved step has taken effect.`,
   );
 };
 
-export const AskPlanPage = ({ id }: { readonly id: string }) => {
+export const AskPage = ({ id }: { readonly id: string }) => {
   const org = useOrg();
   const state = askState(
-    useAtomValue(planAtom(useOwner())(id)),
+    useAtomValue(askAtom(useOwner())(id)),
     ({ org: { id: orgId } }) => orgId === org.id,
   );
   const screen = ((): { readonly title: string | null; readonly body: ReactNode } => {
     if (state.kind === 'loading') return { title: null, body: <DecisionLoading /> };
     if (state.kind === 'failed') {
-      const title = 'Could not open plan';
+      const title = 'Could not open ask';
       return {
         title,
         body: (
-          <Outcome title={title} tone="danger" action={<SeePlans />}>
+          <Outcome title={title} tone="danger" action={<SeeAsks />}>
             {state.message}
           </Outcome>
         ),
       };
     }
     if (state.kind === 'missing') {
-      const title = 'Plan not found';
+      const title = 'Ask not found';
       return {
         title,
         body: (
-          <Outcome title={title} action={<SeePlans />}>
-            Check the link, or ask the agent to send another plan with <Code>baymutt ask</Code>.
+          <Outcome title={title} action={<SeeAsks />}>
+            Check the link, or ask the agent to send it again with <Code>baymutt ask</Code>.
           </Outcome>
         ),
       };
     }
-    const plan = state.ask;
-    if (!plan.steps.some(({ status }) => status === 'pending')) return answeredScreen(plan);
-    const [only] = plan.steps;
+    const ask = state.ask;
+    if (!ask.steps.some(({ status }) => status === 'pending')) return answeredScreen(ask);
+    const [only] = ask.steps;
     const title = (() => {
-      if (plan.steps.length > 1 || only === undefined) return `Plan: ${plan.reason}`;
+      if (ask.steps.length > 1 || only === undefined) return `Ask: ${ask.reason}`;
       if (only.type === 'access') return `New key: ${only.key.name}`;
       return stepTitle(only);
     })();
-    return { title, body: <PlanDecision plan={plan} /> };
+    return { title, body: <AskDecision ask={ask} /> };
   })();
   useTitle(screen.title, org.name);
   return screen.body;

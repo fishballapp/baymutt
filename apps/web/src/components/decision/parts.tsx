@@ -42,7 +42,7 @@ export const Vouch = ({
 }: {
   readonly askedAt: number;
   readonly maker: { readonly id: string; readonly name: string };
-  /** A sentence after it: when a plan expires. */
+  /** A sentence after it: when an ask expires. */
   readonly children?: ReactNode;
 }) => {
   const approvedAt = latest(useAtomValue(serviceAccountsAtom(useOwner())))?.find(

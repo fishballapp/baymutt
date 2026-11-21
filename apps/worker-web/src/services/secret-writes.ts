@@ -1,5 +1,5 @@
 // The statements that write a secret or move its current version, and the checks before them:
-// `Secrets` runs them for the owner's own write; an approved plan step runs several in one batch. Each is the caller's to put in a batch, with its log entry.
+// `Secrets` runs them for the owner's own write; an approved ask step runs several in one batch. Each is the caller's to put in a batch, with its log entry.
 import { type Actor, LIMITS, LimitReachedError, VersionConflictError } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
 import * as Clock from 'effect/Clock';

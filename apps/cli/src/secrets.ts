@@ -1,5 +1,5 @@
 // Secrets from a credential's side: their names opened here. Nothing here writes one: a value is
-// asked for in a plan, and the owner writes it.
+// asked for in an ask, and the owner writes it.
 import type { Secret } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';

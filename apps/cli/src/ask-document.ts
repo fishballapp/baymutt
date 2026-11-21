@@ -1,4 +1,4 @@
-// The plan an agent writes for `baymutt ask`: a reason and ordered steps, as JSON. It names
+// The ask an agent writes for `baymutt ask`: a reason and ordered steps, as JSON. It names
 // environments by their full address and never holds a value: a `set` says where the value is.
 // It is decoded a level at a time, each object by the schema its `type`, `op` or source names, so a
 // refusal names one path and what is wrong there, not every way a union could have matched.
@@ -6,8 +6,8 @@ import {
   DescriptionSchema,
   IdSchema,
   LabelSchema,
-  MAX_PLAN_ITEMS,
-  MAX_PLAN_STEPS,
+  MAX_ASK_ITEMS,
+  MAX_ASK_STEPS,
   MAX_STEP_ITEMS,
   ReasonSchema,
   SecretNameSchema,
@@ -114,7 +114,7 @@ const slot = { environment: address, name: SecretNameSchema };
 
 const nonEmpty = Schema.String.check(Schema.isMinLength(1));
 
-/** Where a value is, read on this computer when the plan is sent. Never the value. */
+/** Where a value is, read on this computer when the ask is sent. Never the value. */
 const SOURCES = {
   file: Schema.Struct({
     file: nonEmpty.annotate({
@@ -138,7 +138,7 @@ const SOURCES = {
 } as const;
 const source = Schema.Union([SOURCES.file, SOURCES.env, SOURCES.dotenv]).annotate({
   description:
-    'Where the value is on this computer, read when the plan is sent and sealed so only the owner opens it. Exactly one of `file`, `env` or `dotenv`.',
+    'Where the value is on this computer, read when the ask is sent and sealed so only the owner opens it. Exactly one of `file`, `env` or `dotenv`.',
 });
 export type ValueSource = typeof source.Type;
 
@@ -205,22 +205,22 @@ const STEPS = {
   secrets: secretsStep,
 } as const;
 
-export const PlanDocumentSchema = Schema.Struct({
+export const AskDocumentSchema = Schema.Struct({
   reason: DescriptionSchema.annotate({
     description:
       'The task, shown to the owner: 1 to 140 characters with no space at either end. Never a secret.',
   }),
   steps: Schema.NonEmptyArray(Schema.Union([environmentsStep, accessStep, changeStep, secretsStep]))
-    .check(Schema.isMaxLength(MAX_PLAN_STEPS))
+    .check(Schema.isMaxLength(MAX_ASK_STEPS))
     .annotate({ description: 'The steps, in the order they are to happen.' }),
 }).annotate({
-  description: `What \`baymutt ask\` sends: a reason and ordered steps. What this schema cannot say: a plan asks in one org, the first segment of every environment it names. A step names each environment once, and in a \`secrets\` step each secret once. A plan names at most ${MAX_PLAN_ITEMS} environments and secrets across its steps. A \`change\` step asks for at least one of \`read\`, \`giveBack\` and \`expires\`. A \`set\` item’s \`from\` is exactly one of \`file\`, \`env\` or \`dotenv\`. A plan never holds a value: a \`set\` names where the value is on the computer that sends the plan, and a \`paste\` leaves it to the owner. \`expires\` on an \`access\` step defaults to 1h, or to no end with a \`command\`; on a \`change\` step, omitted keeps the key’s end. A step may name an environment an earlier step creates or restores.`,
+  description: `What \`baymutt ask\` sends: a reason and ordered steps. What this schema cannot say: an ask is for one org, the first segment of every environment it names. A step names each environment once, and in a \`secrets\` step each secret once. An ask names at most ${MAX_ASK_ITEMS} environments and secrets across its steps. A \`change\` step asks for at least one of \`read\`, \`giveBack\` and \`expires\`. A \`set\` item’s \`from\` is exactly one of \`file\`, \`env\` or \`dotenv\`. An ask never holds a value: a \`set\` names where the value is on the computer that sends the ask, and a \`paste\` leaves it to the owner. \`expires\` on an \`access\` step defaults to 1h, or to no end with a \`command\`; on a \`change\` step, omitted keeps the key’s end. A step may name an environment an earlier step creates or restores.`,
 });
-export type PlanDocument = typeof PlanDocumentSchema.Type;
-export type PlanDocumentStep = PlanDocument['steps'][number];
+export type AskDocument = typeof AskDocumentSchema.Type;
+export type AskDocumentStep = AskDocument['steps'][number];
 
-/** One step's items, as the plan lists them: what `steps[i]` names, each at its own path. */
-export type SecretsItem = Extract<PlanDocumentStep, { type: 'secrets' }>['items'][number];
+/** One step's items, as the ask lists them: what `steps[i]` names, each at its own path. */
+export type SecretsItem = Extract<AskDocumentStep, { type: 'secrets' }>['items'][number];
 
 /** The org an address names: what comes before its first `/`. */
 const orgOf = (address: string) => address.slice(0, address.indexOf('/'));
@@ -229,7 +229,7 @@ const orgOf = (address: string) => address.slice(0, address.indexOf('/'));
  * Each place a step names an environment, at its path within the step, and what may not repeat
  * within the step: the environment, or in a `secrets` step, the secret.
  */
-const namedBy = (step: PlanDocumentStep) => {
+const namedBy = (step: AskDocumentStep) => {
   const at = (field: string, addresses: ReadonlyArray<string>) =>
     addresses.map((address, index) => ({
       path: [field, index] as ReadonlyArray<PropertyKey>,
@@ -296,15 +296,15 @@ const describe = (
     }
     case 'UnexpectedKey': {
       const field = path.at(-1);
-      const where = pathOf(path.slice(0, -1)) || 'the plan';
+      const where = pathOf(path.slice(0, -1)) || 'the ask';
       const value =
         field === 'value'
-          ? ' A plan never holds a value: name where it is with `from` (a file, an env variable or a dotenv file).'
+          ? ' An ask never holds a value: name where it is with `from` (a file, an env variable or a dotenv file).'
           : '';
       return `${pathOf(path)}: nothing reads this field.${value} The fields of ${where} are: ${fieldsOf(issue.ast)}.`;
     }
     case 'MissingKey': {
-      const where = pathOf(path.slice(0, -1)) || 'the plan';
+      const where = pathOf(path.slice(0, -1)) || 'the ask';
       const fields =
         parent === undefined ? '' : ` The fields of ${where} are: ${fieldsOf(parent)}.`;
       return `${pathOf(path)} is missing.${fields}`;
@@ -315,7 +315,7 @@ const describe = (
           formatter(issue).issues.map(({ message }) => message.replace(/^Expected /u, '')),
         ),
       ];
-      return `${pathOf(path) || 'The plan'}: expected ${expected.join(', or ')}.`;
+      return `${pathOf(path) || 'The ask'}: expected ${expected.join(', or ')}.`;
     }
   }
 };
@@ -358,7 +358,7 @@ const elementsOf = (
   }
   if (input.length > max) {
     return Result.fail(
-      `${pathOf(path)}: at most ${max} entries, and this has ${input.length}. Ask for the rest in another plan.`,
+      `${pathOf(path)}: at most ${max} entries, and this has ${input.length}. Ask for the rest in another ask.`,
     );
   }
   return Result.succeed(input);
@@ -428,45 +428,45 @@ const decodeStep = (input: unknown, path: ReadonlyArray<PropertyKey>) =>
   });
 
 /**
- * The plan in `text`, decoded strictly: a field nothing reads is refused, not ignored. The
+ * The ask in `text`, decoded strictly: a field nothing reads is refused, not ignored. The
  * refusal is one sentence that names the JSON path and what goes there.
  */
-export const decodePlanDocument = (text: string) =>
+export const decodeAskDocument = (text: string) =>
   Result.gen(function* () {
     const json = yield* Result.mapError(
       Schema.decodeResult(Schema.fromJsonString(Schema.Unknown))(text),
-      () => 'The plan is not JSON. Write it as one JSON object: {"reason": …, "steps": […]}.',
+      () => 'The ask is not JSON. Write it as one JSON object: {"reason": …, "steps": […]}.',
     );
     if (!Predicate.isObject(json)) {
-      return yield* Result.fail('The plan is a JSON object: {"reason": …, "steps": […]}.');
+      return yield* Result.fail('The ask is a JSON object: {"reason": …, "steps": […]}.');
     }
     const steps = yield* elementsOf(
       Predicate.hasProperty(json, 'steps') ? json.steps : undefined,
       ['steps'],
-      MAX_PLAN_STEPS,
+      MAX_ASK_STEPS,
     );
     for (const [index, each] of steps.entries()) yield* decodeStep(each, ['steps', index]);
-    const plan = yield* decodeAt(PlanDocumentSchema, json, []);
-    const named = plan.steps.flatMap((each, index) =>
+    const ask = yield* decodeAt(AskDocumentSchema, json, []);
+    const named = ask.steps.flatMap((each, index) =>
       namedBy(each).map(entry => ({
         ...entry,
         step: index,
         path: ['steps', index, ...entry.path],
       })),
     );
-    if (named.length > MAX_PLAN_ITEMS) {
+    if (named.length > MAX_ASK_ITEMS) {
       return yield* Result.fail(
-        `A plan names up to ${MAX_PLAN_ITEMS} things across its steps, and this one names ${named.length}. Ask for the rest in another plan.`,
+        `An ask names up to ${MAX_ASK_ITEMS} things across its steps, and this one names ${named.length}. Ask for the rest in another ask.`,
       );
     }
     const [first, ...rest] = named;
-    // A plan that names no environment (a new end for a key) is in the org of the key it changes.
-    if (first === undefined) return { plan, orgSlug: null };
+    // An ask that names no environment (a new end for a key) is in the org of the key it changes.
+    if (first === undefined) return { ask, orgSlug: null };
     const orgSlug = orgOf(first.address);
     const elsewhere = rest.find(entry => orgOf(entry.address) !== orgSlug);
     if (elsewhere !== undefined) {
       return yield* Result.fail(
-        `${pathOf(elsewhere.path)}: a plan asks in one org, and this one names ${orgSlug} and ${orgOf(elsewhere.address)}. Make one plan per org.`,
+        `${pathOf(elsewhere.path)}: an ask is for one org, and this one names ${orgSlug} and ${orgOf(elsewhere.address)}. Make one ask per org.`,
       );
     }
     const repeated = named.find((entry, index) =>
@@ -479,5 +479,5 @@ export const decodePlanDocument = (text: string) =>
         `${pathOf(repeated.path)}: this step already names ${repeated.repeatKey}. A step names each ${repeated.isSecret ? 'secret' : 'environment'} once.`,
       );
     }
-    return { plan, orgSlug };
+    return { ask, orgSlug };
   });

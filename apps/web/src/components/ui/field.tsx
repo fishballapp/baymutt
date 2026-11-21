@@ -38,7 +38,7 @@ export const Field = ({
 }: FieldFrame & {
   /** `.line` for a field that is a line of a decision's `.grants`: its name, then what it is for. */
   readonly labelClassName?: string;
-  /** The field is an `li` of a list (a value to paste on the plan page). */
+  /** The field is an `li` of a list (a value to paste on the ask page). */
   readonly isListItem?: boolean;
   readonly children: ReactNode;
 }) => (

@@ -140,8 +140,8 @@ export const EnvironmentsPage = () => {
               return (
                 <EmptyState
                   example={{
-                    lead: 'An agent can also ask you for one in a plan’s `environments` step:',
-                    commands: ['baymutt ask plan.json'],
+                    lead: 'An agent can also ask you for one with an `environments` step:',
+                    commands: ['baymutt ask ask.json'],
                   }}
                 >
                   {org.name}’s environments show here. New environment makes the first.

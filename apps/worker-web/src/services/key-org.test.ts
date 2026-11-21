@@ -24,7 +24,7 @@ describe('a key', () => {
     return { ...world, other, production, elsewhere, login };
   };
 
-  it('belongs to the org of the plan that asked for it', async () => {
+  it('belongs to the org of the ask that asked for it', async () => {
     const { w, owner, orgId, production, login, ask, approve } = await setup();
     const asked = await ask(login, [production], { name: 'deploy' });
     expect(asked.answer).toMatchObject({ status: 201, body: { org: { id: orgId } } });
@@ -42,14 +42,14 @@ describe('a key', () => {
     const { w, owner, orgId, other, production, elsewhere, login, serviceAccount } = await setup();
     const key = await serviceAccount([production], { maker: login });
     const change = (inOrg: string, body: { read: string[]; giveBack: string[] }) =>
-      call(w, 'POST', '/plans', login.headers, {
+      call(w, 'POST', '/asks', login.headers, {
         id: crypto.randomUUID(),
         orgId: inOrg,
         reason: 'more',
         steps: [{ type: 'change', keyId: key.id, end: 'keep', ...body }],
       });
 
-    // Not an environment of the plan's org, nor, in a plan of the other org, of the key's.
+    // Not an environment of the ask's org, nor, in an ask of the other org, of the key's.
     expect(await change(orgId, { read: [elsewhere], giveBack: [] })).toMatchObject({
       status: 404,
     });

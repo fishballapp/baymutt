@@ -132,8 +132,8 @@ export const AccessDialog = ({
       )}
       {isKeyVouched ? (
         <p>
-          A read wraps the environment’s key to it. A key only reads: a write is asked for in a
-          plan. What it reads cannot be unread.
+          A read wraps the environment’s key to it. A key only reads: an agent asks you for a write.
+          What it reads cannot be unread.
         </p>
       ) : (
         <p>

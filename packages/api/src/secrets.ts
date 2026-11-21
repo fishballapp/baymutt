@@ -1,5 +1,5 @@
 // Secrets: named values in an environment. Every write adds a version and nothing is overwritten. A
-// key only reads: the owner writes from the dashboard, and an agent asks for a write in a plan.
+// key only reads: the owner writes from the dashboard, and an agent asks for a write in an ask.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -132,7 +132,7 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
       }),
     ),
     // The owner's alone, from the dashboard with the vault open: a key only reads, and an agent
-    // asks for a write in a plan's `secrets` step.
+    // asks for a write in an ask's `secrets` step.
     HttpApiEndpoint.put('write', '/environments/:environmentId/secrets/:name', {
       params: secretParams,
       payload: WriteSecretPayloadSchema,

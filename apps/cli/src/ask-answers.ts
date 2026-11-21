@@ -1,34 +1,38 @@
-// `baymutt ask wait` and `ask cancel`: a plan this login sent, followed to the owner's answers.
-// Each step is finished as it is answered, whatever the others wait for: an approved key is
-// checked and handed out, a changed one is checked against what was asked here, a refused key is
-// removed. What each step ended as is noted in the plan's record, so a later wait prints it again
-// and never finishes a step twice.
-import type { Plan, PlanStep } from '@baymutt/api';
+// `baymutt ask wait` and `ask cancel`: an ask this login sent, followed to the owner's answers.
+// Each step is finished and printed as it is answered, whatever the others wait for: an approved
+// key is checked and handed out, a changed one is checked against what was asked here, a refused
+// key is removed. What each step ended as is noted in the ask's record, so a later wait prints it
+// again and never finishes a step twice. One process follows an ask at a time (`ask-lock.ts`).
+import type { Ask, AskStep } from '@baymutt/api';
 import { openNote } from '@baymutt/keys';
 import * as Duration from 'effect/Duration';
 import * as Effect from 'effect/Effect';
 import * as FileSystem from 'effect/FileSystem';
 import * as Option from 'effect/Option';
+import * as Ref from 'effect/Ref';
 import * as Schedule from 'effect/Schedule';
+import * as Schema from 'effect/Schema';
+import { holdingAsk } from './ask-lock.ts';
+import {
+  type AskedStep,
+  askUrl,
+  checkAnswer,
+  forgetAsk,
+  type KeptAsk,
+  keepAsk,
+  readAsk,
+} from './asks.ts';
 import {
   answerFor,
   crypto_,
   describeFailure,
   EXIT_CODES,
+  kindOfExitCode,
   type UsageError,
   usage,
 } from './errors.ts';
 import { addressesOf, checkReads, forgetKey, handOut, keyFileOf } from './key-files.ts';
 import { print, printLine } from './output.ts';
-import {
-  type AskedStep,
-  checkAnswer,
-  forgetPlan,
-  type KeptPlan,
-  keepPlan,
-  planUrl,
-  readPlan,
-} from './plans.ts';
 import { ServiceAccount } from './service-account.ts';
 
 const POLL_EVERY = Duration.seconds(2);
@@ -37,19 +41,26 @@ const POLL_EVERY = Duration.seconds(2);
 const REFUSED = {
   rejected: 'the owner rejected it',
   cancelled: 'it was withdrawn with `baymutt ask cancel`',
-  expired: 'nobody answered it within an hour of the plan',
+  expired: 'nobody answered it within an hour of the ask',
 } as const;
 const isRefused = (status: string): status is keyof typeof REFUSED =>
   Object.hasOwn(REFUSED, status);
+
+/** What a step's line says when it ended in a failure here, as it is kept in the record. */
+const EndedErrorSchema = Schema.Struct({
+  code: Schema.String,
+  message: Schema.String,
+  exitCode: Schema.Number,
+});
 
 /** One step's line, as `ask wait` prints it. */
 type Line = { readonly [field: string]: unknown };
 
 /**
  * The owner's note on `step`, opened with this login's key from the account key it pinned, for this
- * plan, this step and the decision the store reports. One that does not open is never shown.
+ * ask, this step and the decision the store reports. One that does not open is never shown.
  */
-const noteOf = Effect.fnUntraced(function* (planId: string, step: PlanStep) {
+const noteOf = Effect.fnUntraced(function* (askId: string, step: AskStep) {
   if (step.note === null) return {};
   const unverified = {
     noteError:
@@ -64,7 +75,7 @@ const noteOf = Effect.fnUntraced(function* (planId: string, step: PlanStep) {
     openNote({
       loginKey: key.privateKey,
       accountPublicKey: account.publicKey,
-      step: { planId, stepIndex: step.index, decision: status },
+      step: { askId, stepIndex: step.index, decision: status },
       ciphertext,
     }),
   ).pipe(
@@ -74,7 +85,7 @@ const noteOf = Effect.fnUntraced(function* (planId: string, step: PlanStep) {
 });
 
 /** The key file of `keyId`, if this computer holds it: what decides how far a change is checked. */
-const keyFileHere = Effect.fn('planAnswers.keyFileHere')(function* (keyId: string) {
+const keyFileHere = Effect.fn('askAnswers.keyFileHere')(function* (keyId: string) {
   const fs = yield* FileSystem.FileSystem;
   const keyFile = yield* keyFileOf(keyId);
   const token = yield* fs.readFileString(keyFile).pipe(
@@ -90,9 +101,9 @@ const keyFileHere = Effect.fn('planAnswers.keyFileHere')(function* (keyId: strin
  * for, the key reads every environment it added (opened with the key itself when its file is
  * here), and holds none it gave back. What the store says the step was is not used.
  */
-const checkChanged = Effect.fn('planAnswers.checkChanged')(function* (
+const checkChanged = Effect.fn('askAnswers.checkChanged')(function* (
   asked: Extract<AskedStep, { type: 'change' }>,
-  step: Extract<PlanStep, { type: 'change' }>,
+  step: Extract<AskStep, { type: 'change' }>,
 ) {
   const { keyId } = asked;
   const integrity = (what: string) =>
@@ -149,7 +160,7 @@ const checkChanged = Effect.fn('planAnswers.checkChanged')(function* (
 });
 
 /** What a step the owner approved, or that took effect, ends as here: its key checked and handed out. */
-const finish = Effect.fnUntraced(function* (asked: AskedStep, step: PlanStep) {
+const finish = Effect.fnUntraced(function* (asked: AskedStep, step: AskStep) {
   if (asked.type === 'access' && step.type === 'access') {
     const handedOut: Line = yield* handOut({
       keyId: asked.keyId,
@@ -180,15 +191,15 @@ type Ended = {
 
 /** One step as it stands: finished here if it was answered, and the line it prints. */
 const endStep = Effect.fnUntraced(function* (
-  plan: Plan,
-  { asked, ended }: KeptPlan['steps'][number],
-  step: PlanStep,
+  ask: Ask,
+  { asked, ended }: KeptAsk['steps'][number],
+  step: AskStep,
 ) {
   const base = {
     index: step.index,
     type: step.type,
     status: step.status,
-    ...(yield* noteOf(plan.id, step)),
+    ...(yield* noteOf(ask.id, step)),
   };
   const refusal = (status: keyof typeof REFUSED) => ({
     code: 'UsageError',
@@ -196,11 +207,16 @@ const endStep = Effect.fnUntraced(function* (
     kind: 'noAccess' as const,
   });
   if (ended !== undefined) {
-    return {
-      line: { ...ended, ...base },
-      isEnded: true,
-      failure: isRefused(step.status) ? refusal(step.status) : null,
-    } satisfies Ended;
+    const handed = Schema.decodeUnknownOption(EndedErrorSchema)(ended.error);
+    // The failure it ended with is told again, as it was.
+    const failure = (() => {
+      if (Option.isSome(handed)) {
+        const { code, message, exitCode } = handed.value;
+        return { code, message, kind: kindOfExitCode(exitCode) };
+      }
+      return isRefused(step.status) ? refusal(step.status) : null;
+    })();
+    return { line: { ...ended, ...base }, isEnded: true, failure } satisfies Ended;
   }
   if (step.status === 'pending') {
     return { line: base, isEnded: false, failure: null } satisfies Ended;
@@ -213,12 +229,20 @@ const endStep = Effect.fnUntraced(function* (
     Effect.map(
       (finished): Ended => ({ line: { ...base, ...finished }, isEnded: true, failure: null }),
     ),
-    // A step that could not be finished here (a key not proven, a command that failed) is that
-    // step's end only, and it is tried again by the next wait.
-    Effect.catch(error =>
-      Effect.map(
-        describeFailure(error),
-        (failure): Ended => ({
+    // A step that could not be finished here is that step's end only. A key not proven is tried
+    // again by the next wait; a key already taken away (the command failed and it was revoked, or
+    // its file is gone) has nothing to try again, so the failure is the step's end, told again as
+    // it was.
+    Effect.catch(
+      Effect.fnUntraced(function* (error) {
+        const failure = yield* describeFailure(error);
+        const isKeyGone =
+          asked.type === 'access' &&
+          !(yield* FileSystem.FileSystem.pipe(
+            Effect.flatMap(fs => Effect.flatMap(keyFileOf(asked.keyId), file => fs.exists(file))),
+            Effect.orDie,
+          ));
+        return {
           line: {
             ...base,
             error: {
@@ -227,16 +251,16 @@ const endStep = Effect.fnUntraced(function* (
               exitCode: EXIT_CODES[failure.kind],
             },
           },
-          isEnded: false,
+          isEnded: isKeyGone,
           failure,
-        }),
-      ),
+        } satisfies Ended;
+      }),
     ),
   );
 });
 
-/** Forgets the keys of `kept`'s `access` steps not handed out: the plan is gone, or never arrived. */
-const forgetUnfinished = (kept: KeptPlan) =>
+/** Forgets the keys of `kept`'s `access` steps not handed out: the ask is gone, or never arrived. */
+const forgetUnfinished = (kept: KeptAsk) =>
   Effect.forEach(
     kept.steps,
     ({ asked, ended }) =>
@@ -244,32 +268,32 @@ const forgetUnfinished = (kept: KeptPlan) =>
     { discard: true },
   );
 
-/** The plan `id` this login kept, or a refusal that says why there is none. */
-const keptPlan = Effect.fn('planAnswers.kept')(function* (id: string) {
-  const kept = yield* readPlan(id);
+/** The ask `id` this login kept, or a refusal that says why there is none. */
+const keptAsk = Effect.fn('askAnswers.kept')(function* (id: string) {
+  const kept = yield* readAsk(id);
   if (Option.isNone(kept)) {
     return yield* usage(
-      `Plan ${id} was not asked on this computer, or \`baymutt ask wait\` already finished every step of it.`,
+      `Ask ${id} was not asked on this computer, or \`baymutt ask wait\` already finished every step of it.`,
       'notFound',
     );
   }
   return kept.value;
 });
 
-/** The store has no plan `id`: what was kept for it goes, and the agent asks again. */
-const gone = Effect.fnUntraced(function* (kept: KeptPlan) {
+/** The store has no ask `id`: what was kept for it goes, and the agent asks again. */
+const gone = Effect.fnUntraced(function* (kept: KeptAsk) {
   yield* forgetUnfinished(kept);
-  yield* forgetPlan(kept.id);
+  yield* forgetAsk(kept.id);
   return yield* usage(
-    `Plan ${kept.id} never reached the store, or the store no longer has it, so the owner cannot answer it. The keys it would have made were removed from this computer; run \`baymutt ask\` again.`,
+    `Ask ${kept.id} never reached the store, or the store no longer has it, so the owner cannot answer it. The keys it would have made were removed from this computer; run \`baymutt ask\` again.`,
     'notFound',
   );
 });
 
-/** Plan `id` as the store has it now; None when it no longer has it. */
+/** Ask `id` as the store has it now; None when it no longer has it. */
 const latestOf = Effect.fnUntraced(function* (id: string) {
   const { api } = yield* ServiceAccount;
-  return yield* api.plans.get({ params: { id } }).pipe(
+  return yield* api.asks.get({ params: { id } }).pipe(
     answerFor(id),
     Effect.asSome,
     Effect.catchTag('NotFoundError', () => Effect.succeedNone),
@@ -277,65 +301,123 @@ const latestOf = Effect.fnUntraced(function* (id: string) {
 });
 
 /**
- * Waits up to `timeoutMs` for the owner to answer every step of plan `id`, finishing each answered
- * step as it goes, then prints one line per step. Fails unless every step went through: with 9
- * while one still waits, with the code of a step that could not be finished here, else with 4.
+ * Follows ask `id` for up to `timeoutMs`, as one process on this computer (a second is refused).
+ * Each step is finished and its line printed the moment the owner answers it, so a key is in hand
+ * while the owner is still on the steps after it. Fails unless every step went through: with 9
+ * while one still waits at the end, with the code of a step that could not be finished here,
+ * else with 4.
  */
-export const waitForPlan = Effect.fn('planAnswers.wait')(function* (id: string, timeoutMs: number) {
-  const kept = yield* keptPlan(id);
-  // Each answer is checked as it arrives: one about another plan stops the wait at once.
+export const waitForAsk = (id: string, timeoutMs: number) =>
+  Effect.scoped(Effect.andThen(holdingAsk(id), followAsk(id, timeoutMs)));
+
+/** What has been finished so far in one wait: the record, and each step's end as printed. */
+type Progress = {
+  readonly record: KeptAsk;
+  readonly ends: ReadonlyArray<Ended | undefined>;
+};
+
+/** `waitForAsk` for a process that already holds the ask: `ask` takes it before it prints the link. */
+export const followAsk = Effect.fn('askAnswers.follow')(function* (id: string, timeoutMs: number) {
+  const kept = yield* keptAsk(id);
+  // Each answer is checked as it arrives: one about another ask stops the wait at once.
   const latest = Effect.gen(function* () {
     const answer = yield* latestOf(id);
-    if (Option.isNone(answer)) return Option.none<Plan>();
+    if (Option.isNone(answer)) return Option.none<Ask>();
     return Option.some(yield* checkAnswer(kept, answer.value));
   });
-  const isSettled = (current: Option.Option<Plan>) =>
+  const progress = yield* Ref.make<Progress>({
+    record: kept,
+    ends: kept.steps.map(() => undefined),
+  });
+
+  /**
+   * One step, finished and printed if it was answered and this wait has not done so. The record is
+   * kept after each, not once at the end: a wait stopped between two steps has already handed out
+   * the first, and the next wait must print it as it ended, not hand it out again.
+   */
+  const finishAnswered = Effect.fnUntraced(function* (ask: Ask, step: AskStep, index: number) {
+    const { record, ends } = yield* Ref.get(progress);
+    const keptStep = record.steps[index];
+    if (keptStep === undefined) {
+      return yield* Effect.die(`ask ${id} was checked to have step ${index}`);
+    }
+    if (ends[index] !== undefined) return;
+    if (keptStep.ended === undefined && step.status === 'pending') return;
+    const end = yield* endStep(ask, keptStep, step);
+    const next: KeptAsk =
+      end.isEnded && keptStep.ended === undefined
+        ? {
+            id,
+            steps: record.steps.map((recorded, at) =>
+              at === index ? { ...recorded, ended: end.line } : recorded,
+            ),
+          }
+        : record;
+    if (next !== record) yield* keepAsk(next);
+    yield* Ref.set(progress, {
+      record: next,
+      ends: ends.map((existing, at) => (at === index ? end : existing)),
+    });
+    yield* printLine({ ask: id, ...end.line });
+  });
+
+  const advance = Effect.gen(function* () {
+    const current = yield* latest;
+    if (Option.isSome(current)) {
+      const ask = current.value;
+      yield* Effect.forEach(ask.steps, (step, index) => finishAnswered(ask, step, index), {
+        concurrency: 1,
+        discard: true,
+      });
+    }
+    return current;
+  });
+  const isSettled = (current: Option.Option<Ask>) =>
     Option.isNone(current) || current.value.steps.every(step => step.status !== 'pending');
-  const polled = yield* latest.pipe(
-    Effect.repeat({ schedule: Schedule.spaced(POLL_EVERY), until: isSettled }),
-    Effect.timeoutOption(Duration.millis(timeoutMs)),
-  );
-  const current = Option.isSome(polled) ? polled.value : yield* latest;
-  if (Option.isNone(current)) return yield* gone(kept);
-  const plan = current.value;
+  // Bounded by the schedule, never by interrupting: a step being handed to its command is not cut off.
+  const last = yield* timeoutMs === 0
+    ? advance
+    : advance.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced(POLL_EVERY).pipe(
+            Schedule.upTo({ duration: Duration.millis(timeoutMs) }),
+          ),
+          until: isSettled,
+        }),
+      );
+  if (Option.isNone(last)) return yield* gone(kept);
+  const ask = last.value;
 
-  const ended: ReadonlyArray<Ended> = yield* Effect.forEach(
-    plan.steps,
-    (step, index) => {
-      const keptStep = kept.steps[index];
-      return keptStep === undefined
-        ? Effect.die(`plan ${id} was checked to have step ${index}`)
-        : endStep(plan, keptStep, step);
-    },
-    { concurrency: 1 },
-  );
-  const record: KeptPlan = {
-    id,
-    steps: kept.steps.map((step, index) => {
-      const end = ended[index];
-      return end?.isEnded === true ? { ...step, ended: end.line } : step;
+  // What still waits is told at the end, once.
+  yield* Effect.forEach(
+    ask.steps,
+    Effect.fnUntraced(function* (step, index) {
+      const { record, ends } = yield* Ref.get(progress);
+      const keptStep = record.steps[index];
+      if (ends[index] !== undefined || keptStep === undefined) return;
+      yield* printLine({ ask: id, ...(yield* endStep(ask, keptStep, step)).line });
     }),
-  };
-  const isFinished = record.steps.every(({ ended: line }) => line !== undefined);
-  yield* isFinished ? forgetPlan(id) : keepPlan(record);
-  yield* Effect.forEach(ended, ({ line }) => printLine({ plan: id, ...line }), { discard: true });
+    { discard: true },
+  );
+  const { record, ends } = yield* Ref.get(progress);
+  if (record.steps.every(({ ended: line }) => line !== undefined)) yield* forgetAsk(id);
 
-  const waiting = plan.steps.filter(step => step.status === 'pending');
+  const waiting = ask.steps.filter(step => step.status === 'pending');
   if (waiting.length > 0) {
     return yield* usage(
-      `${waiting.length} of ${plan.steps.length} steps still wait for the owner at ${yield* planUrl(plan)} (each waits an hour from when it was asked). Run \`baymutt ask wait ${id}\` to keep waiting; the steps answered so far are done.`,
+      `${waiting.length} of ${ask.steps.length} steps still wait for the owner at ${yield* askUrl(ask)} (each waits an hour from when it was asked). Run \`baymutt ask wait ${id}\` to keep waiting; the steps answered so far are done.`,
       'differs',
     );
   }
-  const failed = ended.flatMap(({ failure }, index) =>
-    failure === null ? [] : [{ index, failure }],
+  const failed = ends.flatMap((end, index) =>
+    end?.failure === undefined || end.failure === null ? [] : [{ index, failure: end.failure }],
   );
   const [first] = failed;
   if (first === undefined) return;
   return yield* usage(
     failed.length === 1
       ? first.failure.message
-      : `${failed.length} of ${plan.steps.length} steps did not go through: ${failed.map(({ index }) => index).join(', ')}. Each one's line on stdout says why.`,
+      : `${failed.length} of ${ask.steps.length} steps did not go through: ${failed.map(({ index }) => index).join(', ')}. Each one's line on stdout says why.`,
     // A step that failed here says more than one the owner refused.
     (failed.find(({ failure }) => failure.kind !== 'noAccess') ?? first).failure.kind,
   );
@@ -345,10 +427,10 @@ export const waitForPlan = Effect.fn('planAnswers.wait')(function* (id: string, 
  * Removes the keys of `kept`'s refused `access` steps, and its record once no answered step is
  * left for `ask wait` to finish. Answers whether one is.
  */
-const clearRefused = Effect.fnUntraced(function* (kept: KeptPlan, answer: Plan) {
-  const plan = yield* checkAnswer(kept, answer);
+const clearRefused = Effect.fnUntraced(function* (kept: KeptAsk, answer: Ask) {
+  const ask = yield* checkAnswer(kept, answer);
   yield* Effect.forEach(
-    plan.steps,
+    ask.steps,
     (step, index) => {
       const asked = kept.steps[index]?.asked;
       return asked?.type === 'access' && isRefused(step.status)
@@ -357,24 +439,24 @@ const clearRefused = Effect.fnUntraced(function* (kept: KeptPlan, answer: Plan) 
     },
     { discard: true },
   );
-  const isOpen = plan.steps.some(
+  const isOpen = ask.steps.some(
     (step, index) =>
       (step.status === 'approved' || step.status === 'applied') &&
       kept.steps[index]?.ended === undefined &&
       (step.type === 'access' || step.type === 'change'),
   );
-  if (!isOpen) yield* forgetPlan(kept.id);
+  if (!isOpen) yield* forgetAsk(kept.id);
   return isOpen;
 });
 
 /**
- * Withdraws plan `id`: every step still pending is cancelled, and the keys it would have made go.
+ * Withdraws ask `id`: every step still pending is cancelled, and the keys it would have made go.
  * A step already answered stays answered; one approved and not yet finished is kept for `ask wait`.
  */
-export const cancelPlan = Effect.fn('planAnswers.cancel')(function* (id: string) {
-  const kept = yield* readPlan(id);
+export const cancelAsk = Effect.fn('askAnswers.cancel')(function* (id: string) {
+  const kept = yield* readAsk(id);
   const { api } = yield* ServiceAccount;
-  const cancelled = yield* api.plans.cancel({ params: { id } }).pipe(
+  const cancelled = yield* api.asks.cancel({ params: { id } }).pipe(
     answerFor(id),
     Effect.asSome,
     Effect.catchTag('NotFoundError', error =>
@@ -385,8 +467,8 @@ export const cancelPlan = Effect.fn('planAnswers.cancel')(function* (id: string)
       Option.isNone(kept)
         ? Effect.void
         : latestOf(id).pipe(
-            Effect.flatMap(plan =>
-              Option.isNone(plan) ? Effect.void : clearRefused(kept.value, plan.value),
+            Effect.flatMap(ask =>
+              Option.isNone(ask) ? Effect.void : clearRefused(kept.value, ask.value),
             ),
             Effect.ignore,
           ),
@@ -396,16 +478,16 @@ export const cancelPlan = Effect.fn('planAnswers.cancel')(function* (id: string)
     if (Option.isSome(kept)) return yield* gone(kept.value);
     return;
   }
-  const plan = cancelled.value;
-  const isOpen = Option.isSome(kept) ? yield* clearRefused(kept.value, plan) : false;
+  const ask = cancelled.value;
+  const isOpen = Option.isSome(kept) ? yield* clearRefused(kept.value, ask) : false;
   yield* print({
     id,
     status: 'cancelled',
-    url: yield* planUrl(plan),
-    steps: plan.steps.map(({ index, type, status }) => ({ index, type, status })),
+    url: yield* askUrl(ask),
+    steps: ask.steps.map(({ index, type, status }) => ({ index, type, status })),
     ...(isOpen
       ? {
-          next: `Some steps were answered before the plan was withdrawn: run \`baymutt ask wait ${id}\` to finish them.`,
+          next: `Some steps were answered before the ask was withdrawn: run \`baymutt ask wait ${id}\` to finish them.`,
         }
       : {}),
   });

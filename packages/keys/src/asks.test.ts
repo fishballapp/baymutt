@@ -19,12 +19,12 @@ import {
 } from './index.ts';
 
 const SLOT = {
-  planId: 'plan-1',
+  askId: 'ask-1',
   stepIndex: 2,
   environmentId: 'environment-1',
   name: 'STRIPE_SECRET_KEY',
 };
-const STEP = { planId: 'plan-1', stepIndex: 2, decision: 'rejected' } as const;
+const STEP = { askId: 'ask-1', stepIndex: 2, decision: 'rejected' } as const;
 
 /** The longest base64 text `base64(maxBytes)` in `@baymutt/api` takes. */
 const base64Bound = (maxBytes: number) => Math.ceil(maxBytes / 3) * 4;
@@ -80,7 +80,7 @@ describe('a proposed value', () => {
     ).rejects.toMatchObject({ code: 'unreadable' });
   });
 
-  it('is bound to its plan, step, environment and secret name', async () => {
+  it('is bound to its ask, step, environment and secret name', async () => {
     const { account, login } = await setUp();
     const ciphertext = await sealProposedValue({
       loginKey: login.key,
@@ -90,7 +90,7 @@ describe('a proposed value', () => {
     });
 
     for (const slot of [
-      { ...SLOT, planId: 'plan-2' },
+      { ...SLOT, askId: 'ask-2' },
       { ...SLOT, stepIndex: 3 },
       { ...SLOT, environmentId: 'environment-2' },
       { ...SLOT, name: 'STRIPE_PUBLISHABLE_KEY' },
@@ -123,8 +123,8 @@ describe('a proposed value', () => {
     await expect(seal('x'.repeat(65_537))).rejects.toMatchObject({ code: 'malformed' });
   });
 
-  // The label and binding, pinned: changing either strands every proposal waiting on a plan.
-  it('is sealed under `baymutt-proposed-value`, bound to [planId, stepIndex, environmentId, name]', async () => {
+  // The label and binding, pinned: changing either strands every proposal waiting on an ask.
+  it('is sealed under `baymutt-proposed-value`, bound to [askId, stepIndex, environmentId, name]', async () => {
     const { account, login } = await setUp();
     const ciphertext = await sealProposedValue({
       loginKey: login.key,
@@ -137,7 +137,7 @@ describe('a proposed value', () => {
       recipient: account.key,
       sender: decodePublicKey(login.publicKey, 'the login'),
       info: 'baymutt-proposed-value',
-      aad: utf8(JSON.stringify(['plan-1', '2', 'environment-1', 'STRIPE_SECRET_KEY'])),
+      aad: utf8(JSON.stringify(['ask-1', '2', 'environment-1', 'STRIPE_SECRET_KEY'])),
       box: fromBase64(ciphertext, 'the proposal'),
       what: 'the proposal',
     });
@@ -185,7 +185,7 @@ describe('a note', () => {
     ).rejects.toMatchObject({ code: 'unreadable' });
   });
 
-  it('is bound to its plan, its step and the decision it came with', async () => {
+  it('is bound to its ask, its step and the decision it came with', async () => {
     const { account, login } = await setUp();
     const ciphertext = await sealNote({
       accountKey: account.key,
@@ -195,7 +195,7 @@ describe('a note', () => {
     });
 
     for (const step of [
-      { ...STEP, planId: 'plan-2' },
+      { ...STEP, askId: 'ask-2' },
       { ...STEP, stepIndex: 3 },
       { ...STEP, decision: 'approved' as const },
     ]) {
@@ -219,7 +219,7 @@ describe('a note', () => {
   });
 
   // The label and binding, pinned: changing either strands every note already written.
-  it('is sealed under `baymutt-decision-note`, bound to [planId, stepIndex, decision]', async () => {
+  it('is sealed under `baymutt-decision-note`, bound to [askId, stepIndex, decision]', async () => {
     const { account, login } = await setUp();
     const ciphertext = await sealNote({
       accountKey: account.key,
@@ -232,7 +232,7 @@ describe('a note', () => {
       recipient: login.key,
       sender: decodePublicKey(account.publicKey, 'the account'),
       info: 'baymutt-decision-note',
-      aad: utf8(JSON.stringify(['plan-1', '2', 'rejected'])),
+      aad: utf8(JSON.stringify(['ask-1', '2', 'rejected'])),
       box: fromBase64(ciphertext, 'the note'),
       what: 'the note',
     });
@@ -279,12 +279,12 @@ describe('a hint', () => {
     ).rejects.toMatchObject({ code: 'unreadable' });
   });
 
-  it('is bound to its plan, step, environment and secret name', async () => {
+  it('is bound to its ask, step, environment and secret name', async () => {
     const parties = await setUp();
     const ciphertext = await sealOne(parties);
 
     for (const slot of [
-      { ...SLOT, planId: 'plan-2' },
+      { ...SLOT, askId: 'ask-2' },
       { ...SLOT, stepIndex: 3 },
       { ...SLOT, environmentId: 'environment-2' },
       { ...SLOT, name: 'STRIPE_PUBLISHABLE_KEY' },
@@ -356,8 +356,8 @@ describe('a hint', () => {
     await expect(sealOne(parties, 'x'.repeat(1501))).rejects.toMatchObject({ code: 'malformed' });
   });
 
-  // The label and binding, pinned: changing either strands every hint waiting on a plan.
-  it('is sealed under `baymutt-paste-hint`, bound to [planId, stepIndex, environmentId, name]', async () => {
+  // The label and binding, pinned: changing either strands every hint waiting on an ask.
+  it('is sealed under `baymutt-paste-hint`, bound to [askId, stepIndex, environmentId, name]', async () => {
     const parties = await setUp();
     const ciphertext = await sealOne(parties, 'a hint');
 
@@ -365,7 +365,7 @@ describe('a hint', () => {
       recipient: parties.account.key,
       sender: decodePublicKey(parties.login.publicKey, 'the login'),
       info: 'baymutt-paste-hint',
-      aad: utf8(JSON.stringify(['plan-1', '2', 'environment-1', 'STRIPE_SECRET_KEY'])),
+      aad: utf8(JSON.stringify(['ask-1', '2', 'environment-1', 'STRIPE_SECRET_KEY'])),
       box: fromBase64(ciphertext, 'the hint'),
       what: 'the hint',
     });

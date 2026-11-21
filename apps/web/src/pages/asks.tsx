@@ -1,50 +1,50 @@
-// Plans: what an agent asked of the owner and is still waiting on, one waiting row per plan, each
+// Asks: what an agent asked of the owner and is still waiting on, one waiting row per ask, each
 // answered on its own page.
 import { useAtomValue } from '@effect/atom-react';
 import { Link } from '@tanstack/react-router';
-import { AskWords } from '../components/decision/plan-step.tsx';
+import { AskWords } from '../components/decision/ask-step.tsx';
 import { useOrg } from '../components/org-scope.tsx';
 import { useTitle } from '../components/shell.tsx';
 import { buttonClass } from '../components/ui/button.tsx';
 import { EmptyState, Notice, Skeleton } from '../components/ui/list.tsx';
 import { PageHead, PageTitle } from '../components/ui/page.tsx';
 import { WaitingList, WaitingRow } from '../components/waiting.tsx';
-import { pendingPlansAtom } from '../lib/data.ts';
-import { stepTitle } from '../lib/plans.ts';
+import { stepTitle } from '../lib/asks.ts';
+import { pendingAsksAtom } from '../lib/data.ts';
 import { failureMessage, latest } from '../lib/result.ts';
 
-export const PlansPage = () => {
+export const AsksPage = () => {
   const org = useOrg();
-  useTitle('Plans', org.name);
-  const result = useAtomValue(pendingPlansAtom);
+  useTitle('Asks', org.name);
+  const result = useAtomValue(pendingAsksAtom);
   const failure = failureMessage(result);
-  const plans = latest(result)?.filter(plan => plan.org.id === org.id) ?? null;
+  const asks = latest(result)?.filter(ask => ask.org.id === org.id) ?? null;
   const body = (() => {
     if (failure !== null) return <Notice tone="danger">{failure}</Notice>;
-    if (plans === null) return <Skeleton />;
-    if (plans.length === 0) {
+    if (asks === null) return <Skeleton />;
+    if (asks.length === 0) {
       return (
         <EmptyState
           example={{
-            lead: 'An agent can send a plan from the CLI:',
-            commands: ['baymutt ask plan.json'],
+            lead: 'An agent asks from the CLI:',
+            commands: ['baymutt ask ask.json'],
           }}
         >
-          No plans waiting
+          No asks waiting
         </EmptyState>
       );
     }
     return (
       <WaitingList>
-        {plans.map(plan => {
-          const waiting = plan.steps.filter(({ status }) => status === 'pending');
+        {asks.map(ask => {
+          const waiting = ask.steps.filter(({ status }) => status === 'pending');
           return (
             <WaitingRow
-              key={plan.id}
-              ask={<AskWords plan={plan} />}
-              reason={plan.reason}
+              key={ask.id}
+              ask={<AskWords ask={ask} />}
+              reason={ask.reason}
               about={
-                plan.steps.length === 1
+                ask.steps.length === 1
                   ? []
                   : waiting.map(step => (
                       <>
@@ -52,11 +52,11 @@ export const PlansPage = () => {
                       </>
                     ))
               }
-              askedAt={plan.createdAt}
+              askedAt={ask.createdAt}
               action={
                 <Link
                   to="/orgs/$slug/ask/$id"
-                  params={{ slug: org.slug, id: plan.id }}
+                  params={{ slug: org.slug, id: ask.id }}
                   className={buttonClass()}
                 >
                   Review
@@ -70,7 +70,7 @@ export const PlansPage = () => {
   })();
   return (
     <>
-      <PageHead title={<PageTitle>Plans</PageTitle>} />
+      <PageHead title={<PageTitle>Asks</PageTitle>} />
       {body}
     </>
   );

@@ -1,23 +1,23 @@
 // The lists area's steps: Keys, Activity and Bin.
 import type { Page } from '@playwright/test';
 import {
-  askPlan,
-  askPlanRaw,
   check,
   d1,
   keepsVaultOpen,
   MINUTE_MS,
   pick,
   type Run,
+  sendAsk,
+  sendAskRaw,
   shooter,
   shownIn,
   varlockLoads,
   WEB,
-  waitPlan,
+  waitAsk,
 } from '../support.ts';
 import * as account from './account.ts';
+import { ACCOUNT_ID } from './asks.ts';
 import * as environments from './environments.ts';
-import { ACCOUNT_ID } from './plans.ts';
 
 const { shoot, shootPhone } = shooter('lists');
 
@@ -114,7 +114,7 @@ export const keysPage = async ({
   // A key whose end has passed falls out of sight, and one click brings it back.
   const AGENT = 'Stripe webhook check';
   const [agent] = d1(`SELECT expires_at FROM credential WHERE name = '${AGENT}'`);
-  const onEndedKey = askPlan(laptop, {
+  const onEndedKey = sendAsk(laptop, {
     reason: 'one more hour',
     steps: [{ type: 'change', key: keyId, expires: '1h' }],
   });
@@ -126,9 +126,9 @@ export const keysPage = async ({
     (await page.getByText(`${AGENT} has ended. This step can only be rejected.`).count()) === 1 &&
       (await page.getByRole('button', { name: 'Approve change' }).count()) === 0,
   );
-  await shoot(page, '11h0-plan-change-ended');
+  await shoot(page, '11h0-ask-change-ended');
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
   await page.goto(`${WEB}/orgs/acme/keys`);
   await page.getByText('CI deploy').waitFor();
   check(
@@ -149,7 +149,7 @@ export const keysPage = async ({
   d1(`UPDATE credential SET expires_at = ${String(agent?.expires_at)} WHERE name = '${AGENT}'`);
 };
 
-/** The Bin, a plan naming an environment removed for good, and Activity. */
+/** The Bin, an ask naming an environment removed for good, and Activity. */
 export const binAndActivity = async ({
   laptop,
   page,
@@ -184,8 +184,8 @@ export const binAndActivity = async ({
       (await page.getByRole('button', { name: 'Approve change' }).count()) === 0,
   );
   await page.getByRole('button', { name: 'Reject', exact: true }).click();
-  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
-  check('and the terminal hears it was not approved', waitPlan(laptop, toPurged.id).status === 4);
+  await page.getByRole('heading', { name: 'Ask answered' }).waitFor();
+  check('and the terminal hears it was not approved', waitAsk(laptop, toPurged.id).status === 4);
   await page.goto(`${WEB}/orgs/acme/environments`);
   await environments.createEnvironment(page, 'app/old');
   await page.getByRole('link', { name: /app\/old/ }).waitFor();
@@ -193,14 +193,14 @@ export const binAndActivity = async ({
 
   await page.goto(`${WEB}/orgs/acme/activity`);
   await page
-    .getByText(/approved step \d+ of a plan/)
+    .getByText(/approved step \d+ of an ask/)
     .first()
     .waitFor();
   check(
-    'the activity shows plans made, steps approved and rejected, and names opened in the browser',
-    (await page.getByText(/made a plan/).count()) >= 1 &&
-      (await page.getByText(/approved step \d+ of a plan/).count()) >= 1 &&
-      (await page.getByText(/rejected step \d+ of a plan/).count()) >= 3 &&
+    'the activity shows asks made, steps approved and rejected, and names opened in the browser',
+    (await page.getByText(/asked: /).count()) >= 1 &&
+      (await page.getByText(/approved step \d+ of an ask/).count()) >= 1 &&
+      (await page.getByText(/rejected step \d+ of an ask/).count()) >= 3 &&
       (await page.getByText('STRIPE_SECRET_KEY').count()) >= 1,
   );
   await shoot(page, '12-activity');
@@ -208,36 +208,36 @@ export const binAndActivity = async ({
   await account.accountPage(page);
 };
 
-/** A key belongs to one org, and a plan waits under its own org. */
+/** A key belongs to one org, and an ask waits under its own org. */
 export const keyOneOrg = async ({
   ciEnv,
   laptop,
   page,
 }: Pick<Run, 'ciEnv' | 'laptop' | 'page'>) => {
-  const across = askPlanRaw(laptop, {
+  const across = sendAskRaw(laptop, {
     reason: 'both orgs',
     steps: [{ type: 'access', read: ['acme/app/production', 'legacy/app/legacy'] }],
   });
   check(
-    'a plan across two orgs is refused, and says to make one per org',
-    across.status === 2 && /one plan per org/.test(across.stderr),
+    'an ask across two orgs is refused, and says to make one per org',
+    across.status === 2 && /one ask per org/.test(across.stderr),
   );
-  const elsewhere = askPlan(laptop, {
+  const elsewhere = sendAsk(laptop, {
     reason: 'read the legacy app',
     steps: [{ type: 'access', read: ['legacy/app/legacy'] }],
   });
   check(
-    'a plan links to its page under its own org',
+    'an ask links to its page under its own org',
     elsewhere.url === `${WEB}/orgs/legacy/ask/${elsewhere.id}`,
   );
-  await page.goto(`${WEB}/orgs/legacy/plans`);
+  await page.goto(`${WEB}/orgs/legacy/asks`);
   await page.getByText('read the legacy app').waitFor();
   await page.getByRole('navigation', { name: 'Legacy Ltd' }).getByText('1 waiting').waitFor();
-  await shoot(page, '13k-plans-other-org');
+  await shoot(page, '13k-asks-other-org');
   await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('link', { name: /acme\/app\/production/ }).waitFor();
   check(
-    'a plan waits and is counted under its own org alone',
+    'an ask waits and is counted under its own org alone',
     (await page
       .getByRole('navigation', { name: 'Acme' })
       .getByText(/\d waiting/)

@@ -185,10 +185,10 @@ export const logoutCommand = Command.make(
       : yield* Effect.gen(function* () {
           const { key, api } = yield* serviceAccountFromToken(kept.value);
           // Logging out undoes `baymutt auth login`: this computer's state and every key file here
-          // go with it. A key from a plan (one in BAYMUTT_KEY_FILE) is not that.
+          // go with it. A key from an ask (one in BAYMUTT_KEY_FILE) is not that.
           if (key.issuerPublicKey !== null) {
             return yield* usage(
-              `This key is ${key.credentialId}, from a plan, not this computer's CLI login. Nothing was revoked or removed. To stop it, run \`baymutt key revoke ${key.credentialId}\`.`,
+              `This key is ${key.credentialId}, from an ask, not this computer's CLI login. Nothing was revoked or removed. To stop it, run \`baymutt key revoke ${key.credentialId}\`.`,
             );
           }
           // Another CLI login's key, brought here in BAYMUTT_KEY_FILE: this computer's state and

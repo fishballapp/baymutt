@@ -2,9 +2,9 @@ import * as Option from 'effect/Option';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import { describe, expect, it } from 'vitest';
-import { decodePlanDocument, PlanDocumentSchema } from './plan-document.ts';
+import { AskDocumentSchema, decodeAskDocument } from './ask-document.ts';
 
-const decode = Schema.decodeUnknownOption(PlanDocumentSchema, { onExcessProperty: 'error' });
+const decode = Schema.decodeUnknownOption(AskDocumentSchema, { onExcessProperty: 'error' });
 
 const setUp = {
   reason: 'set up the new worker',
@@ -63,12 +63,12 @@ const cleanUp = {
 const one = (step: unknown) => ({ reason: 'rotate a token', steps: [step] });
 const slot = { environment: 'fishball/x', name: 'A' };
 
-describe('PlanDocumentSchema', () => {
+describe('AskDocumentSchema', () => {
   it.each([
     ['every kind of step', setUp],
     ['a change, a service account, every secret op', cleanUp],
-  ])('takes %s', (_, plan) => {
-    expect(Option.getOrThrow(decode(plan))).toEqual(plan);
+  ])('takes %s', (_, ask) => {
+    expect(Option.getOrThrow(decode(ask))).toEqual(ask);
   });
 
   it.each<[string, unknown]>([
@@ -103,29 +103,27 @@ describe('PlanDocumentSchema', () => {
     ['a step with no items', one({ type: 'environments', items: [] })],
     ['no steps', { reason: 'rotate a token', steps: [] }],
     ['no reason', { steps: setUp.steps }],
-  ])('refuses %s', (_, plan) => {
-    expect(Option.isNone(decode(plan))).toBe(true);
+  ])('refuses %s', (_, ask) => {
+    expect(Option.isNone(decode(ask))).toBe(true);
   });
 });
 
-describe('decodePlanDocument', () => {
-  const refusal = (plan: unknown) => {
-    const decoded = decodePlanDocument(JSON.stringify(plan));
-    if (Result.isSuccess(decoded)) throw new Error('the plan was taken');
+describe('decodeAskDocument', () => {
+  const refusal = (ask: unknown) => {
+    const decoded = decodeAskDocument(JSON.stringify(ask));
+    if (Result.isSuccess(decoded)) throw new Error('the ask was taken');
     return decoded.failure;
   };
 
-  it('takes a plan, with the one org its addresses name', () => {
-    expect(decodePlanDocument(JSON.stringify(setUp))).toEqual(
-      Result.succeed({ plan: setUp, orgSlug: 'fishball' }),
+  it('takes an ask, with the one org its addresses name', () => {
+    expect(decodeAskDocument(JSON.stringify(setUp))).toEqual(
+      Result.succeed({ ask: setUp, orgSlug: 'fishball' }),
     );
   });
 
-  it('takes a plan that names no environment, and leaves its org to the key it changes', () => {
-    const plan = one({ type: 'change', key: cleanUp.steps[0]?.key, expires: '1d' });
-    expect(decodePlanDocument(JSON.stringify(plan))).toEqual(
-      Result.succeed({ plan, orgSlug: null }),
-    );
+  it('takes an ask that names no environment, and leaves its org to the key it changes', () => {
+    const ask = one({ type: 'change', key: cleanUp.steps[0]?.key, expires: '1d' });
+    expect(decodeAskDocument(JSON.stringify(ask))).toEqual(Result.succeed({ ask, orgSlug: null }));
   });
 
   it.each<[string, unknown, string]>([
@@ -142,7 +140,7 @@ describe('decodePlanDocument', () => {
     [
       'an inline value, saying where a value goes instead',
       one({ type: 'secrets', items: [{ op: 'set', ...slot, from: { env: 'A' }, value: 'x' }] }),
-      'steps[0].items[0].value: nothing reads this field. A plan never holds a value',
+      'steps[0].items[0].value: nothing reads this field. An ask never holds a value',
     ],
     [
       'a source that names none, or two',
@@ -175,7 +173,7 @@ describe('decodePlanDocument', () => {
       'steps[0].read: at most 50 entries, and this has 51.',
     ],
     [
-      'more steps than a plan takes',
+      'more steps than an ask takes',
       {
         reason: 'r',
         steps: Array.from({ length: 21 }, () => ({ type: 'access', read: ['fishball/x'] })),
@@ -185,7 +183,7 @@ describe('decodePlanDocument', () => {
     [
       'two orgs',
       { reason: 'r', steps: [{ type: 'access', read: ['fishball/x', 'acme/x'] }] },
-      'steps[0].read[1]: a plan asks in one org, and this one names fishball and acme.',
+      'steps[0].read[1]: an ask is for one org, and this one names fishball and acme.',
     ],
     [
       'an environment twice in a step',
@@ -197,16 +195,14 @@ describe('decodePlanDocument', () => {
       }),
       'steps[0].giveBack[0]: this step already names fishball/x.',
     ],
-    ['no JSON object', [], 'The plan is a JSON object'],
-  ])('refuses %s, naming the path', (_, plan, message) => {
-    expect(refusal(plan)).toContain(message);
+    ['no JSON object', [], 'The ask is a JSON object'],
+  ])('refuses %s, naming the path', (_, ask, message) => {
+    expect(refusal(ask)).toContain(message);
   });
 
   it('refuses text that is not JSON', () => {
-    expect(decodePlanDocument('{"reason": ')).toEqual(
-      Result.fail(
-        'The plan is not JSON. Write it as one JSON object: {"reason": …, "steps": […]}.',
-      ),
+    expect(decodeAskDocument('{"reason": ')).toEqual(
+      Result.fail('The ask is not JSON. Write it as one JSON object: {"reason": …, "steps": […]}.'),
     );
   });
 });

@@ -1,5 +1,5 @@
 // Reading an environment's secret names and versions. Nothing here writes or prints a value: a
-// value is asked for in a plan (`baymutt ask`), and the owner writes it.
+// value is asked for in an ask (`baymutt ask`), and the owner writes it.
 import { SecretNameSchema } from '@baymutt/api';
 import * as Argument from 'effect/cli/Argument';
 import * as Command from 'effect/cli/Command';
@@ -103,7 +103,7 @@ const checkCommand = Command.make(
     });
     if (missing.length > 0) {
       return yield* usage(
-        `${missing.length} name(s) the schema declares are not in ${address}: ${missing.join(', ')}. Ask the owner for each in a plan's \`secrets\` step: \`baymutt ask\` (see \`baymutt ask --help\`).`,
+        `${missing.length} name(s) the schema declares are not in ${address}: ${missing.join(', ')}. Ask the owner for each in an ask's \`secrets\` step: \`baymutt ask\` (see \`baymutt ask --help\`).`,
         'differs',
       );
     }

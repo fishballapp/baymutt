@@ -1,5 +1,5 @@
 // Keys: listing and revoking them, and the activity. A key other than a CLI login comes from an
-// `access` step of a plan (`baymutt ask`) the owner approved.
+// `access` step of an ask (`baymutt ask`) the owner approved.
 import type { ActivityEvent, ServiceAccount as Listed } from '@baymutt/api';
 import * as Argument from 'effect/cli/Argument';
 import * as Command from 'effect/cli/Command';
@@ -61,7 +61,7 @@ const listCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'This key, and the keys it asked for, with what each holds. `kind` says which each is: `cli-login` (made by `baymutt auth login`, lists names and holds no environment), `agent-key` (asked for in a plan’s `access` step and kept in a file, for an agent’s own work) or `service-account` (asked for with a `command` to pipe it into, for another system such as CI). `org` is the slug of the one org a key belongs to, whose environments alone it can hold; null for a CLI login, which is the account’s',
+    'This key, and the keys it asked for, with what each holds. `kind` says which each is: `cli-login` (made by `baymutt auth login`, lists names and holds no environment), `agent-key` (asked for in an ask’s `access` step and kept in a file, for an agent’s own work) or `service-account` (asked for with a `command` to pipe it into, for another system such as CI). `org` is the slug of the one org a key belongs to, whose environments alone it can hold; null for a CLI login, which is the account’s',
   ),
 );
 
@@ -80,13 +80,13 @@ const revokeCommand = Command.make(
   }, report),
 ).pipe(
   Command.withDescription(
-    'Revoke a key this CLI login asked for, or this key itself by its id, with every key it asked for. What it already read stays read. To give back only some of what a key holds, send a plan with a `change` step that gives it back: `baymutt ask`',
+    'Revoke a key this CLI login asked for, or this key itself by its id, with every key it asked for. What it already read stays read. To give back only some of what a key holds, send an ask with a `change` step that gives it back: `baymutt ask`',
   ),
 );
 
 export const keyCommand = Command.make('key').pipe(
   Command.withDescription(
-    'List and revoke keys. A new one comes from a plan’s `access` step once the owner approves it, and a `change` step changes what one holds: `baymutt ask`',
+    'List and revoke keys. A new one comes from an ask’s `access` step once the owner approves it, and a `change` step changes what one holds: `baymutt ask`',
   ),
   Command.withSubcommands([listCommand, revokeCommand]),
   Command.provide(ServiceAccount.layer),

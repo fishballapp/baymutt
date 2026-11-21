@@ -1,6 +1,6 @@
 // The environments and secrets area's steps, and the moves other areas' steps make on its pages.
 import type { Page } from '@playwright/test';
-import { askPlan, check, DESKTOP, LONG_VALUE, PHONE, type Run, shooter, WEB } from '../support.ts';
+import { check, DESKTOP, LONG_VALUE, PHONE, type Run, sendAsk, shooter, WEB } from '../support.ts';
 
 const { shoot, shootPhone } = shooter('environments');
 
@@ -222,8 +222,8 @@ export const environmentPage = async ({
 
   await createEnvironment(page, 'app/old');
   await page.getByRole('link', { name: /app\/old/ }).click();
-  // A plan's change waits for it while it goes to the bin, and then for good.
-  const toPurged = askPlan(laptop, {
+  // An ask's change waits for it while it goes to the bin, and then for good.
+  const toPurged = sendAsk(laptop, {
     reason: 'one last look',
     steps: [{ type: 'change', key: keyId, read: ['acme/app/old'] }],
   });

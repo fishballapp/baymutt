@@ -1,7 +1,7 @@
 // Owns `secret` and `secret_version`: an environment's values as ciphertext. A write adds a version
 // and never changes one, a delete only clears the pointer to the current version (the secret is then
 // in the bin, until `Bin` removes it for good), and none of it can be read here. A key only reads:
-// the owner writes from the dashboard, and an approved plan step writes through `secretWrites`.
+// the owner writes from the dashboard, and an approved ask step writes through `secretWrites`.
 import {
   type ActorIdentity,
   type Bundle,
@@ -181,12 +181,12 @@ export class Secrets extends Context.Service<
 
       /**
        * An environment whose values the caller may change: the signed-in owner of its org. A key
-       * only reads, and a CLI login holds nothing: an agent asks for a write in a plan.
+       * only reads, and a CLI login holds nothing: an agent asks for a write in an ask.
        */
       const writable = Effect.fnUntraced(function* (actor: ActorIdentity, environmentId: string) {
         if (actor._tag !== 'Owner') {
           return yield* new OwnerRequiredError({
-            message: `${isLogin(actor) ? 'A CLI login holds no environment' : 'A key only reads'}: only the owner writes, deletes or rolls back a secret. Ask the owner for it in a plan's \`secrets\` step (\`baymutt ask --help\`).`,
+            message: `${isLogin(actor) ? 'A CLI login holds no environment' : 'A key only reads'}: only the owner writes, deletes or rolls back a secret. Ask the owner for it in an ask's \`secrets\` step (\`baymutt ask --help\`).`,
           });
         }
         return yield* access.ownersEnvironment(actor, environmentId, 'changes a secret');

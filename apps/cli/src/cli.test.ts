@@ -1,5 +1,10 @@
 // The CLI against the real Worker app, in process: its own key handling and the real key
 // schedule on both sides, with the owner's browser played by `@baymutt/keys` and the API.
+
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import process from 'node:process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { type PairingRequest, PairingRequestSchema } from '@baymutt/api';
 import {
   approvePairing,
@@ -39,9 +44,11 @@ import * as ConfigProvider from 'effect/ConfigProvider';
 import * as Command from 'effect/cli/Command';
 import * as Effect from 'effect/Effect';
 import * as Exit from 'effect/Exit';
+import * as Fiber from 'effect/Fiber';
 import * as FileSystem from 'effect/FileSystem';
 import * as FetchHttpClient from 'effect/http/FetchHttpClient';
 import * as Layer from 'effect/Layer';
+import * as PlatformError from 'effect/PlatformError';
 import * as Result from 'effect/Result';
 import * as Schema from 'effect/Schema';
 import * as Stdio from 'effect/Stdio';
@@ -49,12 +56,13 @@ import * as Stream from 'effect/Stream';
 import * as TestClock from 'effect/testing/TestClock';
 import * as TestConsole from 'effect/testing/TestConsole';
 import { CliLayer, cli } from './app.ts';
-import { EXAMPLE_PLAN } from './commands/ask.ts';
+import { decodeAskDocument } from './ask-document.ts';
+import { ASK_JSON_SCHEMA } from './ask-schema.ts';
+import { keepAsk } from './asks.ts';
+import { EXAMPLE_ASK } from './commands/ask.ts';
 import { loadValues } from './environments.ts';
 import { Reported } from './errors.ts';
 import { KeyStore, Platform } from './key-store.ts';
-import { decodePlanDocument } from './plan-document.ts';
-import { PLAN_JSON_SCHEMA } from './plan-schema.ts';
 import { ServiceAccount } from './service-account.ts';
 import { Settings } from './settings.ts';
 
@@ -83,6 +91,50 @@ const withSeat = <A, E, R>(world: TestWorld, seat: Seat, effect: Effect.Effect<A
 /** Whether `stdout` is one compact JSON object per line (`ask wait` of several), not one pretty-printed object. */
 const isLines = (stdout: string) => stdout.split('\n').every(line => /^\{.*\}$/.test(line));
 
+/** What a command's exit says to the shell: 0, the code a `Reported` failure carries, or 1. */
+const exitCodeOf = (exit: Exit.Exit<unknown, unknown>) =>
+  Exit.isSuccess(exit)
+    ? 0
+    : Exit.findErrorOption(exit).pipe(error =>
+        error._tag === 'Some' && error.value instanceof Reported ? error.value.exitCode : 1,
+      );
+
+/** What a command printed, as the tests read it. */
+const printedBy = Effect.fnUntraced(function* (exitCode: number) {
+  const stdout = (yield* TestConsole.logLines).join('\n');
+  const stderr = (yield* TestConsole.errorLines).join('\n');
+  const lastLine = stderr.split('\n').at(-1) ?? '';
+  return {
+    exitCode,
+    stdout,
+    stderr, // Help text, which the parser prints for bad usage, is not a result.
+    // One object, pretty-printed; `ask` prints one and then lines, which is neither.
+    json: (() => {
+      if (!/^[{[]/.test(stdout) || isLines(stdout)) return undefined;
+      try {
+        return JSON.parse(stdout);
+      } catch {
+        return undefined;
+      }
+    })(),
+    /** What a command that prints one JSON object per line printed, in the order printed. */
+    lines: isLines(stdout) ? stdout.split('\n').map(line => JSON.parse(line)) : [],
+    /** The one JSON error line a failure ends with. */
+    error: /^\{"error"/.test(lastLine) ? JSON.parse(lastLine).error : undefined,
+  };
+});
+
+/** The process's own console and stdin: fresh, since a layer is memoized by identity. */
+const processLayer = (stdin?: string) =>
+  Layer.mergeAll(
+    CliLayer,
+    Layer.fresh(TestConsole.layer),
+    Stdio.layerTest({
+      stdin: Stream.make(new TextEncoder().encode(stdin ?? '')),
+      stdinIsTerminal: Effect.succeed(stdin === undefined),
+    }),
+  );
+
 const run = Effect.fnUntraced(function* (
   world: TestWorld,
   seat: Seat,
@@ -94,39 +146,61 @@ const run = Effect.fnUntraced(function* (
     seat,
     Effect.gen(function* () {
       const exit = yield* Effect.exit(Command.runWith(cli, { version: 'test' })(args));
-      const stdout = (yield* TestConsole.logLines).join('\n');
-      const stderr = (yield* TestConsole.errorLines).join('\n');
-      const exitCode = Exit.isSuccess(exit)
-        ? 0
-        : Exit.findErrorOption(exit).pipe(error =>
-            error._tag === 'Some' && error.value instanceof Reported ? error.value.exitCode : 1,
-          );
-      const lastLine = stderr.split('\n').at(-1) ?? '';
-      return {
-        exitCode,
-        stdout,
-        stderr, // Help text, which the parser prints for bad usage, is not a result.
-        json: /^[{[]/.test(stdout) && !isLines(stdout) ? JSON.parse(stdout) : undefined,
-        /** What a command that prints one JSON object per line printed, in the order printed. */
-        lines: isLines(stdout) ? stdout.split('\n').map(line => JSON.parse(line)) : [],
-        /** The one JSON error line a failure ends with. */
-        error: /^\{"error"/.test(lastLine) ? JSON.parse(lastLine).error : undefined,
-      };
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          CliLayer,
-          // Fresh: a layer is memoized by identity, and every run reads only its own output.
-          Layer.fresh(TestConsole.layer),
-          Stdio.layerTest({
-            stdin: Stream.make(new TextEncoder().encode(stdin ?? '')),
-            stdinIsTerminal: Effect.succeed(stdin === undefined),
-          }),
-        ),
-      ),
-    ),
+      return yield* printedBy(exitCodeOf(exit));
+    }).pipe(Effect.provide(processLayer(stdin))),
   );
 });
+
+/**
+ * `baymutt <args>` left running, as an agent's background job is: `body` reads what it has printed
+ * so far, lets the owner answer, moves the clock the wait polls by, and ends it as a harness
+ * would, by interrupting it.
+ */
+const running = <A, E, R>(
+  world: TestWorld,
+  seat: Seat,
+  { args, stdin }: { readonly args: ReadonlyArray<string>; readonly stdin?: string },
+  body: (job: {
+    readonly fiber: Fiber.Fiber<void, unknown>;
+    /** Each `print` so far, as the console holds them. */
+    readonly printed: Effect.Effect<ReadonlyArray<unknown>>;
+    /** Lets the command run, and its poll, until `condition` holds. */
+    readonly until: (condition: Effect.Effect<boolean>) => Effect.Effect<void>;
+    /** Lets the command run, and its poll, for a while. */
+    readonly idle: Effect.Effect<void>;
+    readonly result: Effect.Effect<Effect.Success<ReturnType<typeof printedBy>>>;
+  }) => Effect.Effect<A, E, R>,
+) =>
+  withSeat(
+    world,
+    seat,
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(Command.runWith(cli, { version: 'test' })(args));
+      const tick = Effect.andThen(
+        TestClock.adjust('2 seconds'),
+        Effect.promise(() => sleep(5)),
+      );
+      return yield* body({
+        fiber,
+        printed: TestConsole.logLines,
+        until: condition =>
+          Effect.andThen(tick, condition).pipe(
+            Effect.repeat({ until: isMet => isMet, times: 400 }),
+            Effect.filterOrFail(
+              isMet => isMet,
+              () => new Error('the command did not get there'),
+            ),
+            Effect.orDie,
+            Effect.asVoid,
+          ),
+        idle: Effect.repeat(tick, { times: 10 }).pipe(Effect.asVoid),
+        result: Effect.gen(function* () {
+          const exit = yield* Fiber.await(fiber);
+          return yield* printedBy(exitCodeOf(exit));
+        }),
+      });
+    }).pipe(Effect.provide(processLayer(stdin))),
+  );
 
 /** What this key loads, through the same flow the varlock plugin uses. */
 const load = (world: TestWorld, seat: Seat, environment: string) =>
@@ -159,12 +233,12 @@ const withKeyFile = (login: Seat, keyFile: string): Seat => ({
 const isUuid = (text: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text);
 
-type PlanEnvironment = {
+type AskEnvironment = {
   environmentId: string;
   environmentName: string | null;
   environmentSealedName: string | null;
 };
-type StoredPlan = {
+type StoredAsk = {
   id: string;
   org: { id: string; slug: string };
   maker: { id: string; publicKey: string; endorsement: string | null };
@@ -176,10 +250,10 @@ type StoredPlan = {
     end?: number | 'never' | 'keep';
     command?: string | null;
     key?: { id: string; publicKey: string; keyVoucher: string | null; expiresAt: number | null };
-    read?: PlanEnvironment[];
-    giveBack?: PlanEnvironment[];
+    read?: AskEnvironment[];
+    giveBack?: AskEnvironment[];
     items?: Array<
-      PlanEnvironment & {
+      AskEnvironment & {
         op: string;
         name?: string;
         sealedName?: string | null;
@@ -390,13 +464,13 @@ const makeOwner = async (world: TestWorld) => {
       const stored = namesKey === null ? name : await nameIndex(namesKey, { scopeId: id, name });
       await api('DELETE', `/environments/${id}/secrets/${stored}`);
     },
-    plan: (id: string) => api<StoredPlan>('GET', `/plans/${id}`),
-    /** Each value the plan page opened, by `<step>/<name>`: what the owner saw before approving. */
+    ask: (id: string) => api<StoredAsk>('GET', `/asks/${id}`),
+    /** Each value the ask page opened, by `<step>/<name>`: what the owner saw before approving. */
     opened,
-    /** Each paste item's hint the plan page opened, by `<step>/<name>`. */
+    /** Each paste item's hint the ask page opened, by `<step>/<name>`. */
     hints,
     /**
-     * What the plan page does on Approve: the owner's browser makes what the step names, as the
+     * What the ask page does on Approve: the owner's browser makes what the step names, as the
      * dashboard will. `pasted` is what the owner pastes for each `paste` item, by name; `note` goes
      * back sealed to the login that asked; `expiresAt` is the end the owner picks for a key (absent:
      * as asked, or for a change, its end kept).
@@ -414,10 +488,10 @@ const makeOwner = async (world: TestWorld) => {
         readonly expiresAt?: number | null;
       } = {},
     ) => {
-      const plan = await api<StoredPlan>('GET', `/plans/${id}`);
-      const step = plan.steps[index];
-      if (step === undefined) throw new Error(`plan ${id} has no step ${index}`);
-      const maker = await endorsedReader(keys, plan.maker);
+      const ask = await api<StoredAsk>('GET', `/asks/${id}`);
+      const step = ask.steps[index];
+      if (step === undefined) throw new Error(`ask ${id} has no step ${index}`);
+      const maker = await endorsedReader(keys, ask.maker);
       const sealedNote =
         note === undefined
           ? {}
@@ -425,11 +499,11 @@ const makeOwner = async (world: TestWorld) => {
               note: await sealNote({
                 accountKey: keys.accountKey,
                 loginPublicKey: maker.publicKey,
-                step: { planId: id, stepIndex: index, decision: 'approved' },
+                step: { askId: id, stepIndex: index, decision: 'approved' },
                 note,
               }),
             };
-      const namesKey = namesKeyOf(plan.org.id);
+      const namesKey = namesKeyOf(ask.org.id);
       const readGrants = async (
         reader: { id: string; publicKey: string },
         read: ReadonlyArray<{ environmentId: string }>,
@@ -445,7 +519,7 @@ const makeOwner = async (world: TestWorld) => {
           }),
         ),
         namesKeyWraps:
-          read.length === 0 ? [] : await namesKeyWrapsFor(reader, new Set([plan.org.id])),
+          read.length === 0 ? [] : await namesKeyWrapsFor(reader, new Set([ask.org.id])),
       });
       const answer = await (async () => {
         if (step.type === 'environments') {
@@ -463,12 +537,12 @@ const makeOwner = async (world: TestWorld) => {
                   readers: [accountReader],
                 });
                 const name = await openName(namesKey, {
-                  scopeId: plan.org.id,
+                  scopeId: ask.org.id,
                   stored: { name: environmentName ?? '', sealedName: environmentSealedName },
                 });
-                environments.set(`${plan.org.slug}/${name}`, {
+                environments.set(`${ask.org.slug}/${name}`, {
                   id: environmentId,
-                  orgId: plan.org.id,
+                  orgId: ask.org.id,
                 });
                 return {
                   environmentId,
@@ -485,7 +559,7 @@ const makeOwner = async (world: TestWorld) => {
           if (key === undefined) throw new Error('a key step with no key');
           const reader = await vouchedScopedReader(keys, {
             serviceAccount: key,
-            maker: plan.maker,
+            maker: ask.maker,
           });
           const asked = step.end === 'never' || step.end === 'keep' ? null : step.end;
           const end = (() => {
@@ -505,11 +579,11 @@ const makeOwner = async (world: TestWorld) => {
               return [
                 (async () => {
                   const { environmentId } = item;
-                  const name = await openName(namesKeyOf(plan.org.id), {
+                  const name = await openName(namesKeyOf(ask.org.id), {
                     scopeId: environmentId,
                     stored: { name: item.name ?? '', sealedName: item.sealedName ?? null },
                   });
-                  const slot = { planId: id, stepIndex: index, environmentId, name };
+                  const slot = { askId: id, stepIndex: index, environmentId, name };
                   if (typeof item.sealedHint === 'string') {
                     const hint = await openHint({
                       accountKey: keys.accountKey,
@@ -548,25 +622,25 @@ const makeOwner = async (world: TestWorld) => {
           ),
         };
       })();
-      return api<StoredPlan>('POST', `/plans/${id}/steps/${index}/approve`, {
+      return api<StoredAsk>('POST', `/asks/${id}/steps/${index}/approve`, {
         ...answer,
         ...sealedNote,
       });
     },
-    /** What the plan page does on Reject, with a note for the agent if one is given. */
+    /** What the ask page does on Reject, with a note for the agent if one is given. */
     rejectStep: async (id: string, index: number, { note }: { readonly note?: string } = {}) => {
-      const plan = await api<StoredPlan>('GET', `/plans/${id}`);
-      const maker = await endorsedReader(keys, plan.maker);
-      return api<StoredPlan>(
+      const ask = await api<StoredAsk>('GET', `/asks/${id}`);
+      const maker = await endorsedReader(keys, ask.maker);
+      return api<StoredAsk>(
         'POST',
-        `/plans/${id}/steps/${index}/reject`,
+        `/asks/${id}/steps/${index}/reject`,
         note === undefined
           ? {}
           : {
               note: await sealNote({
                 accountKey: keys.accountKey,
                 loginPublicKey: maker.publicKey,
-                step: { planId: id, stepIndex: index, decision: 'rejected' },
+                step: { askId: id, stepIndex: index, decision: 'rejected' },
                 note,
               }),
             },
@@ -659,15 +733,15 @@ const hidingSealing = (world: TestWorld, sealedName: null | undefined) => {
   return { store, urls };
 };
 
-type Plan = { readonly reason?: string; readonly steps: ReadonlyArray<unknown> };
+type Ask = { readonly reason?: string; readonly steps: ReadonlyArray<unknown> };
 
-/** `baymutt ask` from `login`, the plan on stdin, returning at once. */
-const ask = (world: TestWorld, login: Seat, { reason = 'run the tests', steps }: Plan) =>
-  run(world, login, ['ask'], JSON.stringify({ reason, steps }));
+/** `baymutt ask --no-wait` from `login`, the ask on stdin, returning at once. */
+const ask = (world: TestWorld, login: Seat, { reason = 'run the tests', steps }: Ask) =>
+  run(world, login, ['ask', '--no-wait'], JSON.stringify({ reason, steps }));
 
-/** `baymutt ask` that must succeed: the plan's id. */
-const asked = Effect.fnUntraced(function* (world: TestWorld, login: Seat, plan: Plan) {
-  const answer = yield* ask(world, login, plan);
+/** `baymutt ask` that must succeed: the ask's id. */
+const asked = Effect.fnUntraced(function* (world: TestWorld, login: Seat, body: Ask) {
+  const answer = yield* ask(world, login, body);
   if (answer.exitCode !== 0) throw new Error(`ask exited ${answer.exitCode}: ${answer.stderr}`);
   return answer.json.id as string;
 });
@@ -676,7 +750,7 @@ const asked = Effect.fnUntraced(function* (world: TestWorld, login: Seat, plan: 
 const wait = (world: TestWorld, login: Seat, id: string, ...flags: ReadonlyArray<string>) =>
   run(world, login, ['ask', 'wait', id, ...flags]);
 
-/** An `access` step reading `read`, the whole plan an agent sends for a key. */
+/** An `access` step reading `read`, the whole ask an agent sends for a key. */
 const reading = (...read: ReadonlyArray<string>) => ({ steps: [{ type: 'access', read }] });
 
 /** Asks for a key that reads `read`, has the owner approve, and picks up its file: the loop an agent runs. */
@@ -691,7 +765,7 @@ const askApproved = Effect.fnUntraced(function* (
   const done = yield* wait(world, login, id);
   if (done.exitCode !== 0) throw new Error(`wait exited ${done.exitCode}: ${done.stderr}`);
   const [line] = done.lines;
-  return { id: line.key as string, plan: id, done, agent: withKeyFile(login, line.keyFile) };
+  return { id: line.key as string, ask: id, done, agent: withKeyFile(login, line.keyFile) };
 });
 
 const keysOf = (seat: Seat) => `${seat.configHome}/baymutt/localhost-5183/keys`;
@@ -840,7 +914,7 @@ layer(NodeServices.layer)(it => {
           ['env', 'ls'],
           ['bin', 'ls'],
           ['key', 'ls'],
-          // Asking is one plan, and nothing writes but the owner.
+          // Asking is one ask, and nothing writes but the owner.
           ['ask', 'access', '--read', 'acme/app/production', '--reason', 'r'],
           ['ask', 'change', crypto.randomUUID(), '--read', 'acme/app/production'],
           ['ask', 'create-environment', 'acme/app/dev', '--reason', 'r'],
@@ -853,7 +927,7 @@ layer(NodeServices.layer)(it => {
         ]) {
           expect((yield* run(world, laptop, args, 'x')).exitCode, args.join(' ')).not.toBe(0);
         }
-        expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM plan').get()).toEqual({ n: 0 });
+        expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM ask').get()).toEqual({ n: 0 });
         // `environment` is the one alias, and the same list answers to it.
         expect((yield* run(world, laptop, ['environment', 'list'])).json.environments).toHaveLength(
           1,
@@ -868,7 +942,7 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('is refused a load, with the plan that gets one', () =>
+    it.effect('is refused a load, with the ask that gets one', () =>
       Effect.gen(function* () {
         const { world, owner, laptop } = yield* paired;
         yield* Effect.promise(async () => {
@@ -890,7 +964,7 @@ layer(NodeServices.layer)(it => {
       fetch: () => Promise.reject(new Error('the network was used')),
     });
     const VALUES = ['file-secret-xyz', 'dotenv-secret-xyz', 'env-secret-xyz'];
-    const planWith = (from: ReadonlyArray<unknown>) =>
+    const askWith = (from: ReadonlyArray<unknown>) =>
       JSON.stringify({
         reason: 'set up the preview',
         steps: [
@@ -911,12 +985,12 @@ layer(NodeServices.layer)(it => {
       Effect.gen(function* () {
         const printed = yield* run(offline(), yield* seat, ['ask', 'schema']);
         expect(printed.exitCode).toBe(0);
-        expect(printed.json).toEqual(JSON.parse(JSON.stringify(PLAN_JSON_SCHEMA)));
+        expect(printed.json).toEqual(JSON.parse(JSON.stringify(ASK_JSON_SCHEMA)));
         expect(printed.json.description).toContain('one org');
       }),
     );
 
-    it.effect('checks a plan and sends nothing, printing no value', () =>
+    it.effect('checks an ask and sends nothing, printing no value', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const world = offline();
@@ -924,7 +998,7 @@ layer(NodeServices.layer)(it => {
         const here = yield* tempDirectory;
         yield* fs.writeFileString(`${here}/key.pem`, VALUES[0] ?? '');
         yield* fs.writeFileString(`${here}/.env`, `OTHER=${VALUES[1]}\n`);
-        const plan = planWith([
+        const ask = askWith([
           { file: `${here}/key.pem` },
           { dotenv: `${here}/.env`, key: 'OTHER' },
           { env: 'FROM_THE_ENVIRONMENT' },
@@ -934,7 +1008,7 @@ layer(NodeServices.layer)(it => {
           world,
           { ...computer, env: { FROM_THE_ENVIRONMENT: VALUES[2] ?? '' } },
           ['ask', '--check'],
-          plan,
+          ask,
         );
 
         expect(checked.exitCode).toBe(0);
@@ -951,13 +1025,13 @@ layer(NodeServices.layer)(it => {
           },
         ]);
         for (const value of VALUES) expect(checked.stdout + checked.stderr).not.toContain(value);
-        expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM plan').get()).toEqual({ n: 0 });
-        // The same plan as a file.
-        yield* fs.writeFileString(`${here}/plan.json`, plan);
+        expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM ask').get()).toEqual({ n: 0 });
+        // The same ask as a file.
+        yield* fs.writeFileString(`${here}/ask.json`, ask);
         const asFile = yield* run(world, { ...computer, env: { FROM_THE_ENVIRONMENT: 'x' } }, [
           'ask',
           '--check',
-          `${here}/plan.json`,
+          `${here}/ask.json`,
         ]);
         expect(asFile.lines[0]).toMatchObject({ isWellFormed: true, isSent: false });
       }),
@@ -970,7 +1044,7 @@ layer(NodeServices.layer)(it => {
         const computer = yield* seat;
         const here = yield* tempDirectory;
         yield* fs.writeFileString(`${here}/large`, 'x'.repeat(65_537));
-        const plans = [
+        const asks = [
           '{"reason": ',
           JSON.stringify({
             reason: 'r',
@@ -984,23 +1058,23 @@ layer(NodeServices.layer)(it => {
             reason: 'r',
             steps: [{ type: 'access', read: ['acme/a'], expires: '99999d' }],
           }),
-          planWith([{ file: `${here}/none` }]),
-          planWith([{ env: 'NOT_SET_ANYWHERE' }]),
-          planWith([{ file: `${here}/large` }]),
+          askWith([{ file: `${here}/none` }]),
+          askWith([{ env: 'NOT_SET_ANYWHERE' }]),
+          askWith([{ file: `${here}/large` }]),
         ];
-        for (const plan of plans) {
-          const checked = yield* run(world, computer, ['ask', '--check'], plan);
+        for (const ask of asks) {
+          const checked = yield* run(world, computer, ['ask', '--check'], ask);
           // `ask` stops at the login it has not got only after the same refusals.
-          const asked = yield* run(world, computer, ['ask'], plan);
-          expect(checked.exitCode, plan).not.toBe(0);
-          expect(checked.error, plan).toBeDefined();
+          const asked = yield* run(world, computer, ['ask'], ask);
+          expect(checked.exitCode, ask).not.toBe(0);
+          expect(checked.error, ask).toBeDefined();
           if (asked.error.code === 'UsageError' && asked.exitCode !== 3) {
             expect(checked.error).toEqual(asked.error);
           }
         }
         // Where `ask` would go on to the login, `--check` has gone through the same refusals.
-        expect((yield* run(world, computer, ['ask'], plans[4])).exitCode).toBe(3);
-        expect((yield* run(world, computer, ['ask', '--check'], plans[4])).exitCode).toBe(5);
+        expect((yield* run(world, computer, ['ask'], asks[4])).exitCode).toBe(3);
+        expect((yield* run(world, computer, ['ask', '--check'], asks[4])).exitCode).toBe(5);
       }),
     );
 
@@ -1010,14 +1084,25 @@ layer(NodeServices.layer)(it => {
         const computer = yield* seat;
         const ask = yield* run(world, computer, ['ask', '--help']);
         expect(ask.stdout + ask.stderr).toContain('`baymutt ask schema`');
-        expect(ask.stdout + ask.stderr).toContain('`baymutt ask --check plan.json`');
+        expect(ask.stdout + ask.stderr).toContain('`baymutt ask --check ask.json`');
         expect(ask.stdout + ask.stderr).toContain('`wait`, `cancel` or `schema`');
+        // It waits, so an agent runs it in the background and hands the link over at once.
+        for (const said of [
+          '`baymutt ask` waits for the owner',
+          'up to an hour for each step',
+          'run it in the background and send the owner the link straight away',
+          'alone on its last line',
+          '`baymutt ask wait <id>` picks up every answer and key',
+          '`--no-wait`',
+        ]) {
+          expect(ask.stdout + ask.stderr).toContain(said);
+        }
         // What agents guessed at: the end's format and start, the limits, a value from chat.
         for (const said of [
           '`30m`, `12h`, `14d`), or `"never"`',
           'counted from when the owner approves the step',
           'replaces the key’s end rather than adding to it',
-          'At most 20 steps, 50 items in a step and 200 across the plan',
+          'At most 20 steps, 50 items in a step and 200 across the ask',
           'not even one you were told in chat',
           'are each optional, and one is needed',
           'unless `key` names another',
@@ -1025,24 +1110,24 @@ layer(NodeServices.layer)(it => {
           expect(ask.stdout + ask.stderr).toContain(said);
         }
         const root = yield* run(world, computer, ['--help']);
-        expect(root.stdout + root.stderr).not.toContain(EXAMPLE_PLAN);
+        expect(root.stdout + root.stderr).not.toContain(EXAMPLE_ASK);
         expect(root.stdout + root.stderr).toContain('Ask the owner for anything a task needs');
       }),
     );
   });
 
   describe('ask', () => {
-    it.effect('shows one plan with every step type in its help, which it takes as written', () =>
+    it.effect('shows one ask with every step type in its help, which it takes as written', () =>
       Effect.gen(function* () {
         const { world, laptop } = yield* paired;
         const help = yield* run(world, laptop, ['ask', '--help']);
         const shown = help.stdout + help.stderr;
-        expect(shown).toContain('baymutt ask plan.json');
-        expect(shown).toContain(EXAMPLE_PLAN);
+        expect(shown).toContain('baymutt ask ask.json');
+        expect(shown).toContain(EXAMPLE_ASK);
         expect(shown).toContain('`./wait`');
-        const decoded = decodePlanDocument(EXAMPLE_PLAN);
+        const decoded = decodeAskDocument(EXAMPLE_ASK);
         if (Result.isFailure(decoded)) throw new Error(decoded.failure);
-        const { steps } = decoded.success.plan;
+        const { steps } = decoded.success.ask;
         expect(new Set(steps.map(({ type }) => type))).toEqual(
           new Set(['environments', 'access', 'change', 'secrets']),
         );
@@ -1055,7 +1140,7 @@ layer(NodeServices.layer)(it => {
     );
 
     it.effect(
-      'asks for every step type in one plan; wait finishes each, with the owner’s note',
+      'asks for every step type in one ask; wait finishes each, with the owner’s note',
       () =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
@@ -1071,7 +1156,7 @@ layer(NodeServices.layer)(it => {
             await owner.createEnvironment('acme/app/archive');
             await owner.deleteEnvironment('acme/app/archive');
           });
-          // A key this login holds already, which the plan changes.
+          // A key this login holds already, which the ask changes.
           const held = yield* askApproved(world, owner, laptop, 'acme/app/staging');
           yield* fs.writeFileString(`${here}/signing.pem`, `${PRIVATE_KEY}\n`);
           yield* fs.writeFileString(
@@ -1082,7 +1167,7 @@ layer(NodeServices.layer)(it => {
           const agentSeat: Seat = { ...laptop, env: { SENTRY_DSN: 'https://sentry.example/1' } };
           const preview = 'acme/app/preview';
 
-          const plan = {
+          const ask = {
             reason: 'Set up the preview deploy',
             steps: [
               {
@@ -1138,9 +1223,9 @@ layer(NodeServices.layer)(it => {
               },
             ],
           };
-          const file = `${here}/plan.json`;
-          yield* fs.writeFileString(file, JSON.stringify(plan));
-          const sent = yield* run(world, agentSeat, ['ask', file]);
+          const file = `${here}/ask.json`;
+          yield* fs.writeFileString(file, JSON.stringify(ask));
+          const sent = yield* run(world, agentSeat, ['ask', '--no-wait', file]);
 
           // It returns at once: the link the owner opens, and each step waiting for them.
           expect(sent).toMatchObject({
@@ -1154,7 +1239,7 @@ layer(NodeServices.layer)(it => {
           });
           const id: string = sent.json.id;
           expect(isUuid(id)).toBe(true);
-          const stored = yield* Effect.promise(() => owner.plan(id));
+          const stored = yield* Effect.promise(() => owner.ask(id));
           expect(stored.steps.map(({ type }) => type)).toEqual([
             'environments',
             'secrets',
@@ -1168,7 +1253,7 @@ layer(NodeServices.layer)(it => {
             end: 'never',
           });
           expect(stored.steps[4]).toMatchObject({ end: 24 * 3600 * 1000 });
-          // Each new key is kept here before the plan is sent, and holds nothing yet.
+          // Each new key is kept here before the ask is sent, and holds nothing yet.
           const keyIds = [stored.steps[2]?.key?.id ?? '', stored.steps[3]?.key?.id ?? ''];
           for (const keyId of keyIds) {
             expect(yield* fs.readFileString(`${keysOf(laptop)}/${keyId}`)).toMatch(/^baymutt_key_/);
@@ -1185,7 +1270,7 @@ layer(NodeServices.layer)(it => {
           // Nothing waits on a step the owner has not answered: a wait that times out says so.
           expect(yield* wait(world, laptop, id, '--timeout', '0')).toMatchObject({
             exitCode: 9,
-            lines: [0, 1, 2, 3, 4].map(index => ({ plan: id, index, status: 'pending' })),
+            lines: [0, 1, 2, 3, 4].map(index => ({ ask: id, index, status: 'pending' })),
           });
 
           yield* Effect.promise(async () => {
@@ -1207,13 +1292,13 @@ layer(NodeServices.layer)(it => {
           expect(done.exitCode).toBe(0);
           const [created, written, kept, piped, changed] = done.lines;
           expect(created).toEqual({
-            plan: id,
+            ask: id,
             index: 0,
             type: 'environments',
             status: 'approved',
             note: 'Made the preview; the archive is back.',
           });
-          expect(written).toEqual({ plan: id, index: 1, type: 'secrets', status: 'approved' });
+          expect(written).toEqual({ ask: id, index: 1, type: 'secrets', status: 'approved' });
           expect(kept).toMatchObject({
             index: 2,
             type: 'access',
@@ -1269,7 +1354,7 @@ layer(NodeServices.layer)(it => {
           // No value was printed, and the store holds none as written.
           const printed = [sent, done].map(({ stdout, stderr }) => stdout + stderr).join('\n');
           const dump = JSON.stringify(
-            ['plan_item', 'secret_version', 'activity_event', 'plan_step'].flatMap(table =>
+            ['ask_item', 'secret_version', 'activity_event', 'ask_step'].flatMap(table =>
               world.sqlite.prepare(`SELECT * FROM ${table}`).all(),
             ),
           );
@@ -1285,8 +1370,8 @@ layer(NodeServices.layer)(it => {
           }
           // The note reaches the agent, and the store holds it sealed.
           expect(dump).not.toContain('Rotate it in a month');
-          // Everything is finished: what was kept for the plan goes, and a second wait says so.
-          expect(yield* fs.exists(`${keysOf(laptop)}/${id}.plan`)).toBe(false);
+          // Everything is finished: what was kept for the ask goes, and a second wait says so.
+          expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(false);
           expect((yield* wait(world, laptop, id)).exitCode).toBe(5);
         }),
     );
@@ -1319,8 +1404,8 @@ layer(NodeServices.layer)(it => {
             },
           ],
         });
-        const kept = yield* fs.readFileString(`${keysOf(laptop)}/${id}.plan`);
-        const stored = yield* Effect.promise(() => owner.plan(id));
+        const kept = yield* fs.readFileString(`${keysOf(laptop)}/${id}.ask`);
+        const stored = yield* Effect.promise(() => owner.ask(id));
         expect(stored.steps[0]?.items?.map(({ sealedHint }) => typeof sealedHint)).toEqual([
           'string',
           'object',
@@ -1332,7 +1417,7 @@ layer(NodeServices.layer)(it => {
 
         expect(bodies.some(body => body.includes('"sealedHint"'))).toBe(true);
         const dump = JSON.stringify(
-          ['plan', 'plan_step', 'plan_item', 'activity_event'].flatMap(table =>
+          ['ask', 'ask_step', 'ask_item', 'activity_event'].flatMap(table =>
             world.sqlite.prepare(`SELECT * FROM ${table}`).all(),
           ),
         );
@@ -1392,7 +1477,7 @@ layer(NodeServices.layer)(it => {
             expect(refused.error.message).toContain(message);
           }
           // Refused before anything was sent, or any key kept.
-          expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM plan').get()).toEqual({ n: 0 });
+          expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM ask').get()).toEqual({ n: 0 });
           expect(yield* fs.exists(keysOf(laptop))).toBe(false);
 
           // A dotenv's variable is the item's name unless `key` says otherwise.
@@ -1402,7 +1487,7 @@ layer(NodeServices.layer)(it => {
         }),
     );
 
-    it.effect('refuses a plan it cannot use, naming the path, before anything is sent', () =>
+    it.effect('refuses an ask it cannot use, naming the path, before anything is sent', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, owner, laptop } = yield* paired;
@@ -1415,7 +1500,7 @@ layer(NodeServices.layer)(it => {
           [
             { steps: [{ type: 'access', read: ['acme/app'] }], org: 'acme' },
             2,
-            'org: nothing reads this field. The fields of the plan are: reason, steps.',
+            'org: nothing reads this field. The fields of the ask are: reason, steps.',
           ],
           [
             { steps: [{ type: 'access' }] },
@@ -1437,7 +1522,7 @@ layer(NodeServices.layer)(it => {
               ],
             },
             2,
-            'steps[0].items[0].value: nothing reads this field. A plan never holds a value',
+            'steps[0].items[0].value: nothing reads this field. An ask never holds a value',
           ],
           [
             { steps: [{ type: 'access', read: ['app'] }] },
@@ -1482,7 +1567,7 @@ layer(NodeServices.layer)(it => {
               ],
             },
             2,
-            'steps[1].read[0]: a plan asks in one org, and this one names acme and globex',
+            'steps[1].read[0]: an ask is for one org, and this one names acme and globex',
           ],
           [
             { steps: [{ type: 'access', read: ['acme/nothing'] }] },
@@ -1539,25 +1624,25 @@ layer(NodeServices.layer)(it => {
             'steps[0].keyId',
           ],
         ];
-        for (const [plan, exitCode, message] of refusals) {
+        for (const [ask, exitCode, message] of refusals) {
           const refused = yield* run(
             world,
             laptop,
             ['ask'],
-            JSON.stringify({ reason: 'r', ...(plan as object) }),
+            JSON.stringify({ reason: 'r', ...(ask as object) }),
           );
           expect(refused.exitCode, message).toBe(exitCode);
           expect(refused.error.message).toContain(message);
         }
-        expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM plan').get()).toEqual({ n: 0 });
+        expect(world.sqlite.prepare('SELECT COUNT(*) AS n FROM ask').get()).toEqual({ n: 0 });
         expect(
           yield* fs.readDirectory(keysOf(laptop)).pipe(Effect.orElseSucceed(() => [])),
         ).toEqual([]);
 
         expect((yield* run(world, laptop, ['ask'], '{ "reason": ')).error.message).toContain(
-          'The plan is not JSON',
+          'The ask is not JSON',
         );
-        // No plan at all: neither a file nor stdin.
+        // No ask at all: neither a file nor stdin.
         expect((yield* run(world, laptop, ['ask'])).exitCode).toBe(2);
         expect(
           (yield* run(world, laptop, ['ask', `${laptop.configHome}/none.json`])).exitCode,
@@ -1568,7 +1653,7 @@ layer(NodeServices.layer)(it => {
           `${here}/wait`,
           JSON.stringify({ reason: 'r', ...reading('acme/app') }),
         );
-        expect((yield* run(world, laptop, ['ask', `${here}/wait`])).exitCode).toBe(0);
+        expect((yield* run(world, laptop, ['ask', '--no-wait', `${here}/wait`])).exitCode).toBe(0);
         // A key asks for nothing itself.
         const { agent } = yield* askApproved(world, owner, laptop, 'acme/app');
         const fromKey = yield* ask(world, agent, reading('acme/app'));
@@ -1593,7 +1678,7 @@ layer(NodeServices.layer)(it => {
               },
             ],
           });
-          const keyId = (yield* Effect.promise(() => owner.plan(id))).steps[0]?.key?.id ?? '';
+          const keyId = (yield* Effect.promise(() => owner.ask(id))).steps[0]?.key?.id ?? '';
           expect(yield* fs.exists(`${keysOf(laptop)}/${keyId}`)).toBe(true);
 
           yield* Effect.promise(async () => {
@@ -1605,20 +1690,20 @@ layer(NodeServices.layer)(it => {
           expect(rejected.exitCode).toBe(4);
           expect(rejected.lines).toEqual([
             {
-              plan: id,
+              ask: id,
               index: 0,
               type: 'access',
               status: 'rejected',
               note: 'Use the staging key instead.',
             },
-            { plan: id, index: 1, type: 'secrets', status: 'approved' },
+            { ask: id, index: 1, type: 'secrets', status: 'approved' },
           ]);
           expect(rejected.error.message).toContain(
             'Step 0 did not go through: the owner rejected it',
           );
           expect(yield* fs.exists(`${keysOf(laptop)}/${keyId}`)).toBe(false);
           // What it printed is kept: it waits for nothing more and says the same again.
-          expect(yield* fs.exists(`${keysOf(laptop)}/${id}.plan`)).toBe(false);
+          expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(false);
         }),
     );
 
@@ -1643,7 +1728,7 @@ layer(NodeServices.layer)(it => {
         expect(early.error.message).toContain(`baymutt ask wait ${id}`);
         const [first, second] = early.lines;
         expect(first).toMatchObject({ index: 0, status: 'approved', keyFile: expect.any(String) });
-        expect(second).toEqual({ plan: id, index: 1, type: 'access', status: 'pending' });
+        expect(second).toEqual({ ask: id, index: 1, type: 'access', status: 'pending' });
         expect(yield* load(world, withKeyFile(laptop, first.keyFile), 'acme/app')).toEqual({
           API_KEY: 'the value',
         });
@@ -1654,9 +1739,394 @@ layer(NodeServices.layer)(it => {
         // The first is printed as it ended, not finished again.
         expect(done.lines[0]).toEqual(first);
         expect(done.lines[1]).toMatchObject({ index: 1, status: 'approved' });
-        expect(yield* fs.exists(`${keysOf(laptop)}/${id}.plan`)).toBe(false);
+        expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(false);
         expect((yield* wait(world, laptop, id, '--timeout', 'soon')).exitCode).not.toBe(0);
       }),
+    );
+
+    it.effect(
+      'waits by default: it prints the link first, goes on running, and ends as `ask wait` does',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { world, owner, laptop } = yield* paired;
+          yield* Effect.promise(async () => {
+            await owner.createEnvironment('acme/app');
+            await owner.set('acme/app', 'API_KEY', 'the value');
+          });
+          const keys = JSON.stringify({
+            reason: 'run the tests',
+            steps: [reading('acme/app').steps[0], reading('acme/app').steps[0]],
+          });
+          yield* running(world, laptop, { args: ['ask'], stdin: keys }, job =>
+            Effect.gen(function* () {
+              // The link and what to do with it come first, while the command is still running.
+              yield* job.until(Effect.map(job.printed, lines => lines.length > 0));
+              const [first] = yield* job.printed;
+              const sent = JSON.parse(String(first));
+              expect(job.fiber.pollUnsafe()).toBeUndefined();
+              expect(sent).toMatchObject({
+                status: 'pending',
+                url: `${ORIGIN}/orgs/acme/ask/${sent.id}`,
+                steps: [
+                  { index: 0, status: 'pending' },
+                  { index: 1, status: 'pending' },
+                ],
+              });
+              expect(sent.next).toMatch(
+                /link now.*last line.*still running.*background.*ask wait/s,
+              );
+              expect(sent.next).toContain(`baymutt ask wait ${sent.id}`);
+              expect(yield* job.printed).toHaveLength(1);
+
+              // The owner answers one step: it is finished and printed at once, key and all, while
+              // the command runs on for the other.
+              yield* Effect.promise(() => owner.approveStep(sent.id, 0));
+              yield* job.until(Effect.map(job.printed, lines => lines.length > 1));
+              expect(job.fiber.pollUnsafe()).toBeUndefined();
+              const [, early] = (yield* job.printed).map(line => JSON.parse(String(line)));
+              expect(early).toMatchObject({ ask: sent.id, index: 0, status: 'approved' });
+              expect(yield* load(world, withKeyFile(laptop, early.keyFile), 'acme/app')).toEqual({
+                API_KEY: 'the value',
+              });
+
+              // Every step answered: the exit code is `ask wait`'s.
+              yield* Effect.promise(() => owner.approveStep(sent.id, 1));
+              yield* job.until(Effect.sync(() => job.fiber.pollUnsafe() !== undefined));
+              const done = yield* job.result;
+              expect(done.exitCode).toBe(0);
+              const printed = (yield* job.printed).map(line => JSON.parse(String(line)));
+              expect(printed.slice(1)).toMatchObject([
+                { ask: sent.id, index: 0, type: 'access', status: 'approved' },
+                { ask: sent.id, index: 1, type: 'access', status: 'approved' },
+              ]);
+              expect(yield* fs.exists(`${keysOf(laptop)}/${sent.id}.ask`)).toBe(false);
+            }),
+          );
+        }),
+    );
+
+    it.effect('exits as `ask wait` does when a step is rejected, or still waits at --timeout', () =>
+      Effect.gen(function* () {
+        const { world, owner, laptop } = yield* paired;
+        yield* Effect.promise(() => owner.createEnvironment('acme/app'));
+        const stdin = JSON.stringify({ reason: 'r', ...reading('acme/app') });
+
+        const id = yield* running(
+          world,
+          laptop,
+          { args: ['ask', '--timeout', '30s'], stdin },
+          job =>
+            Effect.gen(function* () {
+              yield* job.until(Effect.sync(() => job.fiber.pollUnsafe() !== undefined));
+              const unanswered = yield* job.result;
+              expect(unanswered.exitCode).toBe(9);
+              expect(unanswered.error.message).toContain('baymutt ask wait');
+              const [sent] = yield* job.printed;
+              expect(JSON.parse(String(sent)).status).toBe('pending');
+              return JSON.parse(String(sent)).id as string;
+            }),
+        );
+        yield* Effect.promise(() => owner.rejectStep(id, 0, { note: 'No.' }));
+        const rejected = yield* wait(world, laptop, id);
+        expect(rejected.exitCode).toBe(4);
+
+        // Asked and answered before it ran: nothing waits for the owner, and it ends at once.
+        const held = yield* askApproved(world, owner, laptop, 'acme/app');
+        const give = yield* run(
+          world,
+          laptop,
+          ['ask'],
+          JSON.stringify({
+            reason: 'r',
+            steps: [{ type: 'change', key: held.id, giveBack: ['acme/app'] }],
+          }),
+        );
+        expect(give.exitCode).toBe(0);
+        expect(give.stdout).toContain('Nothing waits for the owner');
+      }),
+    );
+
+    it.effect('loses nothing when it is killed: `ask wait` still delivers every answer', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, owner, laptop } = yield* paired;
+        yield* Effect.promise(async () => {
+          await owner.createEnvironment('acme/app');
+          await owner.set('acme/app', 'API_KEY', 'the value');
+        });
+        const stdin = JSON.stringify({
+          reason: 'r',
+          steps: [reading('acme/app').steps[0], reading('acme/app').steps[0]],
+        });
+        const id = yield* running(world, laptop, { args: ['ask'], stdin }, job =>
+          Effect.gen(function* () {
+            yield* job.until(Effect.map(job.printed, lines => lines.length > 0));
+            const [first] = yield* job.printed;
+            const { id: askId } = JSON.parse(String(first));
+            // The harness kills the command while it waits for the owner.
+            yield* job.idle;
+            yield* Fiber.interrupt(job.fiber);
+            expect(yield* job.printed).toHaveLength(1);
+            return askId as string;
+          }),
+        );
+
+        // What it kept is all still here: the record, and each key's file.
+        const keyIds = (yield* Effect.promise(() => owner.ask(id))).steps.map(
+          step => step.key?.id ?? '',
+        );
+        expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(true);
+        for (const keyId of keyIds)
+          expect(yield* fs.exists(`${keysOf(laptop)}/${keyId}`)).toBe(true);
+        // And the ask is still the owner's to answer.
+        expect((yield* Effect.promise(() => owner.ask(id))).steps.map(step => step.status)).toEqual(
+          ['pending', 'pending'],
+        );
+
+        yield* Effect.promise(async () => {
+          await owner.approveStep(id, 0);
+          await owner.approveStep(id, 1);
+        });
+        const resumed = yield* wait(world, laptop, id);
+        expect(resumed.exitCode).toBe(0);
+        expect(resumed.lines.map(({ index, status }) => ({ index, status }))).toEqual([
+          { index: 0, status: 'approved' },
+          { index: 1, status: 'approved' },
+        ]);
+        for (const line of resumed.lines) {
+          expect(yield* load(world, withKeyFile(laptop, line.keyFile), 'acme/app')).toEqual({
+            API_KEY: 'the value',
+          });
+        }
+        expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(false);
+      }),
+    );
+
+    it.effect('loses nothing when it is killed handing a key to a command', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, owner, laptop } = yield* paired;
+        const here = yield* tempDirectory;
+        yield* Effect.promise(() => owner.createEnvironment('acme/app'));
+        const [first, second, marker] = ['first', 'second', 'marker'].map(
+          name => `${here}/${name}`,
+        );
+        // The second command hangs the first time it runs, as a `gh` on a bad connection would.
+        const stdin = JSON.stringify({
+          reason: 'r',
+          steps: [
+            { type: 'access', read: ['acme/app'], command: ['sh', '-c', 'cat > "$0"', first] },
+            {
+              type: 'access',
+              read: ['acme/app'],
+              command: [
+                'sh',
+                '-c',
+                'cat > "$0"; if [ -e "$1" ]; then exit 0; fi; touch "$1"; exec sleep 60',
+                second,
+                marker,
+              ],
+            },
+          ],
+        });
+        const id = yield* running(world, laptop, { args: ['ask'], stdin }, job =>
+          Effect.gen(function* () {
+            yield* job.until(Effect.map(job.printed, lines => lines.length > 0));
+            const [sent] = yield* job.printed;
+            const { id: askId } = JSON.parse(String(sent));
+            yield* Effect.promise(async () => {
+              await owner.approveStep(askId, 0);
+              await owner.approveStep(askId, 1);
+            });
+            // Step 0's key is in its command; the command of step 1 is stuck. Kill the command there.
+            yield* job.until(Effect.sync(() => existsSync(marker ?? '')));
+            yield* Fiber.interrupt(job.fiber);
+            return askId as string;
+          }),
+        );
+        expect(yield* fs.readFileString(first ?? '')).toMatch(/^baymutt_key_/);
+
+        // The wait that follows prints the step already handed out as it ended, hands out the
+        // other, and does not give the first command its key twice.
+        const firstKey = yield* fs.readFileString(first ?? '');
+        yield* fs.remove(first ?? '');
+        const resumed = yield* wait(world, laptop, id);
+        expect(resumed.exitCode).toBe(0);
+        expect(resumed.lines).toMatchObject([
+          { index: 0, status: 'approved', piped: true },
+          { index: 1, status: 'approved', piped: true },
+        ]);
+        expect(yield* fs.exists(first ?? '')).toBe(false);
+        expect(yield* fs.readFileString(second ?? '')).toMatch(/^baymutt_key_/);
+        expect(firstKey).not.toBe('');
+        expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(false);
+      }),
+    );
+
+    it.effect(
+      'a second wait on an ask is refused while one runs, so a command gets its key once',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { world, owner, laptop } = yield* paired;
+          const here = yield* tempDirectory;
+          const received = `${here}/received`;
+          yield* Effect.promise(() => owner.createEnvironment('acme/app'));
+          const stdin = JSON.stringify({
+            reason: 'r',
+            steps: [
+              {
+                type: 'access',
+                read: ['acme/app'],
+                command: ['sh', '-c', 'cat >> "$0"', received],
+              },
+            ],
+          });
+          yield* running(world, laptop, { args: ['ask'], stdin }, job =>
+            Effect.gen(function* () {
+              yield* job.until(Effect.map(job.printed, lines => lines.length > 0));
+              const { id } = JSON.parse(String((yield* job.printed)[0]));
+              // The agent runs `ask wait` from habit while `ask` runs.
+              const second = yield* wait(world, laptop, id);
+              expect(second.exitCode).toBe(6);
+              expect(second.error.message).toContain('already waiting on ask');
+              expect(second.error.message).toContain(`${keysOf(laptop)}/${id}.lock`);
+              expect(second.stdout).toBe('');
+              expect(yield* fs.exists(`${keysOf(laptop)}/${id}.lock`)).toBe(true);
+
+              yield* Effect.promise(() => owner.approveStep(id, 0));
+              yield* job.until(Effect.sync(() => job.fiber.pollUnsafe() !== undefined));
+              expect((yield* job.result).exitCode).toBe(0);
+              expect((yield* fs.readFileString(received)).match(/baymutt_key_/g)).toHaveLength(1);
+              // Held for the wait only.
+              expect(yield* fs.exists(`${keysOf(laptop)}/${id}.lock`)).toBe(false);
+            }),
+          );
+        }),
+    );
+
+    it.effect(
+      'takes over the lock of a wait that was killed, and refuses one a live process holds',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { world, owner, laptop } = yield* paired;
+          yield* Effect.promise(() => owner.createEnvironment('acme/app'));
+          const id = yield* asked(world, laptop, reading('acme/app'));
+          const lock = `${keysOf(laptop)}/${id}.lock`;
+
+          // A pid nothing runs: the process that held it is gone.
+          const gone = spawnSync(process.execPath, ['-e', '0']).pid;
+          yield* fs.writeFileString(lock, `${gone}\n`);
+          const taken = yield* wait(world, laptop, id, '--timeout', '0');
+          expect(taken.exitCode).toBe(9);
+          expect(yield* fs.exists(lock)).toBe(false);
+
+          // A pid something runs.
+          yield* fs.writeFileString(lock, `${process.pid}\n`);
+          const refused = yield* wait(world, laptop, id, '--timeout', '0');
+          expect(refused.exitCode).toBe(6);
+          expect(refused.error.message).toContain(`pid ${process.pid}`);
+          expect(yield* fs.exists(lock)).toBe(true);
+
+          // A lock a kill left empty names no process.
+          yield* fs.writeFileString(lock, '');
+          expect((yield* wait(world, laptop, id, '--timeout', '0')).exitCode).toBe(9);
+        }),
+    );
+
+    it.effect('keeps the record whole when writing it fails halfway', () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { world, owner, laptop } = yield* paired;
+        yield* Effect.promise(() => owner.createEnvironment('acme/app'));
+        const id = yield* asked(world, laptop, reading('acme/app'));
+        const record = `${keysOf(laptop)}/${id}.ask`;
+        const before = yield* fs.readFileString(record);
+        const kept = JSON.parse(before);
+
+        // A disk that fills after half of what it is given.
+        const filling = {
+          ...fs,
+          writeFileString: (path: string, data: string) =>
+            Effect.andThen(
+              fs.writeFileString(path, data.slice(0, data.length / 2)),
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: 'Unknown',
+                  module: 'FileSystem',
+                  method: 'writeFileString',
+                  description: 'no space left on device',
+                }),
+              ),
+            ),
+        };
+        const exit = yield* withSeat(
+          world,
+          laptop,
+          keepAsk({
+            ...kept,
+            steps: kept.steps.map((step: object) => ({ ...step, ended: {} })),
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, filling),
+            Effect.provide(Settings.layer),
+            Effect.exit,
+          ),
+        );
+        expect(Exit.isFailure(exit)).toBe(true);
+        // The record is as it was, it still decodes, and nothing was left beside it.
+        expect(yield* fs.readFileString(record)).toBe(before);
+        expect(
+          (yield* fs.readDirectory(keysOf(laptop))).filter(name => name.endsWith('.tmp')),
+        ).toEqual([]);
+        expect((yield* wait(world, laptop, id, '--timeout', '0')).exitCode).toBe(9);
+      }),
+    );
+
+    it.effect(
+      'ends a step whose command failed: a later wait tells the same failure, and the record goes',
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { world, owner, laptop } = yield* paired;
+          yield* Effect.promise(() => owner.createEnvironment('acme/app'));
+          const id = yield* asked(world, laptop, {
+            steps: [
+              {
+                type: 'access',
+                read: ['acme/app'],
+                command: ['sh', '-c', 'cat > /dev/null; exit 3'],
+              },
+              { type: 'access', read: ['acme/app'] },
+            ],
+          });
+          const keyId = (yield* Effect.promise(() => owner.ask(id))).steps[0]?.key?.id ?? '';
+          yield* Effect.promise(() => owner.approveStep(id, 0));
+
+          const first = yield* wait(world, laptop, id, '--timeout', '0');
+          expect(first.exitCode).toBe(9);
+          expect(first.lines[0]).toMatchObject({
+            index: 0,
+            status: 'approved',
+            error: { message: expect.stringContaining('exited 3') },
+          });
+          // The key was revoked and forgotten; the step is over.
+          expect(yield* fs.exists(`${keysOf(laptop)}/${keyId}`)).toBe(false);
+
+          yield* Effect.promise(() => owner.approveStep(id, 1));
+          const later = yield* wait(world, laptop, id);
+          expect(later.lines[0]).toEqual(first.lines[0]);
+          expect(later.lines[1]).toMatchObject({
+            index: 1,
+            status: 'approved',
+            keyFile: expect.any(String),
+          });
+          // The exit code is the failure's, not "the key is not on this computer".
+          expect(later.exitCode).toBe(2);
+          expect(later.error.message).toContain('exited 3');
+          expect(yield* fs.exists(`${keysOf(laptop)}/${id}.ask`)).toBe(false);
+        }),
     );
 
     it.effect('removes the key of a step nobody answered within the hour', () =>
@@ -1665,9 +2135,9 @@ layer(NodeServices.layer)(it => {
         const { world, owner, laptop } = yield* paired;
         yield* Effect.promise(() => owner.createEnvironment('acme/app'));
         const id = yield* asked(world, laptop, reading('acme/app'));
-        const keyId = (yield* Effect.promise(() => owner.plan(id))).steps[0]?.key?.id ?? '';
+        const keyId = (yield* Effect.promise(() => owner.ask(id))).steps[0]?.key?.id ?? '';
         world.sqlite
-          .prepare('UPDATE plan SET created_at = created_at - ? WHERE id = ?')
+          .prepare('UPDATE ask SET created_at = created_at - ? WHERE id = ?')
           .run(3600 * 1000, id);
 
         const expired = yield* wait(world, laptop, id);
@@ -1680,7 +2150,7 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('withdraws a plan with `ask cancel`, and removes its keys', () =>
+    it.effect('withdraws an ask with `ask cancel`, and removes its keys', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, owner, laptop } = yield* paired;
@@ -1691,8 +2161,8 @@ layer(NodeServices.layer)(it => {
             { type: 'access', read: ['acme/app'] },
           ],
         });
-        const plan = yield* Effect.promise(() => owner.plan(id));
-        const [answered, waiting] = plan.steps.map(step => step.key?.id ?? '');
+        const ask = yield* Effect.promise(() => owner.ask(id));
+        const [answered, waiting] = ask.steps.map(step => step.key?.id ?? '');
         yield* Effect.promise(() => owner.approveStep(id, 0));
 
         const cancelled = yield* run(world, laptop, ['ask', 'cancel', id]);
@@ -1741,7 +2211,7 @@ layer(NodeServices.layer)(it => {
         // The store shows the rejection's note beside the approval.
         world.sqlite
           .prepare(
-            'UPDATE plan_step SET note = (SELECT note FROM plan_step WHERE plan_id = ? AND position = 0) WHERE plan_id = ? AND position = 1',
+            'UPDATE ask_step SET note = (SELECT note FROM ask_step WHERE ask_id = ? AND position = 0) WHERE ask_id = ? AND position = 1',
           )
           .run(id, id);
 
@@ -1766,13 +2236,13 @@ layer(NodeServices.layer)(it => {
             { type: 'access', read: ['acme/app'] },
           ],
         });
-        const keyIds = (yield* Effect.promise(() => owner.plan(id))).steps.map(
+        const keyIds = (yield* Effect.promise(() => owner.ask(id))).steps.map(
           step => step.key?.id ?? '',
         );
         // The store marks both approved without the owner: one holds nothing, the other a copy
         // of the real key's grant, whose proof and wrap were made for another key.
         world.sqlite
-          .prepare(`UPDATE plan_step SET status = 'approved', resolved_at = 1 WHERE plan_id = ?`)
+          .prepare(`UPDATE ask_step SET status = 'approved', resolved_at = 1 WHERE ask_id = ?`)
           .run(id);
         world.sqlite
           .prepare(
@@ -1795,7 +2265,7 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('refuses an answer about another plan, or with other steps, touching no file', () =>
+    it.effect('refuses an answer about another ask, or with other steps, touching no file', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, owner, laptop } = yield* paired;
@@ -1809,11 +2279,11 @@ layer(NodeServices.layer)(it => {
             return world.fetch(new Request(rewrite(request.url), request));
           },
         });
-        // About another plan.
-        const swapped = answeringWith(url => url.replace(`/plans/${waiting}`, `/plans/${other}`));
+        // About another ask.
+        const swapped = answeringWith(url => url.replace(`/asks/${waiting}`, `/asks/${other}`));
         expect(yield* wait(swapped, laptop, waiting)).toMatchObject({ exitCode: 8, stdout: '' });
         expect((yield* run(swapped, laptop, ['ask', 'cancel', waiting])).exitCode).toBe(8);
-        // The same plan, with a step whose key is another's.
+        // The same ask, with a step whose key is another's.
         const forged: TestWorld = {
           ...world,
           fetch: async (input, init) => {
@@ -1832,9 +2302,9 @@ layer(NodeServices.layer)(it => {
         };
         expect((yield* wait(forged, laptop, waiting)).exitCode).toBe(8);
 
-        const keyId = (yield* Effect.promise(() => owner.plan(waiting))).steps[0]?.key?.id ?? '';
+        const keyId = (yield* Effect.promise(() => owner.ask(waiting))).steps[0]?.key?.id ?? '';
         expect(yield* fs.exists(`${keysOf(laptop)}/${keyId}`)).toBe(true);
-        expect((yield* Effect.promise(() => owner.plan(waiting))).steps[0]?.status).toBe('pending');
+        expect((yield* Effect.promise(() => owner.ask(waiting))).steps[0]?.status).toBe('pending');
       }),
     );
 
@@ -1856,7 +2326,7 @@ layer(NodeServices.layer)(it => {
     );
 
     it.effect(
-      'keeps what a plan needs when the store’s answer is lost, and removes it when the store refuses',
+      'keeps what an ask needs when the store’s answer is lost, and removes it when the store refuses',
       () =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
@@ -1867,12 +2337,12 @@ layer(NodeServices.layer)(it => {
             fetch: async (input, init) => {
               const request = new Request(input, init);
               const isCreate =
-                request.method === 'POST' && new URL(request.url).pathname === '/api/v1/plans';
+                request.method === 'POST' && new URL(request.url).pathname === '/api/v1/asks';
               return isCreate ? answer(await world.fetch(request)) : world.fetch(request);
             },
           });
 
-          // The store made the plan, and its answer never arrived.
+          // The store made the ask, and its answer never arrived.
           const lost = yield* ask(
             creating(() => {
               throw new TypeError('fetch failed');
@@ -1882,12 +2352,12 @@ layer(NodeServices.layer)(it => {
           );
           expect(lost.exitCode).toBe(7);
           expect(lost.error.message).toContain('may have been made');
-          const id = /Plan ([0-9a-f-]{36})/.exec(lost.error.message)?.[1] ?? '';
+          const id = /Ask ([0-9a-f-]{36})/.exec(lost.error.message)?.[1] ?? '';
           expect(lost.error.message).toContain(`baymutt ask wait ${id}`);
           yield* Effect.promise(() => owner.approveStep(id, 0));
           expect((yield* wait(world, laptop, id)).lines[0]).toMatchObject({ status: 'approved' });
 
-          // The store said no in its own words: there is no plan, so nothing is kept for one.
+          // The store said no in its own words: there is no ask, so nothing is kept for one.
           const before = yield* fs.readDirectory(keysOf(laptop));
           const refused = yield* ask(
             creating(
@@ -1895,7 +2365,7 @@ layer(NodeServices.layer)(it => {
                 new Response(
                   JSON.stringify({
                     code: 'LimitReachedError',
-                    message: 'Up to 20 plans wait for the owner in one org at once.',
+                    message: 'Up to 20 asks wait for the owner in one org at once.',
                     limit: 20,
                   }),
                   { status: 403, headers: { 'content-type': 'application/json' } },
@@ -1913,8 +2383,7 @@ layer(NodeServices.layer)(it => {
               ...world,
               fetch: (input, init) => {
                 const request = new Request(input, init);
-                return request.method === 'POST' &&
-                  new URL(request.url).pathname === '/api/v1/plans'
+                return request.method === 'POST' && new URL(request.url).pathname === '/api/v1/asks'
                   ? Promise.reject(new TypeError('fetch failed'))
                   : world.fetch(request);
               },
@@ -1922,7 +2391,7 @@ layer(NodeServices.layer)(it => {
             laptop,
             reading('acme/app'),
           );
-          const neverId = /Plan ([0-9a-f-]{36})/.exec(never.error.message)?.[1] ?? '';
+          const neverId = /Ask ([0-9a-f-]{36})/.exec(never.error.message)?.[1] ?? '';
           const gone = yield* wait(world, laptop, neverId);
           expect(gone.exitCode).toBe(5);
           expect(gone.error.message).toContain('never reached the store');
@@ -1936,14 +2405,14 @@ layer(NodeServices.layer)(it => {
         const { world, owner, laptop } = yield* paired;
         yield* Effect.promise(() => owner.createEnvironment('acme/app'));
         const keyOf = Effect.fnUntraced(function* (id: string) {
-          return (yield* Effect.promise(() => owner.plan(id))).steps[0]?.key?.id ?? '';
+          return (yield* Effect.promise(() => owner.ask(id))).steps[0]?.key?.id ?? '';
         });
         const waiting = yield* keyOf(yield* asked(world, laptop, reading('acme/app')));
         const revoked = yield* askApproved(world, owner, laptop, 'acme/app');
         yield* run(world, laptop, ['key', 'revoke', revoked.id]);
         const stray = crypto.randomUUID();
         yield* fs.writeFileString(`${keysOf(laptop)}/${stray}`, 'baymutt_key_stray\n');
-        // A file this young may be an ask in another terminal that has not sent its plan yet.
+        // A file this young may be an ask in another terminal that has not sent its ask yet.
         yield* asked(world, laptop, reading('acme/app'));
         expect(yield* fs.exists(`${keysOf(laptop)}/${stray}`)).toBe(true);
 
@@ -2038,13 +2507,12 @@ layer(NodeServices.layer)(it => {
           await owner.createEnvironment('globex/app');
         });
         const held = yield* askApproved(world, owner, laptop, 'acme/app');
-        const before = (yield* Effect.promise(() => owner.plan(held.plan))).steps[0]?.key
-          ?.expiresAt;
+        const before = (yield* Effect.promise(() => owner.ask(held.ask))).steps[0]?.key?.expiresAt;
 
         const id = yield* asked(world, laptop, {
           steps: [{ type: 'change', key: held.id, expires: '1d' }],
         });
-        expect((yield* Effect.promise(() => owner.plan(id))).org.slug).toBe('acme');
+        expect((yield* Effect.promise(() => owner.ask(id))).org.slug).toBe('acme');
         const end = Date.now() + 24 * 3600 * 1000;
         yield* Effect.promise(() => owner.approveStep(id, 0, { expiresAt: end }));
         const changed = yield* wait(world, laptop, id);
@@ -2081,15 +2549,15 @@ layer(NodeServices.layer)(it => {
         });
         expect(across.exitCode).toBe(2);
         expect(across.error.message).toContain(
-          'steps[1].key: a plan asks in one org, and this one changes keys of acme and globex',
+          'steps[1].key: an ask is for one org, and this one changes keys of acme and globex',
         );
         const nothing = yield* ask(world, laptop, { steps: [{ type: 'change', key: held.id }] });
         expect(nothing.exitCode).toBe(2);
         expect(nothing.error.message).toContain('steps[0]: a `change` step asks for something');
         expect(
           world.sqlite
-            .prepare('SELECT COUNT(*) AS n FROM plan WHERE id NOT IN (?, ?, ?)')
-            .get(id, held.plan, globex.plan),
+            .prepare('SELECT COUNT(*) AS n FROM ask WHERE id NOT IN (?, ?, ?)')
+            .get(id, held.ask, globex.ask),
         ).toEqual({ n: 0 });
       }),
     );
@@ -2223,7 +2691,7 @@ layer(NodeServices.layer)(it => {
         expect(
           (yield* run(world, laptop, ['secret', 'list', 'acme/app/production'])).json.secrets,
         ).toMatchObject([{ name: 'API_KEY' }]);
-        // A plan waits for the owner to seal the org.
+        // An ask waits for the owner to seal the org.
         const asking = yield* ask(world, laptop, reading('acme/app/production'));
         expect(asking.exitCode).toBe(6);
         expect(asking.error.message).toContain('not sealed yet');
@@ -2395,7 +2863,7 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('logout revokes this login and the keys its plans made, and forgets their keys', () =>
+    it.effect('logout revokes this login and the keys its asks made, and forgets their keys', () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const { world, owner, laptop, loginId } = yield* paired;
@@ -2452,7 +2920,7 @@ layer(NodeServices.layer)(it => {
         expect(out.json.revoked).toHaveLength(2);
         expect((yield* run(world, laptop, ['auth', 'whoami'])).exitCode).toBe(3);
         expect((yield* run(world, agent, ['auth', 'whoami'])).exitCode).toBe(3);
-        // The keys its plans made are gone from here too.
+        // The keys its asks made are gone from here too.
         expect(yield* fs.exists(`${laptop.configHome}/baymutt/localhost-5183/keys`)).toBe(false);
         const { credentials } = yield* Effect.promise(() =>
           owner.api<{ credentials: unknown[] }>('GET', '/credentials'),
@@ -2466,7 +2934,7 @@ layer(NodeServices.layer)(it => {
       }),
     );
 
-    it.effect('a key from a plan stops when it expires, with its own error', () =>
+    it.effect('a key from an ask stops when it expires, with its own error', () =>
       Effect.gen(function* () {
         const { world, owner, laptop } = yield* paired;
         yield* Effect.promise(() => owner.createEnvironment('acme/app/production'));

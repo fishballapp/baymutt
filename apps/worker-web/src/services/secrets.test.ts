@@ -17,7 +17,7 @@ const setup = async () => {
 };
 
 describe('writing', () => {
-  it('is the owner’s alone: a key that reads and a CLI login are told to ask in a plan', async () => {
+  it('is the owner’s alone: a key that reads and a CLI login are told to ask in an ask', async () => {
     const { w, environmentId, reader, login, write, apiKey } = await setup();
 
     for (const headers of [reader.headers, login.headers]) {

@@ -1,29 +1,29 @@
-// What one step of a plan names, in `.grants`, and the sentences around its answer: what approving
-// makes, what stays after, and why it waits or is blocked. The page (pages/ask-plan.tsx)
+// What one step of an ask names, in `.grants`, and the sentences around its answer: what approving
+// makes, what stays after, and why it waits or is blocked. The page (pages/ask.tsx)
 // composes these around the step's answer.
 
-import type { Plan } from '@baymutt/api';
+import type { Ask } from '@baymutt/api';
 import { EyeIcon, EyeSlashIcon } from '@phosphor-icons/react';
 import { Fragment, type ReactNode } from 'react';
-import type { OpenedPlan, OpenedPlanStep, OpenedSecretItem } from '../../lib/data.ts';
+import { type Blocked, isValueItem, stepsWords, stepTitle } from '../../lib/asks.ts';
+import type { OpenedAsk, OpenedAskStep, OpenedSecretItem } from '../../lib/data.ts';
 import { bytes, expiryWords } from '../../lib/format.ts';
-import { type Blocked, isValueItem, stepsWords, stepTitle } from '../../lib/plans.ts';
 import { Field, TextArea } from '../ui/field.tsx';
 import { IconButton } from '../ui/icon-button.tsx';
 import { RelativeTime } from '../ui/page.tsx';
 import { useSecretValue } from '../ui/secret-value.tsx';
 import { Address, Code, SealedName } from '../ui/text.tsx';
 
-type Step<T extends OpenedPlanStep['type']> = Extract<OpenedPlanStep, { readonly type: T }>;
+type Step<T extends OpenedAskStep['type']> = Extract<OpenedAskStep, { readonly type: T }>;
 
-/** Who asks, and for what when the plan is one step: the ask's first line, and a Plans row's. */
-export const AskWords = ({ plan }: { readonly plan: OpenedPlan | Plan }) => {
-  const maker = <b>{plan.maker.name}</b>;
-  const [only] = plan.steps;
-  if (plan.steps.length > 1 || only === undefined) {
+/** Who asks, and for what when the ask is one step: the ask's first line, and an Asks row's. */
+export const AskWords = ({ ask }: { readonly ask: OpenedAsk | Ask }) => {
+  const maker = <b>{ask.maker.name}</b>;
+  const [only] = ask.steps;
+  if (ask.steps.length > 1 || only === undefined) {
     return (
       <>
-        {maker} asks you to decide {plan.steps.length} steps
+        {maker} asks you to decide {ask.steps.length} steps
       </>
     );
   }
@@ -67,10 +67,10 @@ export const AskWords = ({ plan }: { readonly plan: OpenedPlan | Plan }) => {
   );
 };
 
-/** The step of the plan that creates or restores each environment, by environment id. */
-export const makersOf = (plan: OpenedPlan): ReadonlyMap<string, Step<'environments'>> =>
+/** The step of the ask that creates or restores each environment, by environment id. */
+export const makersOf = (ask: OpenedAsk): ReadonlyMap<string, Step<'environments'>> =>
   new Map(
-    plan.steps.flatMap(step =>
+    ask.steps.flatMap(step =>
       step.type === 'environments'
         ? step.items.filter(({ op }) => op !== 'delete').map(item => [item.environmentId, step])
         : [],
@@ -83,7 +83,7 @@ export const makersOf = (plan: OpenedPlan): ReadonlyMap<string, Step<'environmen
  */
 const madeBy = (
   makers: ReadonlyMap<string, Step<'environments'>>,
-  step: OpenedPlanStep,
+  step: OpenedAskStep,
   environmentId: string,
 ): string | null => {
   const maker = makers.get(environmentId);
@@ -107,7 +107,7 @@ const LOST = {
   rejected: (which: string) => `${which} was rejected`,
   expired: (which: string) => `${which} expired`,
   cancelled: (which: string) => `${which} was withdrawn`,
-} as const satisfies Record<OpenedPlanStep['status'], ((which: string) => string) | null>;
+} as const satisfies Record<OpenedAskStep['status'], ((which: string) => string) | null>;
 
 /** A step being answered: what the owner pasted so far, by the item's place, and how to paste more. */
 export type Answering = {
@@ -275,21 +275,21 @@ const ENVIRONMENT_OP_WORDS = {
  * to see, to paste, or what happens to it.
  */
 export const StepGrants = ({
-  plan,
+  ask,
   step,
   makers,
   answer,
   isOnly,
 }: {
-  readonly plan: OpenedPlan;
-  readonly step: OpenedPlanStep;
+  readonly ask: OpenedAsk;
+  readonly step: OpenedAskStep;
   readonly makers: ReadonlyMap<string, Step<'environments'>>;
   /** Null for a step already answered: its values show as what they were to be. */
   readonly answer: Answering | null;
-  /** The plan's only step, which reads as a decision of its own: a key's reads as "read" lines. */
+  /** The ask's only step, which reads as a decision of its own: a key's reads as "read" lines. */
   readonly isOnly: boolean;
 }) => {
-  const orgSlug = plan.org.slug;
+  const orgSlug = ask.org.slug;
   const mark = (environmentId: string) => madeBy(makers, step, environmentId);
   if (step.type === 'environments') {
     const isMixed = new Set(step.items.map(({ op }) => op)).size > 1;
@@ -386,7 +386,7 @@ export const StepGrants = ({
 };
 
 /** `.makes`: what approving makes or does, when that is not already plain from the step. */
-export const makesOf = (step: OpenedPlanStep, makerName: string): ReactNode => {
+export const makesOf = (step: OpenedAskStep, makerName: string): ReactNode => {
   if (step.type === 'access') {
     if (step.command === null) {
       return <>The new key will be given to {makerName}. It can only read.</>;
@@ -427,7 +427,7 @@ export const makesOf = (step: OpenedPlanStep, makerName: string): ReactNode => {
 
 /** `.then` once the step can be approved: what stays after it. */
 export const thenOf = (
-  step: OpenedPlanStep,
+  step: OpenedAskStep,
   { isNever, givesBackAll }: { readonly isNever: boolean; readonly givesBackAll: boolean },
 ): string | null => {
   const never = isNever ? ' This key never expires.' : '';
@@ -459,13 +459,13 @@ const pastedWords = (count: number) => {
  * then for the values still to paste. Null when nothing holds it.
  */
 export const waitsOf = ({
-  plan,
+  ask,
   step,
   makers,
   pasted,
 }: {
-  readonly plan: OpenedPlan;
-  readonly step: OpenedPlanStep;
+  readonly ask: OpenedAsk;
+  readonly step: OpenedAskStep;
   readonly makers: ReadonlyMap<string, Step<'environments'>>;
   readonly pasted: ReadonlyMap<number, string>;
 }): ReactNode => {
@@ -497,7 +497,7 @@ export const waitsOf = ({
       ? `You can approve when ${which} is approved.`
       : `You can approve when ${which} are approved.`;
   }
-  const address = <Address orgSlug={plan.org.slug} name={only.name} />;
+  const address = <Address orgSlug={ask.org.slug} name={only.name} />;
   return only.op === 'restore' ? (
     <>
       You can approve when {which} restores {address}.
@@ -510,7 +510,7 @@ export const waitsOf = ({
 };
 
 /** Every environment a step names, by id. */
-const namesOf = (step: OpenedPlanStep): ReadonlyArray<string> => {
+const namesOf = (step: OpenedAskStep): ReadonlyArray<string> => {
   if (step.type === 'access') return step.read.map(({ environmentId }) => environmentId);
   if (step.type === 'change') {
     return [...step.read, ...step.giveBack].map(({ environmentId }) => environmentId);
@@ -520,13 +520,13 @@ const namesOf = (step: OpenedPlanStep): ReadonlyArray<string> => {
 
 /** `.warnline`: why a step is blocked. */
 export const blockedWords = ({
-  plan,
+  ask,
   step,
   makers,
   blocked,
 }: {
-  readonly plan: OpenedPlan;
-  readonly step: OpenedPlanStep;
+  readonly ask: OpenedAsk;
+  readonly step: OpenedAskStep;
   readonly makers: ReadonlyMap<string, Step<'environments'>>;
   readonly blocked: Exclude<Blocked, null>;
 }): ReactNode => {
@@ -534,7 +534,7 @@ export const blockedWords = ({
     return 'A name could not be opened by your vault. This step can only be rejected.';
   }
   if (blocked === 'unverified') {
-    return `Your vault could not verify that the proposed value came from ${plan.maker.name}. This step can only be rejected.`;
+    return `Your vault could not verify that the proposed value came from ${ask.maker.name}. This step can only be rejected.`;
   }
   const lost = namesOf(step).flatMap(environmentId => {
     const maker = makers.get(environmentId);
@@ -550,7 +550,7 @@ export const blockedWords = ({
   })[0];
   if (lost !== undefined) {
     const n = lost.maker.index + 1;
-    const address = <Address orgSlug={plan.org.slug} name={lost.name} />;
+    const address = <Address orgSlug={ask.org.slug} name={lost.name} />;
     if (lost.status === 'rejected') {
       return (
         <>
