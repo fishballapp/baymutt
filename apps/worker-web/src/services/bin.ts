@@ -56,7 +56,7 @@ export class Bin extends Context.Service<
       readonly environments: ReadonlyArray<BinEnvironment>;
       readonly secrets: ReadonlyArray<BinSecret>;
     }>;
-    /** An owner's: a deleted environment, its secrets, versions, grants and paste links, for good. */
+    /** An owner's: a deleted environment, its secrets, versions and grants, for good. */
     readonly purgeEnvironment: (request: {
       readonly actor: ActorIdentity;
       readonly id: string;
@@ -164,7 +164,6 @@ export class Bin extends Context.Service<
         sql`DELETE FROM secret WHERE environment_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM environment_grant WHERE environment_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM member_wrap WHERE environment_id = ${id} AND ${stillBinned}`,
-        sql`DELETE FROM paste_link WHERE environment_id = ${id} AND ${stillBinned}`,
         sql`DELETE FROM environment WHERE id = ${id} AND ${stillBinned}`,
       ];
 

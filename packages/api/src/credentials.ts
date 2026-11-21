@@ -1,6 +1,6 @@
-// CLI logins and service accounts: what the CLI acts as. The owner approves a CLI login, which
-// lists names and holds no environment; a service account comes from a request the owner approved
-// (`requests.ts`) and holds the environments that request named.
+// CLI logins and keys: what the CLI acts as. The owner approves a CLI login, which lists names and
+// holds no environment; a key comes from a plan's `access` step the owner approved (`plans.ts`) and
+// reads the environments the owner granted it. A key only reads.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -28,14 +28,13 @@ import {
 } from './fields.ts';
 import { Authenticated, Credentials, OwnerRequiredError } from './guards.ts';
 
+/** An environment a key reads: a grant is a read, the environment key wrapped to the key. */
 export const CredentialGrantSchema = Schema.Struct({
   environmentId: Schema.String,
   orgId: Schema.String,
   orgSlug: OrgSlugSchema,
   environmentName: StoredEnvironmentNameSchema,
   environmentSealedName: Schema.NullOr(SealedNameSchema),
-  canRead: Schema.Boolean,
-  canWrite: Schema.Boolean,
 }).annotate({ identifier: 'CredentialGrant' });
 
 /** The one org a key belongs to: it holds environments of this org only. */
@@ -105,14 +104,10 @@ export const ServiceAccountVouchersSchema = Schema.Struct({
 }).annotate({ identifier: 'ServiceAccountVouchers' });
 export type ServiceAccountVouchers = typeof ServiceAccountVouchersSchema.Type;
 
-/** The access a service account holds on one environment, as it is to become. */
+/** A read of one environment given to a key: the environment key wrapped to it, and the owner's proof of it. */
 export const SetAccessPayloadSchema = Schema.Struct({
-  canRead: Schema.Boolean,
-  canWrite: Schema.Boolean,
-  /** The environment key wrapped to it: needed when it gains read, and kept from before otherwise. */
-  readWrap: Schema.optionalKey(WrapSchema),
-  /** The granter's proof of the environment's public key: needed when it gains the environment, kept otherwise. */
-  keyProof: Schema.optionalKey(KeyProofSchema),
+  readWrap: WrapSchema,
+  keyProof: KeyProofSchema,
 }).annotate({ identifier: 'SetAccessPayload' });
 export type SetAccessPayload = typeof SetAccessPayloadSchema.Type;
 
@@ -173,7 +168,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       OpenApi.annotations({
         summary: 'Approve a CLI login',
         description:
-          'The owner’s approval of the link `baymutt auth login` prints. A CLI login lists the orgs, environments and secret names of the person’s orgs, makes paste links and requests, and holds no environment: it opens no value and writes none.',
+          'The owner’s approval of the link `baymutt auth login` prints. A CLI login lists the orgs, environments and secret names of the person’s orgs, asks with plans, and holds no environment: it opens no value and writes none.',
       }),
     ),
     HttpApiEndpoint.put('setAccess', '/credentials/:id/grants/:environmentId', {
@@ -183,9 +178,9 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       error: [coded(NotFoundError), coded(OwnerRequiredError), coded(NoAccessError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Change a service account’s access to an environment',
+        summary: 'Let a key read an environment',
         description:
-          'Owner only, for a service account, on an environment of the org the key belongs to. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make. Its first environment also needs the org’s names key wrapped to it (`orgs.putNamesKeyWrap`).',
+          'Owner only, for a key (never a CLI login), on an environment of the org the key belongs to. It keeps its key. A read is the environment key wrapped to it, which only a holder of the key can make. Its first environment also needs the org’s names key wrapped to it (`orgs.putNamesKeyWrap`).',
       }),
     ),
     HttpApiEndpoint.delete('removeAccess', '/credentials/:id/grants/:environmentId', {
@@ -194,7 +189,7 @@ export class CredentialsGroup extends HttpApiGroup.make('credentials')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Take an environment away from a service account',
+        summary: 'Stop a key reading an environment',
         description: 'Owner only. What it already read stays read.',
       }),
     ),

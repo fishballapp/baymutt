@@ -16,8 +16,8 @@ const setup = async () => {
   const world = await storeWorld();
   const login = await world.pair('laptop');
   const environmentId = await world.environment('app/production');
-  // A service account the login asked for, which holds only what the owner approved.
-  const scoped = await world.serviceAccount([{ environmentId, read: true, write: true }], {
+  // A key the login asked for, which reads only what the owner approved.
+  const scoped = await world.serviceAccount([environmentId], {
     name: 'ci',
     maker: login,
   });
@@ -49,14 +49,19 @@ const actions = (w: StoreWorld['w']) =>
   }>;
 
 describe('a deleted secret', () => {
-  it('goes to the bin for 30 days, and a rollback by whoever could delete it brings it back', async () => {
-    const { w, owner, scoped, environmentId, orgId, apiKey } = await setup();
+  it('goes to the bin for 30 days, and the owner’s rollback brings it back; a key does neither', async () => {
+    const { w, owner, login, scoped, environmentId, orgId, accountId, apiKey } = await setup();
 
+    for (const headers of [login.headers, scoped.headers]) {
+      expect(
+        await call(w, 'DELETE', `/environments/${environmentId}/secrets/${apiKey}`, headers),
+      ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+    }
     const deleted = await ok<{ updatedAt: number; purgeAt: number }>(
       w,
       'DELETE',
       `/environments/${environmentId}/secrets/${apiKey}`,
-      scoped.headers,
+      owner,
     );
     expect(deleted).toMatchObject({ currentVersion: null, latestVersion: 2 });
     expect(deleted.purgeAt - deleted.updatedAt).toBe(BIN_MS);
@@ -80,23 +85,25 @@ describe('a deleted secret', () => {
           sealedName: sealedOf('API_KEY'),
           latestVersion: 2,
           deletedAt: deleted.updatedAt,
-          deletedBy: { kind: 'credential', id: scoped.id, name: 'ci' },
+          deletedBy: { kind: 'owner', id: accountId, name: 'Owner' },
           purgeAt: deleted.purgeAt,
         },
       ],
     });
 
-    expect(
-      await call(
-        w,
-        'POST',
-        `/environments/${environmentId}/secrets/${apiKey}/rollback`,
-        scoped.headers,
-        {
-          version: 2,
-        },
-      ),
-    ).toMatchObject({ status: 200, body: { currentVersion: 2, purgeAt: null } });
+    const restore = (headers: Record<string, string>) =>
+      call(w, 'POST', `/environments/${environmentId}/secrets/${apiKey}/rollback`, headers, {
+        version: 2,
+        fromBin: true,
+      });
+    expect(await restore(scoped.headers)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    expect(await restore(owner)).toMatchObject({
+      status: 200,
+      body: { currentVersion: 2, purgeAt: null },
+    });
     expect(await ok(w, 'GET', '/bin', owner)).toEqual({ environments: [], secrets: [] });
     expect(actions(w).at(-1)).toMatchObject({ action: 'secret.rollback', detail: 'from the bin' });
   });
@@ -304,7 +311,7 @@ describe('removing for good straight away', () => {
   });
 });
 
-describe('what a scoped service account sees in the bin', () => {
+describe('what a key sees in the bin', () => {
   it('is what is in the environments it holds a grant on', async () => {
     const { w, owner, scoped, environment, write, secretName } = await setup();
     const other = await environment('app/staging');

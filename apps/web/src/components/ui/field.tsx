@@ -8,7 +8,7 @@ export { Form } from '@base-ui/react/form';
 
 type FieldFrame = {
   /** Always visible. */
-  readonly label: string;
+  readonly label: ReactNode;
   readonly hint?: ReactNode;
   /** What is wrong with the input: shown in the hint's place and announced; the control turns
    * `danger`, and the form will not submit until it is fixed. */
@@ -28,14 +28,26 @@ type FieldFrame = {
  */
 export const Field = ({
   label,
+  labelClassName = 'label',
+  isListItem = false,
   hint,
   error,
   failure,
   className,
   children,
-}: FieldFrame & { readonly children: ReactNode }) => (
-  <BaseField.Root invalid={Boolean(error)} className={cn('field', className)}>
-    <BaseField.Label className="label">{label}</BaseField.Label>
+}: FieldFrame & {
+  /** `.line` for a field that is a line of a decision's `.grants`: its name, then what it is for. */
+  readonly labelClassName?: string;
+  /** The field is an `li` of a list (a value to paste on the plan page). */
+  readonly isListItem?: boolean;
+  readonly children: ReactNode;
+}) => (
+  <BaseField.Root
+    invalid={Boolean(error)}
+    className={cn('field', className)}
+    render={isListItem ? <li /> : undefined}
+  >
+    <BaseField.Label className={labelClassName}>{label}</BaseField.Label>
     {children}
     {(() => {
       if (error) {
@@ -80,7 +92,7 @@ const Input = ({
 );
 
 /** A mono `textarea.input` inside a `Field`: values (6 rows) and the recovery key (3 rows). */
-const TextArea = ({
+export const TextArea = ({
   value,
   onValueChange,
   rows = 6,

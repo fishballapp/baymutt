@@ -1,6 +1,7 @@
-// Credentials: recognising one by its bearer, approving a CLI login, changing a service account's
-// access, revoking.
+// Credentials: recognising one by its bearer, approving a CLI login, changing what a key reads,
+// revoking, and revoking a key once it has ended.
 import {
+  type Actor,
   type ActorIdentity,
   AlreadyExistsError,
   type CredentialActor,
@@ -9,7 +10,7 @@ import {
   NotFoundError,
   type OrgNamesKeyWrap,
   OwnerRequiredError,
-  REQUEST_WAIT_MS,
+  PLAN_WAIT_MS,
   type ServiceAccount,
   type ServiceAccountVouchers,
   type SetAccessPayload,
@@ -17,6 +18,7 @@ import {
 } from '@baymutt/api';
 import { parseBearer } from '@baymutt/keys/wire';
 import type * as D1Client from '@effect/sql-d1/D1Client';
+import { eachIsolated } from '@internal/effect-worker';
 import * as Clock from 'effect/Clock';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
@@ -27,7 +29,6 @@ import type * as Statement from 'effect/sql/Statement';
 import { actorOf } from '../actors.ts';
 import type { Audit } from '../audit.ts';
 import {
-  addressOf,
   grantStatement,
   type Lookups,
   orgsOf,
@@ -37,6 +38,8 @@ import {
 } from './rows.ts';
 
 const LAST_USED_RESOLUTION_MS = 60_000;
+
+const SYSTEM_ACTOR: Actor = { kind: 'system', id: 'keys', name: 'baymutt' };
 
 export type NewServiceAccount = {
   readonly id: string;
@@ -73,6 +76,7 @@ export const insertCredential = (
     vouchers,
     intent = null,
     orgId = null,
+    onlyIf = sql`1 = 1`,
   }: {
     readonly accountId: string;
     readonly credential: NewServiceAccount;
@@ -81,21 +85,23 @@ export const insertCredential = (
     readonly endorsement?: string | null;
     readonly welcome?: string | null;
     readonly vouchers?: ServiceAccountVouchers;
-    /** What a key from a request is for; a CLI login has none. */
+    /** What a key is for; a CLI login has none. */
     readonly intent?: 'service-account' | 'agent' | null;
-    /** The org a key from a request belongs to; a CLI login has none. */
+    /** The org a key belongs to; a CLI login has none. */
     readonly orgId?: string | null;
+    readonly onlyIf?: Statement.Fragment;
   },
 ) =>
   sql`INSERT OR IGNORE INTO credential
       (id, account_id, name, public_key, bearer_hash, parent_id, description, endorsement,
        welcome, key_voucher_owner, key_voucher_maker, account_voucher, created_at, expires_at,
        intent, org_id)
-    VALUES (${credential.id}, ${accountId}, ${credential.name}, ${credential.publicKey},
+    SELECT ${credential.id}, ${accountId}, ${credential.name}, ${credential.publicKey},
       ${credential.bearerHash}, ${parentId}, ${credential.description ?? null},
       ${endorsement}, ${welcome}, ${vouchers?.keyToOwner ?? null},
       ${vouchers?.keyToMaker ?? null}, ${vouchers?.accountKey ?? null}, ${now},
-      ${credential.expiresAt ?? null}, ${intent}, ${orgId})
+      ${credential.expiresAt ?? null}, ${intent}, ${orgId}
+    WHERE ${onlyIf}
     RETURNING id`;
 
 /** Whether this request's insert is the row: an id that was taken leaves another's bearer there. */
@@ -111,8 +117,8 @@ export const credentialTaken = () =>
 
 /**
  * Revoking the credentials `ids` selects: their bearers stop working, their grants and names key
- * copies go, a request still waiting for one of them is closed as `request`, and a key change
- * still waiting for one is rejected. The first
+ * copies go, a plan's step still waiting to make or change one of them is rejected, and so is every
+ * step still waiting in a plan one of them made, its proposed value gone with it. The first
  * statement answers the ids it revoked. `onlyIf` conditions all of it inside a batch.
  */
 export const revokeStatements = (
@@ -120,12 +126,10 @@ export const revokeStatements = (
   {
     ids,
     now,
-    request = 'rejected',
     onlyIf = sql`1 = 1`,
   }: {
     readonly ids: Statement.Fragment;
     readonly now: number;
-    readonly request?: 'rejected' | 'expired';
     readonly onlyIf?: Statement.Fragment;
   },
 ) =>
@@ -134,16 +138,25 @@ export const revokeStatements = (
       WHERE id IN (${ids}) AND revoked_at IS NULL AND ${onlyIf} RETURNING id`,
     sql`DELETE FROM environment_grant WHERE credential_id IN (${ids}) AND ${onlyIf}`,
     sql`DELETE FROM names_key_wrap WHERE reader_id IN (${ids}) AND ${onlyIf}`,
-    // A request past its hour had already expired, whatever closes it now.
-    sql`UPDATE access_request
-      SET status = CASE WHEN created_at > ${now - REQUEST_WAIT_MS} THEN ${request} ELSE 'expired' END,
+    // A plan's step that makes or changes a revoked key has nothing left to do.
+    sql`UPDATE plan_step
+      SET status = CASE WHEN (SELECT created_at FROM plan WHERE id = plan_step.plan_id)
+                          > ${now - PLAN_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
         resolved_at = ${now}
-      WHERE credential_id IN (${ids}) AND status = 'pending' AND ${onlyIf}`,
-    // A change still waiting for a revoked key has nothing left to change.
-    sql`UPDATE key_change
-      SET status = CASE WHEN created_at > ${now - REQUEST_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
+      WHERE key_id IN (${ids}) AND status = 'pending' AND ${onlyIf}`,
+    // A revoked CLI login is who a plan's answer goes back to: the owner no longer wants it.
+    sql`UPDATE plan_step
+      SET status = CASE WHEN (SELECT created_at FROM plan WHERE id = plan_step.plan_id)
+                          > ${now - PLAN_WAIT_MS} THEN 'rejected' ELSE 'expired' END,
         resolved_at = ${now}
-      WHERE credential_id IN (${ids}) AND status = 'pending' AND ${onlyIf}`,
+      WHERE status = 'pending' AND plan_id IN (SELECT id FROM plan WHERE credential_id IN (${ids}))
+        AND ${onlyIf}`,
+    sql`UPDATE plan_item SET proposed_value = NULL, sealed_hint = NULL
+      WHERE (proposed_value IS NOT NULL OR sealed_hint IS NOT NULL)
+        AND plan_id IN (SELECT id FROM plan WHERE credential_id IN (${ids}))
+        AND NOT EXISTS (SELECT 1 FROM plan_step s WHERE s.plan_id = plan_item.plan_id
+          AND s.position = plan_item.step_position AND s.status = 'pending')
+        AND ${onlyIf}`,
   ] as const;
 
 export const serviceAccounts = ({
@@ -185,8 +198,8 @@ export const serviceAccounts = ({
           FROM credential c LEFT JOIN organization o ON o.id = c.org_id
           WHERE c.account_id = ${accountId} AND c.revoked_at IS NULL
             AND (${self} IS NULL OR c.id = ${self} OR c.parent_id = ${self})
-            AND NOT EXISTS (SELECT 1 FROM access_request r
-                            WHERE r.credential_id = c.id AND r.status = 'pending')
+            AND NOT EXISTS (SELECT 1 FROM plan_step s
+                            WHERE s.key_id = c.id AND s.type = 'access' AND s.status = 'pending')
           ORDER BY c.created_at`,
   });
 
@@ -199,13 +212,10 @@ export const serviceAccounts = ({
       orgSlug: Schema.String,
       environmentName: Schema.String,
       environmentSealedName: Schema.NullOr(Schema.String),
-      canWrite: Schema.Finite,
-      canRead: Schema.Finite,
     }),
     execute: accountId =>
       sql`SELECT g.credential_id, g.environment_id, e.org_id, o.slug AS org_slug,
-            e.name AS environment_name, e.sealed_name AS environment_sealed_name, g.can_write,
-            g.read_wrap IS NOT NULL AS can_read
+            e.name AS environment_name, e.sealed_name AS environment_sealed_name
           FROM environment_grant g
           JOIN credential c ON c.id = g.credential_id
           JOIN environment e ON e.id = g.environment_id
@@ -264,11 +274,7 @@ export const serviceAccounts = ({
         lastUsedAt: row.lastUsedAt,
         grants: grants
           .filter(grant => grant.credentialId === row.id)
-          .map(({ credentialId: _, canRead, canWrite, ...grant }) => ({
-            ...grant,
-            canRead: canRead !== 0,
-            canWrite: canWrite !== 0,
-          })),
+          .map(({ credentialId: _, ...grant }) => grant),
       }),
     );
   });
@@ -282,15 +288,15 @@ export const serviceAccounts = ({
   });
 
   /**
-   * A service account whose access the owner may change. A CLI login holds no environment, so its
-   * access never changes; a request's key gets what the owner approved, and later only the owner
-   * changes it.
+   * A key whose reads the owner may change. A CLI login holds no environment, so its access never
+   * changes; a plan's key gets what the owner approved, and later the owner changes it here or
+   * approves a `change` step its CLI login asked.
    */
   const changeable = Effect.fnUntraced(function* (actor: ActorIdentity, id: string) {
     if (actor._tag !== 'Owner') {
       return yield* new OwnerRequiredError({
         message:
-          'Only the owner changes a key’s access, from the dashboard. The CLI login that asked for it asks to change it: `baymutt ask change`.',
+          'Only the owner changes a key’s access, from the dashboard. The CLI login that asked for it asks to change it in a plan’s `change` step.',
       });
     }
     const target = yield* approvedServiceAccountIn(actor.accountId, id);
@@ -303,7 +309,60 @@ export const serviceAccounts = ({
     return target;
   });
 
+  const endedKeys = SqlSchema.findAll({
+    Request: Schema.Finite,
+    Result: Schema.Struct({
+      id: Schema.String,
+      accountId: Schema.String,
+      name: Schema.String,
+      expiresAt: Schema.Finite,
+    }),
+    execute: now =>
+      // Any key but a CLI login, whatever made it. A key still waiting for its step has no end yet.
+      sql`SELECT c.id, c.account_id, c.name, c.expires_at FROM credential c
+          WHERE c.parent_id IS NOT NULL AND c.revoked_at IS NULL
+            AND c.expires_at IS NOT NULL AND c.expires_at <= ${now}`,
+  });
+
   return {
+    /** The daily run's part: a key that has ended is revoked. Ended means ended: it asks again. */
+    sweepEndedKeys: Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const ended = yield* endedKeys(now).pipe(Effect.orDie);
+      yield* eachIsolated({
+        sweep: 'ended key',
+        rows: ended,
+        run: key =>
+          Effect.gen(function* () {
+            // Revoking sets `revoked_at` first, so the rest of the batch is conditioned on what
+            // it does not change.
+            const isOver = sql`EXISTS (SELECT 1 FROM credential
+              WHERE id = ${key.id} AND expires_at IS NOT NULL AND expires_at <= ${now})`;
+            yield* sql
+              .batch([
+                yield* audit.entry(
+                  {
+                    accountId: key.accountId,
+                    actor: SYSTEM_ACTOR,
+                    action: 'credential.revoke',
+                    detail: `${key.name}: ended on ${dayOf(key.expiresAt)}`,
+                  },
+                  sql`${isOver} AND EXISTS (SELECT 1 FROM credential
+                    WHERE id = ${key.id} AND revoked_at IS NULL)`,
+                ),
+                ...revokeStatements(sql, {
+                  ids: sql`SELECT id FROM credential WHERE id = ${key.id}`,
+                  now,
+                  onlyIf: isOver,
+                }),
+              ])
+              .pipe(Effect.orDie);
+          }),
+      });
+      yield* Effect.logInfo('ended keys revoked', { ended: ended.length });
+      return { ended: ended.length };
+    }).pipe(Effect.withSpan('Access.sweepEndedKeys')),
+
     authenticate: Effect.fn('Access.authenticate')(function* (bearer: Redacted.Redacted<string>) {
       const refused = new UnauthorizedError({
         message:
@@ -379,7 +438,7 @@ export const serviceAccounts = ({
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'Only the owner approves a CLI login, from the link `baymutt auth login` prints. A CLI login asks for access with `baymutt ask access`.',
+            'Only the owner approves a CLI login, from the link `baymutt auth login` prints. A CLI login asks for access in a plan: `baymutt ask --help`.',
         });
       }
       const sealed = new Set(
@@ -443,54 +502,22 @@ export const serviceAccounts = ({
       readonly access: SetAccessPayload;
     }) {
       const target = yield* changeable(actor, id);
-      const { canRead, canWrite, readWrap, keyProof } = access;
-      if (!canRead && !canWrite) {
-        return yield* new InvalidRequestError({
-          message:
-            'Access is read, write or both. To take the environment away, remove its access.',
-        });
-      }
-      if (!canRead && readWrap !== undefined) {
-        return yield* new InvalidRequestError({
-          message: 'A read wrap was sent for access that does not read.',
-        });
-      }
       const { environment } = yield* ownersEnvironment(actor, environmentId, 'grants access');
       if (environment.orgId !== target.orgId) {
         return yield* new InvalidRequestError({
           message: `${target.name} belongs to ${target.orgSlug ?? 'another org'}, and a key holds environments of its own org only.`,
         });
       }
-      // Only what was made for the environment's current key is kept.
-      const [held] = yield* sql<{
-        readonly readWrap: string | null;
-        readonly keyProof: string;
-      }>`SELECT read_wrap, key_proof FROM environment_grant
-          WHERE environment_id = ${environmentId} AND credential_id = ${id}
-            AND key_version = ${environment.keyVersion}`.pipe(Effect.orDie);
-      // A read it gains is a wrap only a holder of the environment key can make, and an environment it
-      // gains comes with a proof of its key: the store keeps either, and makes neither.
-      const wrap = canRead ? (readWrap ?? held?.readWrap ?? null) : null;
-      if (canRead && wrap === null) {
-        return yield* new InvalidRequestError({
-          message: `${target.name} does not read ${addressOf(environment)} yet: send the environment key wrapped to it (\`readWrap\`).`,
-        });
-      }
-      const proof = keyProof ?? held?.keyProof;
-      if (proof === undefined) {
-        return yield* new InvalidRequestError({
-          message: `${target.name} holds nothing on ${addressOf(environment)} yet: send the proof of the environment’s key (\`keyProof\`).`,
-        });
-      }
+      // A read is a wrap only a holder of the environment key can make, with a proof of that key:
+      // the store keeps both, and makes neither.
       const now = yield* Clock.currentTimeMillis;
       yield* sql
         .batch([
           grantStatement(sql, {
             environmentId,
             credentialId: id,
-            canWrite,
-            readWrap: wrap,
-            keyProof: proof,
+            readWrap: access.readWrap,
+            keyProof: access.keyProof,
             keyVersion: environment.keyVersion,
             now,
           }),
@@ -499,7 +526,7 @@ export const serviceAccounts = ({
             actor: actorOf(actor),
             action: 'grant.set',
             environmentId,
-            detail: `${target.name}: ${[canRead && 'read', canWrite && 'write'].filter(Boolean).join(' + ')}`,
+            detail: `${target.name}: read`,
           }),
         ])
         .pipe(Effect.orDie);
@@ -554,7 +581,7 @@ export const serviceAccounts = ({
       if (actor._tag !== 'Owner') {
         return yield* new OwnerRequiredError({
           message:
-            'Only the owner changes when a CLI login or key expires, from the dashboard. The CLI login that asked for a key may ask for a new end: `baymutt ask change <id> --expires …`.',
+            'Only the owner changes when a CLI login or key expires, from the dashboard. The CLI login that asked for a key may ask for a new end in a plan’s `change` step.',
         });
       }
       const target = yield* approvedServiceAccountIn(actor.accountId, id);

@@ -1,4 +1,4 @@
-/** Credentials, requests, key changes, environment requests, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
+/** Credentials, plans, orgs, environments and grants (`Access`), the bin (`Bin`) and the activity (`Audit`). */
 import { Api, CurrentActor } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
@@ -126,97 +126,42 @@ const EnvironmentsHandlers = HttpApiBuilder.group(
   }),
 );
 
-const RequestsHandlers = HttpApiBuilder.group(
+const PlansHandlers = HttpApiBuilder.group(
   Api,
-  'requests',
+  'plans',
   Effect.fn(function* (handlers) {
     const access = yield* Access;
     return handlers.handleAll({
-      list: Effect.fn(function* () {
-        return { requests: yield* access.listRequests(yield* CurrentActor) };
+      list: Effect.fn(function* ({ query }) {
+        return {
+          plans: yield* access.listPlans({
+            actor: yield* CurrentActor,
+            orgId: query.orgId ?? null,
+          }),
+        };
       }),
       get: Effect.fn(function* ({ params }) {
-        return yield* access.getRequest({ actor: yield* CurrentActor, id: params.id });
-      }),
-      create: Effect.fn(function* ({
-        payload: { vouchers, reason, command, lifetime, items, ...key },
-      }) {
-        return yield* access.createRequest({
-          actor: yield* CurrentActor,
-          key,
-          vouchers,
-          reason,
-          command,
-          lifetime,
-          items,
-        });
-      }),
-      approve: Effect.fn(function* ({ params, payload }) {
-        return yield* access.approveRequest({
-          actor: yield* CurrentActor,
-          id: params.id,
-          approval: payload,
-        });
-      }),
-      reject: Effect.fn(function* ({ params }) {
-        return yield* access.rejectRequest({ actor: yield* CurrentActor, id: params.id });
-      }),
-    });
-  }),
-);
-
-const KeyChangesHandlers = HttpApiBuilder.group(
-  Api,
-  'keyChanges',
-  Effect.fn(function* (handlers) {
-    const access = yield* Access;
-    return handlers.handleAll({
-      list: Effect.fn(function* () {
-        return { changes: yield* access.listKeyChanges(yield* CurrentActor) };
-      }),
-      get: Effect.fn(function* ({ params }) {
-        return yield* access.getKeyChange({ actor: yield* CurrentActor, id: params.id });
+        return yield* access.getPlan({ actor: yield* CurrentActor, id: params.id });
       }),
       create: Effect.fn(function* ({ payload }) {
-        return yield* access.createKeyChange({ actor: yield* CurrentActor, change: payload });
+        return yield* access.createPlan({ actor: yield* CurrentActor, plan: payload });
       }),
-      approve: Effect.fn(function* ({ params, payload }) {
-        return yield* access.approveKeyChange({
+      approveStep: Effect.fn(function* ({ params, payload }) {
+        return yield* access.approveStep({
           actor: yield* CurrentActor,
-          id: params.id,
-          approval: payload,
+          ...params,
+          answer: payload,
         });
       }),
-      reject: Effect.fn(function* ({ params }) {
-        return yield* access.rejectKeyChange({ actor: yield* CurrentActor, id: params.id });
-      }),
-    });
-  }),
-);
-
-const EnvironmentRequestsHandlers = HttpApiBuilder.group(
-  Api,
-  'environmentRequests',
-  Effect.fn(function* (handlers) {
-    const access = yield* Access;
-    return handlers.handleAll({
-      list: Effect.fn(function* () {
-        return { requests: yield* access.listEnvironmentRequests(yield* CurrentActor) };
-      }),
-      get: Effect.fn(function* ({ params }) {
-        return yield* access.getEnvironmentRequest({ actor: yield* CurrentActor, id: params.id });
-      }),
-      create: Effect.fn(function* ({ payload }) {
-        return yield* access.createEnvironmentRequest({
+      rejectStep: Effect.fn(function* ({ params, payload }) {
+        return yield* access.rejectStep({
           actor: yield* CurrentActor,
-          request: payload,
+          ...params,
+          note: payload.note ?? null,
         });
       }),
-      reject: Effect.fn(function* ({ params }) {
-        return yield* access.rejectEnvironmentRequest({
-          actor: yield* CurrentActor,
-          id: params.id,
-        });
+      cancel: Effect.fn(function* ({ params }) {
+        return yield* access.cancelPlan({ actor: yield* CurrentActor, id: params.id });
       }),
     });
   }),
@@ -250,9 +195,7 @@ const BinHandlers = HttpApiBuilder.group(
 
 export const AccessHandlers = Layer.mergeAll(
   CredentialsHandlers,
-  RequestsHandlers,
-  KeyChangesHandlers,
-  EnvironmentRequestsHandlers,
+  PlansHandlers,
   OrgsHandlers,
   EnvironmentsHandlers,
   ActivityHandlers,

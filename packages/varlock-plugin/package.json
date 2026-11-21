@@ -1,6 +1,6 @@
 {
   "name": "@baymutt/varlock-plugin",
-  "version": "0.8.0",
+  "version": "0.11.0",
   "license": "MIT",
   "homepage": "https://baymutt.fsh.ba",
   "repository": {
@@ -9,7 +9,7 @@
     "directory": "packages/varlock-plugin"
   },
   "type": "module",
-  "description": "Loads a baymutt environment's values into varlock: one request, opened on this computer with the service account key. No cache, because there is no rate limit to save and varlock's disk cache is what asks for Touch ID.",
+  "description": "Loads a baymutt environment's values into varlock: two requests, opened on this computer with a key that reads. No cache, because there is no rate limit to save and varlock's disk cache is what asks for Touch ID.",
   "exports": {
     "./plugin": "./dist/plugin.cjs"
   },

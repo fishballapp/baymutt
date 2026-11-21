@@ -1418,6 +1418,88 @@ textarea.input {
   font-size: 13px;
   color: var(--muted);
 }
+/* The plan page. The outline: every step on one line, like the nav's items, with no rules; the
+   step in focus sunken. Each line is a button that opens its step. */
+.outline {
+  margin-top: 32px;
+}
+.outline-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+}
+button.outline-item:hover,
+.outline-item[aria-current] {
+  background: var(--sunken);
+  color: var(--foreground);
+}
+.outline-item[aria-current] {
+  font-weight: 600;
+}
+.outline-word {
+  text-align: right;
+  font-weight: 400;
+}
+.outcome .outline {
+  margin-top: 24px;
+}
+.outline .step-said {
+  padding: 0 8px 8px;
+}
+/* The step in focus: its heading, what it names, then its answer in one row. */
+.step {
+  margin-top: 40px;
+}
+.step-status {
+  margin-top: 20px;
+}
+.step-said {
+  margin-top: 4px;
+  color: var(--muted);
+}
+.step-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 32px;
+}
+.step-answer + .error {
+  margin-top: 12px;
+}
+.step-note {
+  margin-top: 12px;
+}
+/* A line of a step that holds a field (a value to paste) or a revealed value: the name and what
+   happens to it, then the field or the value under them. */
+.grants li.field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.grants h3 .muted {
+  font-weight: 400;
+}
+.line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+/* A proposed value on its line: masked, its size, Reveal. */
+.line-value {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
 /* What replaces a decision once it is answered, missing or spent. */
 .outcome h1 {
   margin: 0;
@@ -1674,7 +1756,8 @@ textarea.input {
     right: 0;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
     padding-bottom: env(safe-area-inset-bottom);
     background: var(--background);
     border-top: 1px solid var(--line);

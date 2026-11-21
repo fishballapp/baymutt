@@ -1,5 +1,4 @@
-// Things that wait on the owner, as rows at the top of the page they wait under: requests and key
-// changes on Keys, environment requests on Environments, paste links on Paste links.
+// Things that wait on the owner, as rows at the top of the page they wait under: plans, on Plans.
 import type { ReactNode } from 'react';
 import { List, Rows } from './ui/list.tsx';
 import { RelativeTime } from './ui/page.tsx';
@@ -25,24 +24,17 @@ export const WaitingRow = ({
   about = [],
   askedAt,
   action,
-  menu,
-  working,
-  error,
 }: {
   readonly ask: ReactNode;
   /** The claim, shown in quotes; null when the terminal gave none. */
   readonly reason: string | null;
-  /** One line each: an environment and its access, "asks for a new end", a paste link's hint. */
+  /** One line each, about what is asked. */
   readonly about?: ReadonlyArray<ReactNode>;
   readonly askedAt: number;
-  /** "Review", or "Paste value": a link styled with `buttonClass()` to its decision page. */
+  /** "Review": a link styled with `buttonClass()` to its decision page. */
   readonly action: ReactNode;
-  /** A paste link's `RowMenu` with Dismiss. */
-  readonly menu?: ReactNode;
-  readonly working?: string | null;
-  readonly error?: string | null;
 }) => (
-  <li className="row-wait" aria-busy={working ? true : undefined}>
+  <li className="row-wait">
     <div>
       <p className="ask">{ask}</p>
       {reason !== null && <p className="why">“{reason}”</p>}
@@ -54,16 +46,7 @@ export const WaitingRow = ({
     </div>
     <div className="side">
       <RelativeTime at={askedAt} className="age" />
-      <span className="side-acts">
-        {action}
-        {menu}
-      </span>
+      <span className="side-acts">{action}</span>
     </div>
-    {working && <p className="row-working">{working}</p>}
-    {error && (
-      <p role="alert" className="row-error">
-        {error}
-      </p>
-    )}
   </li>
 );

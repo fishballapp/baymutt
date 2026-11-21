@@ -88,7 +88,8 @@ export const NameIndexSchema = Schema.String.check(
 /** A value may be 64 KiB; a box adds 60 bytes, and base64 a third. */
 export const MAX_VALUE_BYTES = 65_536;
 
-const base64 = (maxBytes: number) =>
+/** Base64 text carrying at most `maxBytes` bytes. */
+export const base64 = (maxBytes: number) =>
   Schema.String.check(
     Schema.isPattern(/^[A-Za-z0-9+/]+={0,2}$/u),
     Schema.isMaxLength(Math.ceil(maxBytes / 3) * 4),

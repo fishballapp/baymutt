@@ -2,10 +2,10 @@
 // with the account public key this key already trusts, never with the one the store serves. An org
 // whose names are not sealed yet has no names key, and its names are stored as written.
 import type { OrgNamesKeyWrap } from '@baymutt/api';
-import { type NamesKey, nameIndex, openName, openNamesKey, sealName } from '@baymutt/keys';
+import { type NamesKey, nameIndex, openName, openNamesKey } from '@baymutt/keys';
 import * as Effect from 'effect/Effect';
 import * as Option from 'effect/Option';
-import { crypto_, type IntegrityError, usage } from './errors.ts';
+import { crypto_, type IntegrityError } from './errors.ts';
 import { ServiceAccount } from './service-account.ts';
 
 /** The names key of each org this key reaches, by org id; an org that is missing has none. */
@@ -81,21 +81,3 @@ export const storedNameOf = <E, R>(
           : Option.none(),
       )
     : Effect.asSome(crypto_(() => nameIndex(namesKey, { scopeId, name })));
-
-/** A new name, sealed for its org. Refused here in an org whose names are not sealed yet, as the store would. */
-export const sealNewName = (
-  namesKey: NamesKey | null,
-  {
-    scopeId,
-    name,
-    orgSlug,
-  }: { readonly scopeId: string; readonly name: string; readonly orgSlug: string },
-) =>
-  namesKey === null
-    ? Effect.fail(
-        usage(
-          `The names in ${orgSlug} are not sealed yet, so nothing with a new name can be made in it. The owner's dashboard seals them the next time it is opened; then try again.`,
-          'conflict',
-        ),
-      )
-    : crypto_(() => sealName(namesKey, { scopeId, name }));

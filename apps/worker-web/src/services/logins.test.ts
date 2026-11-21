@@ -11,7 +11,7 @@ describe('expiry', () => {
     const { w, owner, pair, environment, serviceAccount } = world;
     const environmentId = await environment('app/production');
     const login = await pair('laptop');
-    const ci = await serviceAccount([{ environmentId, read: true }], { maker: login });
+    const ci = await serviceAccount([environmentId], { maker: login });
 
     await ok(w, 'PUT', `/credentials/${login.id}/expiry`, owner, { expiresAt: Date.now() - 1 });
 
@@ -55,10 +55,14 @@ describe('expiry', () => {
     const { w, pair, serviceAccount, environment } = world;
     const expired = await pair('laptop', { expiresAt: Date.now() - 1 });
     const live = await pair('server', { expiresAt: Date.now() + DAY });
-    const ci = await serviceAccount([{ environmentId: await environment('app'), read: true }], {
+    const ci = await serviceAccount([await environment('app')], {
       maker: live,
-      expiresAt: Date.now() - 1,
+      expiresAt: Date.now() + DAY,
     });
+    // As the end the owner approved has passed: an approval refuses an end already past.
+    w.sqlite
+      .prepare('UPDATE credential SET expires_at = ? WHERE id = ?')
+      .run(Date.now() - 1, ci.id);
 
     expect(await call(w, 'GET', '/me', expired.headers)).toMatchObject({ status: 401 });
     expect(await call(w, 'GET', '/me', live.headers)).toMatchObject({ status: 200 });
@@ -69,7 +73,7 @@ describe('expiry', () => {
     const world = await storeWorld();
     const { w, pair, locked, serviceAccount, environment } = world;
     const login = await pair('laptop', { expiresAt: Date.now() + DAY });
-    const ci = await serviceAccount([{ environmentId: await environment('app'), read: true }], {
+    const ci = await serviceAccount([await environment('app')], {
       maker: login,
     });
 
@@ -100,15 +104,13 @@ describe('expiry', () => {
 });
 
 describe('a description', () => {
-  it('is kept as its maker wrote it: a CLI login’s optional, a request key’s its reason', async () => {
+  it('is kept as its maker wrote it: a CLI login’s optional, a key’s its plan’s reason', async () => {
     const world = await storeWorld();
     const { w, owner, orgId, pair, ask, approve, environment } = world;
     const login = await pair('laptop', { description: 'Agents on the work laptop' });
-    const ci = await ask(login, [{ environmentId: await environment('app'), read: true }], {
-      name: 'ci',
-      reason: 'Deploys app/production from CI',
-    });
-    await approve(ci.id);
+    const app = await environment('app');
+    const ci = await ask(login, [app], { name: 'ci', reason: 'Deploys app/production from CI' });
+    await approve(ci, [app]);
     await pair('server');
 
     expect(await call(w, 'GET', '/credentials', owner)).toMatchObject({

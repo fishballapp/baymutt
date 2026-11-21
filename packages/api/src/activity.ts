@@ -14,7 +14,8 @@ import {
 } from './fields.ts';
 import { Authenticated, Credentials } from './guards.ts';
 
-export const ACTIVITY_ACTIONS = [
+/** What the store logs today. */
+export const LOGGED_ACTIONS = [
   'account.create',
   'passkey.add',
   'passkey.remove',
@@ -25,20 +26,15 @@ export const ACTIVITY_ACTIONS = [
   'credential.create',
   'credential.revoke',
   'credential.expiry',
-  'request.create',
-  'request.approve',
-  'request.reject',
-  'request.expire',
-  'key-change.create',
-  'key-change.approve',
-  'key-change.reject',
-  'key-change.expire',
+  'plan.create',
+  'plan.cancel',
+  'step.approve',
+  'step.reject',
+  'step.expire',
   'org.create',
   'org.delete',
   'names.seal',
   'environment.create',
-  'environment-request.create',
-  'environment-request.reject',
   'environment.delete',
   'environment.restore',
   'environment.purge',
@@ -50,13 +46,33 @@ export const ACTIVITY_ACTIONS = [
   'secret.purge',
   'grant.set',
   'grant.remove',
+] as const;
+
+/**
+ * What only an entry from before 0.11.0 says: the asks a plan replaced. Nothing logs them now, and
+ * the log is never rewritten, so they are read for as long as such an entry is kept.
+ */
+export const PAST_ACTIONS = [
+  'request.create',
+  'request.approve',
+  'request.reject',
+  'request.expire',
+  'key-change.create',
+  'key-change.approve',
+  'key-change.reject',
+  'key-change.expire',
+  'environment-request.create',
+  'environment-request.reject',
   'paste-link.create',
   'paste-link.fulfil',
   'paste-link.cancel',
 ] as const;
 
+export const ACTIVITY_ACTIONS = [...LOGGED_ACTIONS, ...PAST_ACTIONS] as const;
+
 export const ActivityActionSchema = Schema.Literals(ACTIVITY_ACTIONS);
 export type ActivityAction = typeof ActivityActionSchema.Type;
+export type LoggedAction = (typeof LOGGED_ACTIONS)[number];
 
 export const ActivityEventSchema = Schema.Struct({
   id: Schema.String,

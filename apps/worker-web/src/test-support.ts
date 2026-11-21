@@ -4,7 +4,7 @@
 // a session is a row in a map, and an org is written as the organization plugin writes one.
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { createTestD1 } from '@internal/effect-worker/testing';
+import { createTestD1, type LegacyRows } from '@internal/effect-worker/testing';
 import { APIError } from 'better-auth/api';
 import * as HttpRouter from 'effect/http/HttpRouter';
 import * as Layer from 'effect/Layer';
@@ -88,9 +88,12 @@ export const keyLike = (seed: string): string => `${seed.repeat(43).slice(0, 42)
 
 export type Headers_ = Record<string, string>;
 
-/** `api` is the real HTTP app; `fetch` is the same app as a `fetch`, for a real client under test. */
-export const testWorld = () => {
-  const { sqlite, d1, beforeStatement } = createTestD1({ migrationsDir });
+/**
+ * `api` is the real HTTP app; `fetch` is the same app as a `fetch`, for a real client under test.
+ * `legacy` seeds rows partway through the migrations, to run the Worker over what one converted.
+ */
+export const testWorld = ({ legacy }: { readonly legacy?: LegacyRows } = {}) => {
+  const { sqlite, d1, beforeStatement } = createTestD1({ migrationsDir, legacy });
   const env = {
     DB: d1,
     MODE: 'development',

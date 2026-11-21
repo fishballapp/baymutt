@@ -1,7 +1,7 @@
 // Owns `activity_event`, the activity log. An entry is a statement its caller puts in the same
 // batch as the write it records, so the log and the change land together or not at all. Ids are
 // monotonic ULIDs: two entries of one millisecond still sort in the order they were made.
-import type { ActivityAction, ActivityEvent, Actor, ActorIdentity } from '@baymutt/api';
+import type { ActivityEvent, Actor, ActorIdentity, LoggedAction } from '@baymutt/api';
 import { ActivityActionSchema } from '@baymutt/api';
 import * as D1Client from '@effect/sql-d1/D1Client';
 import { monotonicUlid } from '@std/ulid';
@@ -22,7 +22,8 @@ type Scope =
 
 export type AuditEntry = Scope & {
   readonly actor: Actor;
-  readonly action: ActivityAction;
+  /** What the store logs today; an action only older entries carry is read, never written. */
+  readonly action: LoggedAction;
   /** The environment's name and sealed name are copied from its row as the entry is written. */
   readonly environmentId?: string | null;
   /** For an environment no row holds yet (one asked for); otherwise copied from its row. */
@@ -30,7 +31,7 @@ export type AuditEntry = Scope & {
   readonly environmentSealedName?: string | null;
   /** As the store keeps it: the index in an org whose names are sealed. */
   readonly secretName?: string | null;
-  /** For a name no secret row holds (a paste link's); otherwise copied from the secret's row. */
+  /** For a name no secret row holds yet (one a plan names); otherwise copied from the secret's row. */
   readonly secretSealedName?: string | null;
   readonly version?: number | null;
   readonly detail?: string | null;

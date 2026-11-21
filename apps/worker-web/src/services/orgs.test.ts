@@ -31,7 +31,7 @@ describe('an org', () => {
     );
 
     const environmentId = await environment('app/production');
-    const { headers: ci } = await serviceAccount([{ environmentId, read: true }], {
+    const { headers: ci } = await serviceAccount([environmentId], {
       maker: login,
     });
 

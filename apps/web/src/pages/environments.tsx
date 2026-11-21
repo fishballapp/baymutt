@@ -8,18 +8,16 @@ import { useJustWritten } from '../components/environment/just-written.ts';
 import { useOwner } from '../components/gate.tsx';
 import { useOrg } from '../components/org-scope.tsx';
 import { useTitle } from '../components/shell.tsx';
-import { Button, buttonClass } from '../components/ui/button.tsx';
+import { Button } from '../components/ui/button.tsx';
 import { Field, PrefixedInput } from '../components/ui/field.tsx';
 import { Filter, NoMatch, useFilter } from '../components/ui/filter.tsx';
 import { ActionForm, useInlineForm } from '../components/ui/form.tsx';
 import { EmptyState, List, Notice, Row, Rows, Skeleton } from '../components/ui/list.tsx';
 import { PageHead } from '../components/ui/page.tsx';
 import { Address } from '../components/ui/text.tsx';
-import { WaitingList, WaitingRow } from '../components/waiting.tsx';
 import {
   addressOf,
   createEnvironmentAtom,
-  environmentRequestsAtom,
   environmentsAtom,
   hasEnded,
   isLogin,
@@ -75,40 +73,6 @@ const NewEnvironmentForm = ({ org }: { readonly org: Org }) => {
   );
 };
 
-/** Environment requests of this org, newest first: each is answered on its own page. */
-const EnvironmentRequests = ({ org }: { readonly org: Org }) => {
-  const requests = (latest(useAtomValue(environmentRequestsAtom(useOwner()))) ?? []).filter(
-    request => request.orgId === org.id,
-  );
-  if (requests.length === 0) return null;
-  return (
-    <WaitingList>
-      {requests.map(request => (
-        <WaitingRow
-          key={request.id}
-          ask={
-            <>
-              <b>{request.createdBy.name}</b> asks you to create{' '}
-              <Address orgSlug={request.orgSlug} name={request.openedName} />
-            </>
-          }
-          reason={request.reason}
-          askedAt={request.createdAt}
-          action={
-            <Link
-              to="/orgs/$slug/ask/create-environment/$id"
-              params={{ slug: org.slug, id: request.id }}
-              className={buttonClass()}
-            >
-              Review
-            </Link>
-          }
-        />
-      ))}
-    </WaitingList>
-  );
-};
-
 export const EnvironmentsPage = () => {
   const owner = useOwner();
   const org = useOrg();
@@ -158,7 +122,6 @@ export const EnvironmentsPage = () => {
           )
         }
       />
-      <EnvironmentRequests org={org} />
       {isNoMatch ? (
         <NoMatch filter={filter}>
           No environment in {org.name} matches “{filter.query.trim()}”.
@@ -177,10 +140,8 @@ export const EnvironmentsPage = () => {
               return (
                 <EmptyState
                   example={{
-                    lead: 'An agent can also ask you for one:',
-                    commands: [
-                      `baymutt ask create-environment ${org.slug}/app/staging --reason "staging for the new API"`,
-                    ],
+                    lead: 'An agent can also ask you for one in a plan’s `environments` step:',
+                    commands: ['baymutt ask plan.json'],
                   }}
                 >
                   {org.name}’s environments show here. New environment makes the first.

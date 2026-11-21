@@ -1,4 +1,4 @@
-// "Keys that reach it": the active keys holding an environment, and taking that access away.
+// "Keys that reach it": the active keys that read an environment, and taking that read away.
 
 import { useAtom, useAtomValue } from '@effect/atom-react';
 import { useState } from 'react';
@@ -6,7 +6,6 @@ import {
   hasEnded,
   isLogin,
   type OpenedEnvironment,
-  type OpenedGrant,
   type OpenedServiceAccount,
   removeGrantAtom,
   serviceAccountsAtom,
@@ -21,20 +20,18 @@ import { RelativeTime } from '../ui/page.tsx';
 import { AccessWords } from '../ui/text.tsx';
 
 /**
- * Its name, what it holds here, its end, and its `⋯`: Change access opens the key's access dialog;
- * Remove access acts at once.
+ * Its name, that it reads here (a key only reads), its end, and its `⋯`: Change access opens the
+ * key's access dialog; Remove access acts at once.
  */
 const ReachRow = ({
   environment,
   serviceAccount,
   maker,
-  grant,
 }: {
   readonly environment: OpenedEnvironment;
   readonly serviceAccount: OpenedServiceAccount;
   /** The CLI login that asked for it, which vouched for its key. */
   readonly maker: OpenedServiceAccount | undefined;
-  readonly grant: OpenedGrant;
 }) => {
   const [isAccessOpen, setAccessOpen] = useState(false);
   const [removing, remove] = useAtom(removeGrantAtom);
@@ -50,7 +47,7 @@ const ReachRow = ({
     >
       <b>{serviceAccount.name}</b>
       <span className="access">
-        <AccessWords canRead={grant.canRead} canWrite={grant.canWrite} />
+        <AccessWords canRead canWrite={false} />
       </span>
       <Status
         status={
@@ -86,7 +83,7 @@ const ReachRow = ({
   );
 };
 
-/** Keys whose end has not passed and that hold this environment, by name. */
+/** Keys whose end has not passed and that read this environment, by name. */
 export const KeysThatReach = ({ environment }: { readonly environment: OpenedEnvironment }) => {
   const result = useAtomValue(serviceAccountsAtom(useOwner()));
   const now = Date.now();
@@ -94,11 +91,8 @@ export const KeysThatReach = ({ environment }: { readonly environment: OpenedEnv
   const reaching =
     keys
       ?.filter(key => !isLogin(key) && !hasEnded(key, now))
-      .flatMap(serviceAccount => {
-        const grant = serviceAccount.grants.find(held => held.environmentId === environment.id);
-        return grant === undefined ? [] : [{ serviceAccount, grant }];
-      })
-      .toSorted((a, b) => a.serviceAccount.name.localeCompare(b.serviceAccount.name)) ?? null;
+      .filter(key => key.grants.some(held => held.environmentId === environment.id))
+      .toSorted((a, b) => a.name.localeCompare(b.name)) ?? null;
   const failure = failureMessage(result);
   return (
     <List title="Keys that reach it">
@@ -108,19 +102,18 @@ export const KeysThatReach = ({ environment }: { readonly environment: OpenedEnv
         if (reaching.length === 0) {
           return (
             <EmptyState>
-              Only you, so far. A key reaches it once you approve a request that names it.
+              Only you, so far. A key reads it once you approve a plan’s step that names it.
             </EmptyState>
           );
         }
         return (
           <Rows>
-            {reaching.map(({ serviceAccount, grant }) => (
+            {reaching.map(serviceAccount => (
               <ReachRow
                 key={serviceAccount.id}
                 environment={environment}
                 serviceAccount={serviceAccount}
                 maker={keys?.find(key => key.id === serviceAccount.parentId)}
-                grant={grant}
               />
             ))}
           </Rows>

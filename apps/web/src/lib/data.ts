@@ -8,14 +8,11 @@ import {
   type BinSecret,
   type Environment,
   EnvironmentNameSchema,
-  type EnvironmentRequest,
-  type KeyChange,
   type Org,
   type OrgNamesKeyWrap,
   type PairingRequest,
-  type PasteLink,
-  type Request,
-  type RequestItem,
+  type Plan,
+  type PlanStep,
   type Secret,
   type ServiceAccount,
 } from '@baymutt/api';
@@ -26,12 +23,16 @@ import {
   endorsedReader,
   grantToTrustedReader,
   type NamesKey,
+  openHint,
   openName,
   openNamesKey,
   openOwnedEnvironment,
+  openProposedValue,
   openValue,
+  randomToken,
   rewrapNamesKey,
   sealName,
+  sealNote,
   sealValue,
   vouchedScopedReader,
 } from '@baymutt/keys';
@@ -40,7 +41,6 @@ import * as Atom from 'effect/reactivity/Atom';
 import * as Reactivity from 'effect/reactivity/Reactivity';
 import * as Schema from 'effect/Schema';
 import { ApiClient, faultsAsDefects } from './api.ts';
-import { isApprovable } from './key-changes.ts';
 import {
   addPasskey,
   keys,
@@ -265,7 +265,7 @@ export type KeyKind = 'login' | 'service-account' | 'agent';
 /**
  * What a key is for, by how it was asked: a CLI login, a service account (made for another
  * system: the ask gave a command to pipe the key into) or an agent key (an agent's own, kept in a
- * file). The Worker writes `intent` for every key that came from a request; one without it, which
+ * file). The Worker writes `intent` for every key a plan or a request made; one without it, which
  * the store does not return, is told by its end.
  */
 export const kindOf = (
@@ -290,15 +290,12 @@ type NamesReaders = {
  * Everyone who may list an org's names, each by a key the vault trusts: the owner's account,
  * every CLI login the vault approved, and every key of the org, by the key its CLI login vouched
  * for. Every key of the org, not only those the store lists holding something there: one whose
- * environment is in the bin lists it again once it is restored. A request's key still waiting
- * gets the names key when it is approved. One whose key cannot be verified is left out, never
- * trusted on the store's word, and named.
+ * environment is in the bin lists it again once it is restored. One whose key cannot be verified
+ * is left out, never trusted on the store's word, and named.
  */
 const namesReaders = Effect.fnUntraced(function* (owner: Owner, orgId: string) {
-  const [{ credentials }, { requests }] = yield* ApiClient.use(client =>
-    Effect.all([client.credentials.list(), client.requests.list()]),
-  );
-  const waiting = new Set(requests.map(({ id }) => id));
+  // A plan's key still waiting for its step is not listed: it gets the names key when approved.
+  const { credentials } = yield* ApiClient.use(client => client.credentials.list());
   const readerOf = (
     serviceAccount: ServiceAccount,
   ): Effect.Effect<NamesReaders['readers'][number] | null, OwnerError> => {
@@ -310,9 +307,7 @@ const namesReaders = Effect.fnUntraced(function* (owner: Owner, orgId: string) {
   };
   const verified = yield* Effect.forEach(
     credentials.filter(
-      serviceAccount =>
-        !waiting.has(serviceAccount.id) &&
-        (isLogin(serviceAccount) || serviceAccount.org?.id === orgId),
+      serviceAccount => isLogin(serviceAccount) || serviceAccount.org?.id === orgId,
     ),
     serviceAccount =>
       readerOf(serviceAccount).pipe(
@@ -391,16 +386,7 @@ export const sealOrgsAtom = ApiClient.runtime.fn(
       return sealed.filter(({ leftOut }) => leftOut.length > 0);
     }).pipe(faultsAsDefects),
   {
-    reactivityKeys: [
-      'orgs',
-      'environments',
-      'secrets',
-      'bin',
-      'pasteLinks',
-      'requests',
-      'serviceAccounts',
-      'audit',
-    ],
+    reactivityKeys: ['orgs', 'environments', 'secrets', 'bin', 'serviceAccounts', 'audit'],
   },
 );
 
@@ -419,17 +405,9 @@ export const deleteOrgAtom = Atom.family((_id: string) =>
   ApiClient.runtime.fn(
     (id: string) =>
       ApiClient.use(client => client.orgs.remove({ params: { id } })).pipe(faultsAsDefects),
-    // Deleting an org also removes its keys, and the requests, key changes and environment requests
-    // waiting in it.
+    // Deleting an org also removes its keys and the plans waiting in it.
     {
-      reactivityKeys: [
-        'orgs',
-        'serviceAccounts',
-        'requests',
-        'keyChanges',
-        'environmentRequests',
-        'audit',
-      ],
+      reactivityKeys: ['orgs', 'serviceAccounts', 'audit'],
     },
   ),
 );
@@ -519,10 +497,21 @@ const NOT_SEALED_YET = (what: string) =>
     message: `This org’s names are being sealed, so ${what} cannot be made yet. Try again in a moment.`,
   });
 
-/**
- * Makes an environment under a name already sealed: its key pair made here, held by the owner
- * alone. With `answers`, it approves that environment request in the same write.
- */
+/** A new environment's key pair, made here, and the owner's member copy of it: held by the owner alone. */
+const environmentKeyPair = Effect.fnUntraced(function* (owner: Owner, environmentId: string) {
+  const key = yield* keys(() =>
+    createEnvironmentKey({
+      voucherKey: owner.accountKey,
+      binding: { environmentId, keyVersion: 1 },
+      readers: [{ id: owner.accountId, publicKey: accountPublicKey(owner) }],
+    }),
+  );
+  const [own] = key.grants;
+  if (own === undefined) return yield* Effect.die('an environment key came with no grant');
+  return { publicKey: key.publicKey, memberWrap: own.wrap, memberProof: own.proof };
+});
+
+/** Makes an environment under a name already sealed: its key pair made here, held by the owner alone. */
 const makeEnvironment = Effect.fnUntraced(function* (
   owner: Owner,
   environment: {
@@ -530,27 +519,11 @@ const makeEnvironment = Effect.fnUntraced(function* (
     readonly orgId: string;
     readonly name: string;
     readonly sealedName: string;
-    readonly answers?: string;
   },
 ) {
-  const key = yield* keys(() =>
-    createEnvironmentKey({
-      voucherKey: owner.accountKey,
-      binding: { environmentId: environment.id, keyVersion: 1 },
-      readers: [{ id: owner.accountId, publicKey: accountPublicKey(owner) }],
-    }),
-  );
-  const [own] = key.grants;
-  if (own === undefined) return yield* Effect.die('an environment key came with no grant');
+  const keyPair = yield* environmentKeyPair(owner, environment.id);
   return yield* ApiClient.use(client =>
-    client.environments.create({
-      payload: {
-        ...environment,
-        publicKey: key.publicKey,
-        memberWrap: own.wrap,
-        memberProof: own.proof,
-      },
-    }),
+    client.environments.create({ payload: { ...environment, ...keyPair } }),
   );
 });
 
@@ -578,16 +551,7 @@ export const deleteEnvironmentAtom = ApiClient.runtime.fn(
   (id: string) =>
     ApiClient.use(client => client.environments.remove({ params: { id } })).pipe(faultsAsDefects),
   {
-    reactivityKeys: [
-      'environments',
-      'pasteLinks',
-      'serviceAccounts',
-      'grants',
-      'keyChanges',
-      'bin',
-      'orgs',
-      'audit',
-    ],
+    reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'bin', 'orgs', 'audit'],
   },
 );
 
@@ -636,15 +600,7 @@ export const restoreEnvironmentAtom = Atom.family((_id: string) =>
         faultsAsDefects,
       ),
     {
-      reactivityKeys: [
-        'environments',
-        'serviceAccounts',
-        'grants',
-        'keyChanges',
-        'bin',
-        'orgs',
-        'audit',
-      ],
+      reactivityKeys: ['environments', 'serviceAccounts', 'grants', 'bin', 'orgs', 'audit'],
     },
   ),
 );
@@ -654,7 +610,7 @@ export const purgeEnvironmentAtom = Atom.family((_id: string) =>
   ApiClient.runtime.fn(
     (id: string) =>
       ApiClient.use(client => client.environments.purge({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['serviceAccounts', 'grants', 'keyChanges', 'bin', 'audit'] },
+    { reactivityKeys: ['serviceAccounts', 'grants', 'bin', 'audit'] },
   ),
 );
 
@@ -832,41 +788,24 @@ const openGrant = async (grant: CredentialGrant, namesKeys: NamesKeys): Promise<
   }),
 });
 
-const requestListAtom = ApiClient.query('requests', 'list', { reactivityKeys: ['requests'] });
-
-/** Requests waiting for the owner, as the nav counts them. */
-const pendingRequestsAtom = requestListAtom.pipe(
-  Atom.mapResult(({ requests }) => requests.filter(({ status }) => status === 'pending')),
-);
-
 const credentialListAtom = ApiClient.query('credentials', 'list', {
   reactivityKeys: ['serviceAccounts', 'grants'],
 });
 
-/**
- * Every CLI login and service account. A request's key is listed under Requests until it is
- * approved, not here.
- */
+/** Every CLI login and key. A plan's key is not listed until its step is approved. */
 export const serviceAccountsAtom = Atom.family((owner: Owner) =>
   opening(
     owner,
-    get => Effect.all([get.result(credentialListAtom), get.result(requestListAtom)]),
-    async (
-      [{ credentials }, { requests }],
-      namesKeys,
-    ): Promise<ReadonlyArray<OpenedServiceAccount>> => {
-      const waiting = new Set(requests.map(({ id }) => id));
-      return Promise.all(
-        credentials
-          .filter(({ id }) => !waiting.has(id))
-          .map(async serviceAccount => ({
-            ...serviceAccount,
-            grants: (
-              await Promise.all(serviceAccount.grants.map(grant => openGrant(grant, namesKeys)))
-            ).toSorted(byName(({ openedEnvironmentName }) => openedEnvironmentName)),
-          })),
-      );
-    },
+    get => get.result(credentialListAtom),
+    ({ credentials }, namesKeys): Promise<ReadonlyArray<OpenedServiceAccount>> =>
+      Promise.all(
+        credentials.map(async serviceAccount => ({
+          ...serviceAccount,
+          grants: (
+            await Promise.all(serviceAccount.grants.map(grant => openGrant(grant, namesKeys)))
+          ).toSorted(byName(({ openedEnvironmentName }) => openedEnvironmentName)),
+        })),
+      ),
   ),
 );
 
@@ -936,34 +875,33 @@ export const setExpiryAtom = ApiClient.runtime.fn(
     ApiClient.use(client =>
       client.credentials.setExpiry({ params: { id }, payload: { expiresAt } }),
     ).pipe(faultsAsDefects),
-  { reactivityKeys: ['serviceAccounts', 'keyChanges', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'audit'] },
 );
 
 export const revokeServiceAccountAtom = ApiClient.runtime.fn(
   (id: string) =>
     ApiClient.use(client => client.credentials.revoke({ params: { id } })).pipe(faultsAsDefects),
   {
-    reactivityKeys: ['serviceAccounts', 'grants', 'pasteLinks', 'requests', 'keyChanges', 'audit'],
+    reactivityKeys: ['serviceAccounts', 'grants', 'audit'],
   },
 );
 
-/** What a service account is to hold on one environment; neither read nor write takes it away. */
+/** Whether a key is to read one environment: `canRead` false takes it away. */
 export type AccessChange = {
   readonly environmentId: string;
   readonly orgId: string;
   readonly canRead: boolean;
-  readonly canWrite: boolean;
 };
 
-/** Whether the login that asked for it vouched for its key, so a read or an environment it gains can be wrapped to it. */
+/** Whether the login that asked for it vouched for its key, so a read can be wrapped to it. */
 export const isVouched = (serviceAccount: Pick<ServiceAccount, 'keyVoucher'>): boolean =>
   serviceAccount.keyVoucher !== null;
 
 /**
- * Changes a service account's access, keeping its key. A read or an environment it gains is
- * wrapped and vouched for to the key its maker vouched for to the account, which the vault trusts
- * through its endorsement of that login: never to the key the store lists. An environment it
- * gains comes with its org's names key, so it can list the names there.
+ * Changes what a key reads, keeping its key. A read it gains is wrapped and vouched for to the key
+ * its maker vouched for to the account, which the vault trusts through its endorsement of that
+ * login: never to the key the store lists. It comes with its org's names key, so the key can list
+ * the names there. A key only reads: there is no write to give.
  */
 export const changeAccessAtom = ApiClient.runtime.fn(
   ({
@@ -978,31 +916,23 @@ export const changeAccessAtom = ApiClient.runtime.fn(
     readonly changes: ReadonlyArray<AccessChange>;
   }) =>
     Effect.gen(function* () {
-      const gains = (change: AccessChange) => {
-        const held = serviceAccount.grants.find(
-          grant => grant.environmentId === change.environmentId,
-        );
-        const removes = !change.canRead && !change.canWrite;
-        return {
-          environment: !removes && held === undefined,
-          read: change.canRead && !held?.canRead,
-        };
-      };
-      const needsKey = changes.some(change => gains(change).environment || gains(change).read);
-      const reader = needsKey
-        ? yield* keys(
-            () => vouchedScopedReader(owner, { serviceAccount, maker }),
-            'Nothing vouches for this service account’s key, so it cannot be given a read or an environment. Nothing was changed.',
-          )
-        : null;
-      // Put again each time, not only in an org it seems new to: what it holds there may be in the
-      // bin, and the store lists only what is not.
-      const gainedOrgs = new Set(
-        changes.filter(change => gains(change).environment).map(({ orgId }) => orgId),
-      );
+      const holds = (environmentId: string) =>
+        serviceAccount.grants.some(grant => grant.environmentId === environmentId);
+      const gained = changes.filter(change => change.canRead && !holds(change.environmentId));
+      const removed = changes.filter(change => !change.canRead && holds(change.environmentId));
+      const reader =
+        gained.length === 0
+          ? null
+          : yield* keys(
+              () => vouchedScopedReader(owner, { serviceAccount, maker }),
+              'Nothing vouches for this key, so it cannot be given a read. Nothing was changed.',
+            );
       // Every wrap and proof is made before the first request, so a vault failure changes nothing.
+      // The names key is put again each time, not only in an org it seems new to: what it reads
+      // there may be in the bin, and the store lists only what is not.
+      const gainedOrgs = new Set(gained.map(({ orgId }) => orgId));
       const namesKeyWraps =
-        reader === null || gainedOrgs.size === 0
+        reader === null
           ? []
           : yield* Effect.gen(function* () {
               const { wraps } = yield* currentNamesKeys(owner);
@@ -1014,19 +944,21 @@ export const changeAccessAtom = ApiClient.runtime.fn(
                 ),
               );
             });
-      const prepared = yield* Effect.forEach(changes, change =>
-        Effect.gen(function* () {
-          const gained = gains(change);
-          if (reader === null || !(gained.environment || gained.read)) {
-            return { change, sealed: null };
-          }
-          const { owned } = yield* ownedEnvironment(owner, change.environmentId);
-          const sealed = yield* keys(() =>
-            grantToTrustedReader(owner, owned, reader, { canRead: gained.read }),
-          );
-          return { change, sealed };
-        }),
-      );
+      const sealed =
+        reader === null
+          ? []
+          : yield* Effect.forEach(gained, change =>
+              Effect.gen(function* () {
+                const { owned } = yield* ownedEnvironment(owner, change.environmentId);
+                const { readWrap, keyProof } = yield* keys(() =>
+                  grantToTrustedReader(owner, owned, reader, { canRead: true }),
+                );
+                if (readWrap === null) {
+                  return yield* Effect.die('a read was wrapped to no one');
+                }
+                return { environmentId: change.environmentId, readWrap, keyProof };
+              }),
+            );
       for (const { orgId, wrap } of namesKeyWraps) {
         yield* ApiClient.use(client =>
           client.orgs.putNamesKeyWrap({
@@ -1035,86 +967,34 @@ export const changeAccessAtom = ApiClient.runtime.fn(
           }),
         );
       }
-      for (const { change, sealed } of prepared) {
-        const { environmentId, canRead, canWrite } = change;
-        const params = { id: serviceAccount.id, environmentId };
-        if (!canRead && !canWrite) {
-          yield* ApiClient.use(client => client.credentials.removeAccess({ params }));
-          continue;
-        }
+      for (const { environmentId, readWrap, keyProof } of sealed) {
         yield* ApiClient.use(client =>
           client.credentials.setAccess({
-            params,
-            payload: {
-              canRead,
-              canWrite,
-              ...(sealed !== null && gains(change).environment
-                ? { keyProof: sealed.keyProof }
-                : {}),
-              ...(sealed?.readWrap ? { readWrap: sealed.readWrap } : {}),
-            },
+            params: { id: serviceAccount.id, environmentId },
+            payload: { readWrap, keyProof },
           }),
+        );
+      }
+      for (const { environmentId } of removed) {
+        yield* ApiClient.use(client =>
+          client.credentials.removeAccess({ params: { id: serviceAccount.id, environmentId } }),
         );
       }
     }).pipe(
       // Changes are sent one by one, so a failure part-way leaves the earlier ones made: show them.
-      Effect.onError(() =>
-        Reactivity.invalidate(['serviceAccounts', 'grants', 'keyChanges', 'audit']),
-      ),
+      Effect.onError(() => Reactivity.invalidate(['serviceAccounts', 'grants', 'audit'])),
       faultsAsDefects,
     ),
-  { reactivityKeys: ['serviceAccounts', 'grants', 'keyChanges', 'audit'] },
+  { reactivityKeys: ['serviceAccounts', 'grants', 'audit'] },
 );
 
 export const removeGrantAtom = ApiClient.runtime.fn(
   (params: { readonly id: string; readonly credentialId: string }) =>
     ApiClient.use(client => client.environments.removeGrant({ params })).pipe(faultsAsDefects),
-  { reactivityKeys: ['grants', 'serviceAccounts', 'keyChanges', 'audit'] },
+  { reactivityKeys: ['grants', 'serviceAccounts', 'audit'] },
 );
 
-// --- requests ----------------------------------------------------------------------------------
-
-export type OpenedRequestItem = RequestItem & { readonly openedEnvironmentName: string | null };
-export type OpenedRequest = Omit<Request, 'items'> & {
-  readonly items: ReadonlyArray<OpenedRequestItem>;
-};
-
-const openRequest = async (request: Request, namesKeys: NamesKeys): Promise<OpenedRequest> => ({
-  ...request,
-  items: await Promise.all(
-    request.items.map(async item => ({
-      ...item,
-      openedEnvironmentName: await openStored(namesKeys, {
-        orgId: item.orgId,
-        scopeId: item.orgId,
-        name: item.environmentName,
-        sealedName: item.environmentSealedName,
-      }),
-    })),
-  ),
-});
-
-/** Requests waiting for the owner, newest first. */
-export const requestsAtom = Atom.family((owner: Owner) =>
-  opening(
-    owner,
-    get => get.result(pendingRequestsAtom),
-    (requests, namesKeys) =>
-      Promise.all(
-        requests
-          .toSorted((a, b) => b.createdAt - a.createdAt)
-          .map(request => openRequest(request, namesKeys)),
-      ),
-  ),
-);
-
-const requestQuery = Atom.family((id: string) =>
-  ApiClient.query('requests', 'get', { params: { id }, reactivityKeys: ['requests'] }),
-);
-
-export const requestAtom = Atom.family((owner: Owner) =>
-  Atom.family((id: string) => opening(owner, get => get.result(requestQuery(id)), openRequest)),
-);
+// --- names a page showed -----------------------------------------------------------------------
 
 /** A name the page showed was opened from what the store sent then; refused unless it still opens to it. */
 const SHOWN_NAME_CHANGED = (what: string) =>
@@ -1144,493 +1024,465 @@ const reopenShown = Effect.fnUntraced(function* (
   return name;
 });
 
-/**
- * Approves a request: its key is learned from what its CLI login vouched for (never the store's
- * word), each environment it names is handed to it as asked, and it gets the names key of each
- * org it reaches. Only the environments the page showed: each name is opened again first. One
- * write, so the store has it approved with all of them or not at all. One per request, so an
- * answer in flight or failed on one request's page is not another's.
- */
-export const approveRequestAtom = Atom.family((_id: string) =>
-  ApiClient.runtime.fn(
-    ({
-      owner,
-      request,
-      expiresAt,
-    }: {
-      readonly owner: Owner;
-      readonly request: OpenedRequest;
-      /** The owner's choice; null for no end. */
-      readonly expiresAt: number | null;
-    }) =>
-      Effect.gen(function* () {
-        const orgIds = new Set(request.items.map(({ orgId }) => orgId));
-        const { wraps, namesKeys } = yield* currentNamesKeys(owner);
-        for (const orgId of orgIds) {
-          if ((yield* namesKeyFor(namesKeys, orgId)) === null) {
-            return yield* NOT_SEALED_YET('this request');
-          }
-        }
-        for (const item of request.items) {
-          yield* reopenShown(namesKeys, {
-            orgId: item.orgId,
-            scopeId: item.orgId,
-            name: item.environmentName,
-            sealedName: item.environmentSealedName,
-            shown: item.openedEnvironmentName,
-            what: 'This request',
-          });
-        }
-        const reader = yield* keys(
-          () =>
-            vouchedScopedReader(owner, {
-              serviceAccount: request,
-              maker: request.maker,
-            }),
-          'Nothing your vault approved vouches for this request’s key, so it cannot be approved. Nothing was changed.',
-        );
-        const grants = yield* Effect.forEach(request.items, item =>
-          Effect.gen(function* () {
-            const { owned, keyVersion } = yield* ownedEnvironment(owner, item.environmentId);
-            const { keyProof, readWrap } = yield* keys(() =>
-              grantToTrustedReader(owner, owned, reader, { canRead: item.canRead }),
-            );
-            return { environmentId: item.environmentId, readWrap, keyProof, keyVersion };
-          }),
-        );
-        const namesKeyWraps = yield* keys(() =>
-          rewrapAll(
-            owner,
-            wraps.filter(({ orgId }) => orgIds.has(orgId)),
-            reader,
-          ),
-        );
-        return yield* ApiClient.use(client =>
-          client.requests.approve({
-            params: { id: request.id },
-            payload: { expiresAt, grants, namesKeyWraps },
-          }),
-        );
-      }).pipe(faultsAsDefects),
-    { reactivityKeys: ['requests', 'serviceAccounts', 'grants', 'audit'] },
-  ),
-);
-
-/** One per request, as approving is. */
-export const rejectRequestAtom = Atom.family((_id: string) =>
-  ApiClient.runtime.fn(
-    (id: string) =>
-      ApiClient.use(client => client.requests.reject({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['requests', 'serviceAccounts', 'audit'] },
-  ),
-);
-
-// --- key changes -------------------------------------------------------------------------------
-
-export type OpenedKeyChange = Omit<KeyChange, 'holds' | 'add' | 'giveBack'> & {
-  readonly holds: ReadonlyArray<OpenedRequestItem>;
-  readonly add: ReadonlyArray<OpenedRequestItem>;
-  readonly giveBack: ReadonlyArray<OpenedRequestItem>;
-};
-
-const openItems = (items: ReadonlyArray<RequestItem>, namesKeys: NamesKeys) =>
-  Promise.all(
-    items.map(async item => ({
-      ...item,
-      openedEnvironmentName: await openStored(namesKeys, {
-        orgId: item.orgId,
-        scopeId: item.orgId,
-        name: item.environmentName,
-        sealedName: item.environmentSealedName,
-      }),
-    })),
-  );
-
-const openKeyChange = async (
-  change: KeyChange,
-  namesKeys: NamesKeys,
-): Promise<OpenedKeyChange> => ({
-  ...change,
-  holds: await openItems(change.holds, namesKeys),
-  add: await openItems(change.add, namesKeys),
-  giveBack: await openItems(change.giveBack, namesKeys),
-});
-
-const keyChangeListAtom = ApiClient.query('keyChanges', 'list', {
-  reactivityKeys: ['keyChanges'],
-});
-
-/**
- * Key changes waiting for the owner, as the nav counts them: only those that can be approved. One
- * whose key has ended, or that names an environment removed for good, waits on nobody.
- */
-const pendingKeyChangesAtom = keyChangeListAtom.pipe(
-  Atom.mapResult(({ changes }) => changes.filter(change => isApprovable(change, Date.now()))),
-);
-
-/** What waits for the owner under Keys: requests for a new key, and changes to one. */
-export const pendingKeyAsksAtom = Atom.make(get =>
-  Effect.all([get.result(pendingRequestsAtom), get.result(pendingKeyChangesAtom)]).pipe(
-    Effect.map(([requests, changes]) => [...requests, ...changes]),
-  ),
-);
-
-/** Key changes waiting for the owner, newest first. */
-export const keyChangesAtom = Atom.family((owner: Owner) =>
-  opening(
-    owner,
-    get => get.result(pendingKeyChangesAtom),
-    (changes, namesKeys) =>
-      Promise.all(
-        changes
-          .toSorted((a, b) => b.createdAt - a.createdAt)
-          .map(change => openKeyChange(change, namesKeys)),
-      ),
-  ),
-);
-
-const keyChangeQuery = Atom.family((id: string) =>
-  ApiClient.query('keyChanges', 'get', { params: { id }, reactivityKeys: ['keyChanges'] }),
-);
-
-export const keyChangeAtom = Atom.family((owner: Owner) =>
-  Atom.family((id: string) => opening(owner, get => get.result(keyChangeQuery(id)), openKeyChange)),
-);
-
-/**
- * Approves a key change: its key is learned from what its CLI login vouched for (never the store's
- * word), as approving a request learns it, each environment it adds gets the owner's proof of its
- * key, read is wrapped where the change adds read, and each org it adds to gets its names key. What it gives back needs
- * no key. Only the environments the page showed: each name is opened again first. One write, so
- * the store has all of it or none. `expiresAt` absent keeps the key's end.
- */
-export const approveKeyChangeAtom = Atom.family((_id: string) =>
-  ApiClient.runtime.fn(
-    ({
-      owner,
-      change,
-      expiresAt,
-    }: {
-      readonly owner: Owner;
-      readonly change: OpenedKeyChange;
-      /** The owner's choice: a time, null for no end, undefined to keep the key's end. */
-      readonly expiresAt: number | null | undefined;
-    }) =>
-      Effect.gen(function* () {
-        const orgIds = new Set(change.add.map(({ orgId }) => orgId));
-        const { wraps, namesKeys } = yield* currentNamesKeys(owner);
-        for (const orgId of orgIds) {
-          if ((yield* namesKeyFor(namesKeys, orgId)) === null) {
-            return yield* NOT_SEALED_YET('this key change');
-          }
-        }
-        for (const item of [...change.add, ...change.giveBack, ...change.holds]) {
-          yield* reopenShown(namesKeys, {
-            orgId: item.orgId,
-            scopeId: item.orgId,
-            name: item.environmentName,
-            sealedName: item.environmentSealedName,
-            shown: item.openedEnvironmentName,
-            what: 'This key change',
-          });
-        }
-        const reader =
-          change.add.length === 0
-            ? null
-            : yield* keys(
-                () =>
-                  vouchedScopedReader(owner, { serviceAccount: change.key, maker: change.maker }),
-                'Nothing your vault approved vouches for this key, so nothing can be added to it. Nothing was changed.',
-              );
-        const grants =
-          reader === null
-            ? []
-            : yield* Effect.forEach(change.add, item =>
-                Effect.gen(function* () {
-                  const { owned, keyVersion } = yield* ownedEnvironment(owner, item.environmentId);
-                  // Read is wrapped only where the change adds it, as the page showed: never
-                  // because the store says the key reads there already.
-                  const { keyProof, readWrap } = yield* keys(() =>
-                    grantToTrustedReader(owner, owned, reader, { canRead: item.canRead }),
-                  );
-                  return { environmentId: item.environmentId, readWrap, keyProof, keyVersion };
-                }),
-              );
-        const namesKeyWraps =
-          reader === null
-            ? []
-            : yield* keys(() =>
-                rewrapAll(
-                  owner,
-                  wraps.filter(({ orgId }) => orgIds.has(orgId)),
-                  reader,
-                ),
-              );
-        return yield* ApiClient.use(client =>
-          client.keyChanges.approve({
-            params: { id: change.id },
-            payload: {
-              ...(expiresAt === undefined ? {} : { expiresAt }),
-              grants,
-              namesKeyWraps,
-            },
-          }),
-        );
-      }).pipe(faultsAsDefects),
-    { reactivityKeys: ['keyChanges', 'serviceAccounts', 'grants', 'audit'] },
-  ),
-);
-
-/** One per key change, as approving is. */
-export const rejectKeyChangeAtom = Atom.family((_id: string) =>
-  ApiClient.runtime.fn(
-    (id: string) =>
-      ApiClient.use(client => client.keyChanges.reject({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['keyChanges', 'audit'] },
-  ),
-);
-
-// --- environment requests ----------------------------------------------------------------------
-
-export type OpenedEnvironmentRequest = Opened<EnvironmentRequest>;
-
-const openEnvironmentRequest = async (
-  request: EnvironmentRequest,
-  namesKeys: NamesKeys,
-): Promise<OpenedEnvironmentRequest> => ({
-  ...request,
-  openedName: await openStored(namesKeys, { ...request, scopeId: request.orgId }),
-});
-
-/** Environment requests waiting for the owner, as the nav counts them. */
-export const pendingEnvironmentRequestsAtom = ApiClient.query('environmentRequests', 'list', {
-  reactivityKeys: ['environmentRequests'],
-}).pipe(Atom.mapResult(({ requests }) => requests));
-
-/** Environment requests waiting for the owner, newest first. */
-export const environmentRequestsAtom = Atom.family((owner: Owner) =>
-  opening(
-    owner,
-    get => get.result(pendingEnvironmentRequestsAtom),
-    (requests, namesKeys) =>
-      Promise.all(
-        requests
-          .toSorted((a, b) => b.createdAt - a.createdAt)
-          .map(request => openEnvironmentRequest(request, namesKeys)),
-      ),
-  ),
-);
-
-const environmentRequestQuery = Atom.family((id: string) =>
-  ApiClient.query('environmentRequests', 'get', {
-    params: { id },
-    reactivityKeys: ['environmentRequests'],
-  }),
-);
-
-export const environmentRequestAtom = Atom.family((owner: Owner) =>
-  Atom.family((id: string) =>
-    opening(owner, get => get.result(environmentRequestQuery(id)), openEnvironmentRequest),
-  ),
-);
-
 const isEnvironmentName = Schema.is(EnvironmentNameSchema);
 
-/**
- * Approves an environment request by creating the environment it names, as creating one here
- * does, under the id and the sealed name it asked for. Only the name the page showed: it is opened
- * again with the names key as it is now, and nothing is made if it does not open to that name.
- */
-export const approveEnvironmentRequestAtom = Atom.family((_id: string) =>
-  ApiClient.runtime.fn(
-    ({ owner, request }: { readonly owner: Owner; readonly request: OpenedEnvironmentRequest }) =>
-      Effect.gen(function* () {
-        const name = yield* reopenShown((yield* currentNamesKeys(owner)).namesKeys, {
-          ...request,
-          scopeId: request.orgId,
-          shown: request.openedName,
-          what: 'This request',
-        });
-        if (!isEnvironmentName(name)) {
-          return yield* new OwnerError({
-            message: 'An environment cannot have this name. Nothing was created.',
-          });
-        }
-        return yield* makeEnvironment(owner, {
-          id: request.id,
-          orgId: request.orgId,
-          name: request.name,
-          sealedName: request.sealedName,
-          answers: request.id,
-        });
-      }).pipe(faultsAsDefects),
-    { reactivityKeys: ['environmentRequests', 'environments', 'orgs', 'audit'] },
-  ),
-);
+// --- plans -------------------------------------------------------------------------------------
 
-/** One per environment request, as approving is. */
-export const rejectEnvironmentRequestAtom = Atom.family((_id: string) =>
-  ApiClient.runtime.fn(
-    (id: string) =>
-      ApiClient.use(client => client.environmentRequests.reject({ params: { id } })).pipe(
-        faultsAsDefects,
-      ),
-    { reactivityKeys: ['environmentRequests', 'audit'] },
-  ),
-);
+type StepOf<T extends PlanStep['type']> = Extract<PlanStep, { readonly type: T }>;
+type WithEnvironmentName<A> = A & { readonly openedEnvironmentName: string | null };
 
-// --- paste links -------------------------------------------------------------------------------
-
-export type OpenedPasteLink = Opened<PasteLink> & {
-  readonly openedEnvironmentName: string | null;
+export type OpenedSecretItem = WithEnvironmentName<StepOf<'secrets'>['items'][number]> & {
+  readonly openedName: string | null;
+  /**
+   * A `set` item's value while its step waits, as the vault opened it: null when it did not open
+   * as one the login that asked sealed for this slot. Null for every other item.
+   */
+  readonly proposed: string | null;
+  /**
+   * A `paste` item's hint while its step waits, as the vault opened it: null when there is none, or
+   * when it did not open as one the login that asked sealed for this slot (`sealedHint` is not null
+   * then). Null for every other item.
+   */
+  readonly openedHint: string | null;
 };
 
-const openPasteLink = async (link: PasteLink, namesKeys: NamesKeys): Promise<OpenedPasteLink> => ({
-  ...link,
-  openedName: await openStored(namesKeys, { ...link, scopeId: link.environmentId }),
-  openedEnvironmentName: await openStored(namesKeys, {
-    orgId: link.orgId,
-    scopeId: link.orgId,
-    name: link.environmentName,
-    sealedName: link.environmentSealedName,
-  }),
-});
+export type OpenedPlanStep =
+  | (Omit<StepOf<'environments'>, 'items'> & {
+      readonly items: ReadonlyArray<WithEnvironmentName<StepOf<'environments'>['items'][number]>>;
+    })
+  | (Omit<StepOf<'access'>, 'read'> & {
+      readonly read: ReadonlyArray<WithEnvironmentName<StepOf<'access'>['read'][number]>>;
+    })
+  | (Omit<StepOf<'change'>, 'holds' | 'read' | 'giveBack'> & {
+      readonly holds: ReadonlyArray<OpenedGrant>;
+      readonly read: ReadonlyArray<WithEnvironmentName<StepOf<'change'>['read'][number]>>;
+      readonly giveBack: ReadonlyArray<WithEnvironmentName<StepOf<'change'>['giveBack'][number]>>;
+    })
+  | (Omit<StepOf<'secrets'>, 'items'> & { readonly items: ReadonlyArray<OpenedSecretItem> });
 
-/** Paste links waiting for the owner, as the nav counts them. */
-export const pendingPasteLinksAtom = ApiClient.query('pasteLinks', 'list', {
-  reactivityKeys: ['pasteLinks'],
-}).pipe(Atom.mapResult(({ links }) => links));
+export type OpenedPlan = Omit<Plan, 'steps'> & { readonly steps: ReadonlyArray<OpenedPlanStep> };
 
-export const pasteLinksAtom = Atom.family((owner: Owner) =>
-  opening(
-    owner,
-    get => get.result(pendingPasteLinksAtom),
-    (links, namesKeys) => Promise.all(links.map(link => openPasteLink(link, namesKeys))),
-  ),
+type PlanEnvironment = {
+  readonly environmentName: string | null;
+  readonly environmentSealedName: string | null;
+};
+
+/**
+ * Every name a plan shows, opened here, and every value it proposes, opened with the key the
+ * vault endorsed for the login that asked: never one the store lists beside the plan.
+ */
+const openPlan = async (owner: Owner, plan: Plan, namesKeys: NamesKeys): Promise<OpenedPlan> => {
+  const orgId = plan.org.id;
+  const maker = await endorsedReader(owner, plan.maker).catch(() => null);
+  const named = async <A extends PlanEnvironment>(item: A): Promise<WithEnvironmentName<A>> => ({
+    ...item,
+    openedEnvironmentName:
+      item.environmentName === null
+        ? null
+        : await openStored(namesKeys, {
+            orgId,
+            scopeId: orgId,
+            name: item.environmentName,
+            sealedName: item.environmentSealedName,
+          }),
+  });
+  const openSecretItem = async (
+    step: StepOf<'secrets'>,
+    item: StepOf<'secrets'>['items'][number],
+  ): Promise<OpenedSecretItem> => {
+    const openedName = await openStored(namesKeys, {
+      orgId,
+      scopeId: item.environmentId,
+      name: item.name,
+      sealedName: item.sealedName,
+    });
+    const opening =
+      maker === null || openedName === null
+        ? null
+        : {
+            accountKey: owner.accountKey,
+            loginPublicKey: maker.publicKey,
+            slot: {
+              planId: plan.id,
+              stepIndex: step.index,
+              environmentId: item.environmentId,
+              name: openedName,
+            },
+          };
+    const proposed =
+      item.op !== 'set' || item.value === null || opening === null
+        ? null
+        : await openProposedValue({ ...opening, ciphertext: item.value }).catch(() => null);
+    const openedHint =
+      item.op !== 'paste' || item.sealedHint === null || opening === null
+        ? null
+        : await openHint({ ...opening, ciphertext: item.sealedHint }).catch(() => null);
+    return { ...(await named(item)), openedName, proposed, openedHint };
+  };
+  const steps = await Promise.all(
+    plan.steps.map(async (step): Promise<OpenedPlanStep> => {
+      if (step.type === 'environments') {
+        return { ...step, items: await Promise.all(step.items.map(named)) };
+      }
+      if (step.type === 'access') return { ...step, read: await Promise.all(step.read.map(named)) };
+      if (step.type === 'change') {
+        return {
+          ...step,
+          holds: await Promise.all(step.holds.map(grant => openGrant(grant, namesKeys))),
+          read: await Promise.all(step.read.map(named)),
+          giveBack: await Promise.all(step.giveBack.map(named)),
+        };
+      }
+      return {
+        ...step,
+        items: await Promise.all(step.items.map(item => openSecretItem(step, item))),
+      };
+    }),
+  );
+  return { ...plan, steps };
+};
+
+/** Plans with a step that waits for the owner, newest first: what Plans lists and counts. */
+export const pendingPlansAtom = ApiClient.query('plans', 'list', {
+  query: {},
+  reactivityKeys: ['plans'],
+}).pipe(Atom.mapResult(({ plans }) => plans.toSorted((a, b) => b.createdAt - a.createdAt)));
+
+const planQuery = Atom.family((id: string) =>
+  ApiClient.query('plans', 'get', { params: { id }, reactivityKeys: ['plans'] }),
 );
 
-export const cancelPasteLinkAtom = Atom.family((id: string) =>
-  ApiClient.runtime.fn(
-    () =>
-      ApiClient.use(client => client.pasteLinks.cancel({ params: { id } })).pipe(faultsAsDefects),
-    { reactivityKeys: ['pasteLinks', 'audit'] },
-  ),
-);
-
-// --- the paste page ----------------------------------------------------------------------------
-
-const pasteTargetQuery = Atom.family((id: string) =>
-  ApiClient.query('paste', 'target', { params: { id }, reactivityKeys: ['paste'] }),
-);
-
-export const pasteTargetAtom = Atom.family((owner: Owner) =>
+export const planAtom = Atom.family((owner: Owner) =>
   Atom.family((id: string) =>
     opening(
       owner,
-      get => get.result(pasteTargetQuery(id)),
-      async (target, namesKeys) => ({
-        ...target,
-        link: await openPasteLink(target.link, namesKeys),
-      }),
+      get => get.result(planQuery(id)),
+      (plan, namesKeys) => openPlan(owner, plan, namesKeys),
     ),
   ),
 );
 
-/** What the paste page showed the owner: the environment and the name, each as stored and as opened. */
-export type ShownPasteTarget = {
-  readonly environmentId: string;
-  readonly environmentName: string;
-  readonly environmentSealedName: string | null;
-  readonly openedEnvironmentName: string | null;
-  readonly name: string;
-  readonly sealedName: string | null;
-  readonly openedName: string | null;
-};
+/** The answer's note, sealed to the login that asked and bound to this step and this decision. */
+const sealedNote = Effect.fnUntraced(function* (
+  owner: Owner,
+  plan: OpenedPlan,
+  {
+    index,
+    decision,
+    note,
+  }: { readonly index: number; readonly decision: 'approved' | 'rejected'; readonly note: string },
+) {
+  if (note === '') return {};
+  const maker = yield* keys(
+    () => endorsedReader(owner, plan.maker),
+    'Could not verify the CLI login to seal your note. Nothing was sent.',
+  );
+  return {
+    note: yield* keys(() =>
+      sealNote({
+        accountKey: owner.accountKey,
+        loginPublicKey: maker.publicKey,
+        step: { planId: plan.id, stepIndex: index, decision },
+        note,
+      }),
+    ),
+  };
+});
+
+const NOTHING_SENT = (message: string) => new OwnerError({ message });
+
+/** Each environment the page showed for a step, opened again: refused unless it opens to the same name. */
+const reopenEnvironments = Effect.fnUntraced(function* (
+  namesKeys: NamesKeys,
+  orgId: string,
+  items: ReadonlyArray<WithEnvironmentName<PlanEnvironment>>,
+) {
+  for (const item of items) {
+    yield* reopenShown(namesKeys, {
+      orgId,
+      scopeId: orgId,
+      name: item.environmentName ?? '',
+      sealedName: item.environmentSealedName,
+      shown: item.openedEnvironmentName,
+      what: 'This step',
+    });
+  }
+});
 
 /**
- * Seals the pasted value to the key the owner's vault proves for the link's environment, never to
- * the one the store sent beside the link, under the name the names key opens. Only for the target
- * the page showed: the link is read again to seal, and refused if it now names another. One per
- * paste link, so a page for another link starts with nothing sent.
+ * Read for a key its maker vouched for, learned from that voucher and never from the store's
+ * word: each environment's key wrapped to it with the owner's proof, and the plan's org's names
+ * key. Nothing for a step that reads nothing.
  */
-export const fulfilPasteAtom = Atom.family((_id: string) =>
+const readAnswer = Effect.fnUntraced(function* (
+  owner: Owner,
+  plan: OpenedPlan,
+  {
+    key,
+    read,
+    others,
+  }: {
+    readonly key: {
+      readonly id: string;
+      readonly publicKey: string;
+      readonly keyVoucher: string | null;
+    };
+    readonly read: ReadonlyArray<WithEnvironmentName<StepOf<'access'>['read'][number]>>;
+    /** What else the step names, opened again as the read is. */
+    readonly others: ReadonlyArray<WithEnvironmentName<PlanEnvironment>>;
+  },
+) {
+  const { wraps, namesKeys } = yield* currentNamesKeys(owner);
+  if (read.length > 0 && (yield* namesKeyFor(namesKeys, plan.org.id)) === null) {
+    return yield* NOT_SEALED_YET('this step');
+  }
+  yield* reopenEnvironments(namesKeys, plan.org.id, [...read, ...others]);
+  if (read.length === 0) return { grants: [], namesKeyWraps: [] };
+  const reader = yield* keys(
+    () => vouchedScopedReader(owner, { serviceAccount: key, maker: plan.maker }),
+    'Could not verify the key. Nothing was sent.',
+  );
+  const grants = yield* Effect.forEach(read, ({ environmentId }) =>
+    Effect.gen(function* () {
+      const { owned, keyVersion } = yield* ownedEnvironment(owner, environmentId);
+      const { keyProof, readWrap } = yield* keys(() =>
+        grantToTrustedReader(owner, owned, reader, { canRead: true }),
+      );
+      if (readWrap === null) return yield* Effect.die('a read came with no wrap');
+      return { environmentId, readWrap, keyProof, keyVersion };
+    }),
+  );
+  const namesKeyWraps = yield* keys(() =>
+    rewrapAll(
+      owner,
+      wraps.filter(({ orgId }) => orgId === plan.org.id),
+      reader,
+    ),
+  );
+  return { grants, namesKeyWraps };
+});
+
+/**
+ * Each value a secrets step writes, sealed here to the key the vault proves for its environment,
+ * for the slot the page read: the proposed value as the vault opened it, the one the owner
+ * pasted (by the item's place in the step), or a new random one nobody sees.
+ */
+const secretValues = Effect.fnUntraced(function* (
+  owner: Owner,
+  plan: OpenedPlan,
+  step: Extract<OpenedPlanStep, { readonly type: 'secrets' }>,
+  pasted: ReadonlyMap<number, string>,
+) {
+  const { namesKeys } = yield* currentNamesKeys(owner);
+  const values = yield* Effect.forEach(step.items, (item, position) =>
+    Effect.gen(function* () {
+      if (item.op !== 'set' && item.op !== 'paste' && item.op !== 'generate') return [];
+      const { nextVersion, keyVersion, environmentId } = item;
+      if (nextVersion === null || keyVersion === null) {
+        return yield* NOTHING_SENT(
+          'The environment does not exist yet. Approve the step that creates it first. Nothing was sent.',
+        );
+      }
+      yield* reopenEnvironments(namesKeys, plan.org.id, [item]);
+      const name = yield* reopenShown(namesKeys, {
+        orgId: plan.org.id,
+        scopeId: environmentId,
+        name: item.name,
+        sealedName: item.sealedName,
+        shown: item.openedName,
+        what: 'This step',
+      });
+      const value = yield* (() => {
+        if (item.op === 'generate') return Effect.succeed(randomToken());
+        if (item.op === 'paste') {
+          const typed = pasted.get(position) ?? '';
+          return typed === ''
+            ? Effect.fail(new OwnerError({ message: `Paste a value for ${name}.` }))
+            : Effect.succeed(typed);
+        }
+        return item.proposed === null
+          ? Effect.fail(
+              NOTHING_SENT(`Could not verify the proposed value for ${name}. Nothing was sent.`),
+            )
+          : Effect.succeed(item.proposed);
+      })();
+      const proven = yield* ownedEnvironment(owner, environmentId);
+      if (proven.keyVersion !== keyVersion) {
+        return yield* NOTHING_SENT(
+          'The environment key changed. Nothing was sent. Refresh the plan and try again.',
+        );
+      }
+      const ciphertext = yield* keys(() =>
+        sealValue({
+          environmentPublicKey: proven.publicKey,
+          slot: { environmentId, keyVersion, name, version: nextVersion },
+          value,
+        }),
+      );
+      return [{ item: position, version: nextVersion, keyVersion, ciphertext }];
+    }),
+  );
+  return values.flat();
+});
+
+/**
+ * Approves `step` with what this browser makes for it from what the page showed and what the owner
+ * chose, and `sealed`, the note if any. Each type is sent on its own: the client takes one payload
+ * shape per call.
+ */
+const sendApproval = Effect.fnUntraced(function* (
+  owner: Owner,
+  plan: OpenedPlan,
+  step: OpenedPlanStep,
+  {
+    pasted,
+    expiresAt,
+    sealed,
+  }: {
+    readonly pasted: ReadonlyMap<number, string>;
+    /** The owner's end for a key: null for none; undefined keeps a changed key's own. */
+    readonly expiresAt: number | null | undefined;
+    readonly sealed: { readonly note?: string };
+  },
+) {
+  const params = { id: plan.id, index: step.index };
+  if (step.type === 'environments') {
+    const { namesKeys } = yield* currentNamesKeys(owner);
+    yield* reopenEnvironments(namesKeys, plan.org.id, step.items);
+    const creates = step.items.filter(({ op }) => op === 'create');
+    if (creates.some(({ openedEnvironmentName }) => !isEnvironmentName(openedEnvironmentName))) {
+      return yield* NOTHING_SENT('An environment name is invalid. Nothing was sent.');
+    }
+    const made = yield* Effect.forEach(creates, ({ environmentId }) =>
+      Effect.map(environmentKeyPair(owner, environmentId), keyPair => ({
+        environmentId,
+        ...keyPair,
+      })),
+    );
+    return yield* ApiClient.use(client =>
+      client.plans.approveStep({ params, payload: { type: step.type, creates: made, ...sealed } }),
+    );
+  }
+  if (step.type === 'access') {
+    const read = yield* readAnswer(owner, plan, { key: step.key, read: step.read, others: [] });
+    return yield* ApiClient.use(client =>
+      client.plans.approveStep({
+        params,
+        payload: { type: step.type, expiresAt: expiresAt ?? null, ...read, ...sealed },
+      }),
+    );
+  }
+  if (step.type === 'change') {
+    const read = yield* readAnswer(owner, plan, {
+      key: step.key,
+      read: step.read,
+      others: step.giveBack,
+    });
+    return yield* ApiClient.use(client =>
+      client.plans.approveStep({
+        params,
+        payload: {
+          type: step.type,
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+          ...read,
+          ...sealed,
+        },
+      }),
+    );
+  }
+  const values = yield* secretValues(owner, plan, step, pasted);
+  return yield* ApiClient.use(client =>
+    client.plans.approveStep({ params, payload: { type: step.type, values, ...sealed } }),
+  );
+});
+
+const PLAN_KEYS = [
+  'plans',
+  'environments',
+  'serviceAccounts',
+  'grants',
+  'secrets',
+  'bin',
+  'orgs',
+  'audit',
+] as const;
+
+/**
+ * Approves one step, making in this browser what it names. One write, so the store has all of it
+ * or none. One per step (`<plan id>/<index>`), so an answer in flight or failed on one step is not
+ * another's.
+ */
+export const approveStepAtom = Atom.family((_step: string) =>
   ApiClient.runtime.fn(
     ({
-      id,
       owner,
-      shown,
-      value,
+      plan,
+      index,
+      note,
+      pasted,
+      expiresAt,
     }: {
-      readonly id: string;
       readonly owner: Owner;
-      readonly shown: ShownPasteTarget;
-      readonly value: string;
+      readonly plan: OpenedPlan;
+      readonly index: number;
+      readonly note: string;
+      readonly pasted: ReadonlyMap<number, string>;
+      readonly expiresAt: number | null | undefined;
     }) =>
       Effect.gen(function* () {
-        const target = yield* ApiClient.use(client => client.paste.target({ params: { id } }));
-        const { link } = target;
-        const changed = new OwnerError({
-          message:
-            'This link names something other than what this page shows. Nothing was sent; reload the page to see what it asks for now.',
-        });
-        if (
-          shown.openedName === null ||
-          shown.openedEnvironmentName === null ||
-          link.environmentId !== shown.environmentId ||
-          link.environmentName !== shown.environmentName ||
-          link.environmentSealedName !== shown.environmentSealedName ||
-          link.name !== shown.name ||
-          link.sealedName !== shown.sealedName
-        ) {
-          return yield* changed;
-        }
-        const proven = yield* ownedEnvironment(owner, link.environmentId);
-        if (
-          proven.keyVersion !== target.keyVersion ||
-          proven.publicKey !== target.environmentPublicKey
-        ) {
-          return yield* new OwnerError({
-            message:
-              'The store shows a different environment key than the one your vault holds. Nothing was sent.',
-          });
-        }
-        const { namesKeys } = yield* currentNamesKeys(owner);
-        yield* reopenShown(namesKeys, {
-          orgId: link.orgId,
-          scopeId: link.orgId,
-          name: link.environmentName,
-          sealedName: link.environmentSealedName,
-          shown: shown.openedEnvironmentName,
-          what: 'This link',
-        });
-        const name = yield* reopenShown(namesKeys, {
-          orgId: link.orgId,
-          scopeId: link.environmentId,
-          name: link.name,
-          sealedName: link.sealedName,
-          shown: shown.openedName,
-          what: 'This link',
-        });
-        const ciphertext = yield* keys(() =>
-          sealValue({
-            environmentPublicKey: proven.publicKey,
-            slot: {
-              environmentId: link.environmentId,
-              keyVersion: target.keyVersion,
-              name,
-              version: target.nextVersion,
-            },
-            value,
-          }),
-        );
+        const step = plan.steps[index];
+        if (step === undefined) return yield* Effect.die(`plan ${plan.id} has no step ${index}`);
+        const sealed = yield* sealedNote(owner, plan, { index, decision: 'approved', note });
+        return yield* sendApproval(owner, plan, step, { pasted, expiresAt, sealed });
+      }).pipe(
+        faultsAsDefects,
+        // Refusals the page answers by reading the plan again: the step then shows why, and what
+        // the owner typed stays. The store's words count steps from 0, the page's from 1.
+        Effect.catchTags({
+          StepNotApprovableError: () =>
+            Effect.fail(
+              new OwnerError({
+                message: 'This step can no longer be approved. The plan has been refreshed.',
+              }),
+            ),
+          VersionConflictError: () =>
+            Effect.fail(
+              new OwnerError({
+                message:
+                  'Something changed since this plan was made. The plan has been refreshed; review the step and try again.',
+              }),
+            ),
+        }),
+        Effect.onError(() => Reactivity.invalidate(['plans'])),
+      ),
+    { reactivityKeys: PLAN_KEYS },
+  ),
+);
+
+/** Rejects one step, with the owner's note when there is one. One per step, as approving is. */
+export const rejectStepAtom = Atom.family((_step: string) =>
+  ApiClient.runtime.fn(
+    ({
+      owner,
+      plan,
+      index,
+      note,
+    }: {
+      readonly owner: Owner;
+      readonly plan: OpenedPlan;
+      readonly index: number;
+      readonly note: string;
+    }) =>
+      Effect.gen(function* () {
+        const sealed = yield* sealedNote(owner, plan, { index, decision: 'rejected', note });
         return yield* ApiClient.use(client =>
-          client.paste.fulfil({
-            params: { id },
-            payload: { version: target.nextVersion, keyVersion: target.keyVersion, ciphertext },
-          }),
+          client.plans.rejectStep({ params: { id: plan.id, index }, payload: sealed }),
         );
-      }).pipe(faultsAsDefects),
-    { reactivityKeys: ['paste', 'pasteLinks', 'secrets', 'audit'] },
+      }).pipe(
+        faultsAsDefects,
+        Effect.onError(() => Reactivity.invalidate(['plans'])),
+      ),
+    { reactivityKeys: PLAN_KEYS },
   ),
 );
 

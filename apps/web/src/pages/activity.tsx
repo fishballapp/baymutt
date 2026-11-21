@@ -70,6 +70,19 @@ const untilWords = (end: string): string =>
 /** How a key change's detail names the end it left the key with; any other is `until <day>`. */
 const CHANGED_ENDS: Record<string, string> = { 'same end': '', 'no end': ', with no end' };
 
+/**
+ * A plan's step as the Worker logs it, "step 2: access (deploy), until 2026-11-22", as "step 2 of
+ * a plan, access (deploy), until Nov 22, 2026". The end is there only when the step set one.
+ */
+const stepWords = (detail: string | null): string => {
+  if (detail === null) return 'a step of a plan';
+  const split = detail.indexOf(': ');
+  if (split === -1) return `${detail} of a plan`;
+  const [what = '', end] = detail.slice(split + 2).split(/, (?=until |no end$|same end$)/u);
+  const ended = end === undefined ? '' : (CHANGED_ENDS[end] ?? `, ${untilWords(end)}`);
+  return `${detail.slice(0, split)} of a plan, ${what}${ended}`;
+};
+
 /** What happened, as the rest of a sentence that starts with who did it. */
 const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   'account.create': () => 'created the account',
@@ -110,6 +123,11 @@ const DEEDS: Record<ActivityAction, (event: Entry) => ReactNode> = {
   },
   'key-change.reject': ({ detail }) => <>rejected a change to {detail}</>,
   'key-change.expire': ({ detail }) => <>expired a change to {detail}, unanswered for an hour</>,
+  'plan.create': ({ detail }) => <>made a plan: {detail}</>,
+  'plan.cancel': ({ detail }) => <>withdrew the plan: {detail}</>,
+  'step.approve': ({ detail }) => <>approved {stepWords(detail)}</>,
+  'step.reject': ({ detail }) => <>rejected {stepWords(detail)}</>,
+  'step.expire': ({ detail }) => <>expired {stepWords(detail)}, unanswered for an hour</>,
   'credential.revoke': ({ detail }) => {
     // The nightly sweep writes "<key>: ended on <day>"; the owner's revoke writes the name alone.
     const [name, ended] = detail?.split(': ended on ') ?? [];

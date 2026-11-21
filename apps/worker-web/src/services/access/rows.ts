@@ -9,7 +9,7 @@ import {
   NoAccessError,
   NotFoundError,
   OwnerRequiredError,
-  REQUEST_WAIT_MS,
+  PLAN_WAIT_MS,
 } from '@baymutt/api';
 import type * as D1Client from '@effect/sql-d1/D1Client';
 import * as Clock from 'effect/Clock';
@@ -59,8 +59,7 @@ export const EnvironmentRowSchema = Schema.Struct({
   /** The caller's person's own copy of the key, and the creator's proof to it. */
   memberWrap: Schema.NullOr(Schema.String),
   memberProof: Schema.NullOr(Schema.String),
-  /** The caller's grant, when the caller is a service account that has one. */
-  canWrite: Schema.NullOr(Schema.Finite),
+  /** The caller's grant, when the caller is a key that has one. */
   readWrap: Schema.NullOr(Schema.String),
   keyProof: Schema.NullOr(Schema.String),
 });
@@ -100,7 +99,7 @@ export const mayListNamesIn = (
 
 /** What a key is told when it reaches past the one org it belongs to. */
 export const outsideKeyOrg = (keyOrgSlug: string, what: string) =>
-  `A key belongs to one org, and this one belongs to ${keyOrgSlug}: ${what}. Ask once per org: a key for another org is asked for with its own \`baymutt ask access\`.`;
+  `A key belongs to one org, and this one belongs to ${keyOrgSlug}: ${what}. Ask once per org: a key for another org is asked for in a plan of its own.`;
 
 /** A CLI login: made by `baymutt auth login` and approved by the owner, so it has no parent. It holds no environment. */
 export const isLogin = (actor: ActorIdentity): boolean =>
@@ -119,12 +118,9 @@ export const addressOf = (environment: {
     ? `${environment.orgSlug}/${environment.name}`
     : `${environment.orgSlug}/<environment>`;
 
-/** What a CLI login is told when it reaches for what only a request holds. */
-export const loginHoldsNothing = (
-  environment: Parameters<typeof addressOf>[0],
-  need: 'read' | 'write',
-) =>
-  `A CLI login holds no environment. Ask for it: \`baymutt ask access --${need} ${addressOf(environment)} --reason "<why>"\`; the owner approves, and the key it makes holds what was asked for. If this task already holds a key, ask to add it to that one instead: \`baymutt ask change <its id> --${need} ${addressOf(environment)} --reason "<why>"\`.`;
+/** What a CLI login is told when it reaches for a read only a key holds. */
+export const loginHoldsNothing = (environment: Parameters<typeof addressOf>[0]) =>
+  `A CLI login holds no environment. Ask for a key that reads ${addressOf(environment)} in a plan's \`access\` step (\`baymutt ask --help\`); the owner approves, and the key reads it. If this task already holds a key, ask to add it to that one in a \`change\` step instead.`;
 
 /**
  * The orgs a person belongs to, by their account: a subquery for `IN (…)`. A credential reaches only
@@ -156,7 +152,7 @@ export const lookups = (sql: D1Client.D1Client) => {
       sql`SELECT e.id, e.org_id, o.slug AS org_slug, m.role, e.name, e.sealed_name,
             EXISTS (SELECT 1 FROM names_key_wrap n WHERE n.org_id = e.org_id) AS are_names_sealed,
             e.public_key, e.key_version, e.created_by, e.created_at, w.wrap AS member_wrap,
-            w.proof AS member_proof, g.can_write, g.read_wrap, g.key_proof,
+            w.proof AS member_proof, g.read_wrap, g.key_proof,
             (SELECT COUNT(*) FROM secret s
               WHERE s.environment_id = e.id AND s.current_version IS NOT NULL) AS secret_count
           FROM environment e
@@ -188,7 +184,8 @@ export const lookups = (sql: D1Client.D1Client) => {
         secretCount: row.secretCount,
         keyProof: isOwner ? null : row.keyProof,
         canRead: isOwner ? row.memberWrap !== null : row.readWrap !== null,
-        canWrite: isOrgOwner || row.canWrite === 1,
+        // A key only reads: the owner writes, and an agent asks for a write in a plan.
+        canWrite: isOrgOwner,
       },
       areNamesSealed: row.areNamesSealed !== 0,
       isOrgOwner,
@@ -215,7 +212,7 @@ export const lookups = (sql: D1Client.D1Client) => {
   /**
    * An environment the caller lists: any of the person's orgs for the owner and a CLI login, one it
    * holds a grant on for a service account. One a service account holds no grant on reads as not
-   * found: its name is not the caller's to learn. Listed is not granted: `needing` checks that.
+   * found: its name is not the caller's to learn. Listed is not granted: `reading` checks that.
    */
   const environmentFor = Effect.fnUntraced(function* (actor: ActorIdentity, environmentId: string) {
     const [access] = yield* environmentsOf(actor, environmentId);
@@ -224,7 +221,7 @@ export const lookups = (sql: D1Client.D1Client) => {
         message:
           actor._tag === 'Owner' || isLogin(actor)
             ? 'No environment of your orgs has this id. List them with `baymutt env list`.'
-            : 'No environment with this id is granted to this key. List what it holds with `baymutt env list`; the CLI login that asked for it asks to add more with `baymutt ask change <its id>`.',
+            : 'No environment with this id is granted to this key. List what it holds with `baymutt env list`; the CLI login that asked for it asks to add more in a plan’s `change` step.',
       });
     }
     return access;
@@ -253,15 +250,15 @@ export const lookups = (sql: D1Client.D1Client) => {
     return access;
   });
 
-  const needing = (access: EnvironmentAccess, need: 'read' | 'write') => {
-    const holds = need === 'read' ? access.environment.canRead : access.environment.canWrite;
-    if (holds) return Effect.succeed(access);
+  /** The caller reads the environment: the owner's member copy, or a key's grant. */
+  const reading = (access: EnvironmentAccess) => {
+    if (access.environment.canRead) return Effect.succeed(access);
     return Effect.fail(
       new NoAccessError({
-        need,
+        need: 'read',
         message: access.readerIsLogin
-          ? loginHoldsNothing(access.environment, need)
-          : `This key has no ${need} access to ${addressOf(access.environment)}. The CLI login that asked for it asks to add it, on the same key: \`baymutt ask change ${access.readerId} --${need} ${addressOf(access.environment)} --reason "<why>"\`.`,
+          ? loginHoldsNothing(access.environment)
+          : `This key does not read ${addressOf(access.environment)}. The CLI login that asked for it asks to add it, on the same key, in a plan's \`change\` step for key ${access.readerId}.`,
       }),
     );
   };
@@ -277,13 +274,14 @@ export const lookups = (sql: D1Client.D1Client) => {
       sql`SELECT ${serviceAccountColumns(sql)}
           FROM credential c LEFT JOIN organization o ON o.id = c.org_id
           WHERE c.id = ${id} AND c.account_id = ${accountId} AND c.revoked_at IS NULL
-            AND (${isAnsweredOnly ? 1 : 0} = 0 OR NOT EXISTS (SELECT 1 FROM access_request
-              WHERE credential_id = c.id AND status <> 'approved'))`,
+            AND (${isAnsweredOnly ? 1 : 0} = 0 OR NOT EXISTS (
+              SELECT 1 FROM plan_step WHERE key_id = c.id AND type = 'access'
+                AND status <> 'approved'))`,
   });
 
   const notFound = () => new NotFoundError({ message: 'No CLI login or key has this id.' });
 
-  /** A working CLI login or service account of the account, or a request's key still waiting. */
+  /** A working CLI login or key of the account, or a plan's key still waiting. */
   const serviceAccountIn = Effect.fnUntraced(function* (accountId: string, id: string) {
     const found = yield* serviceAccountRow({ accountId, id, isAnsweredOnly: false }).pipe(
       Effect.orDie,
@@ -293,8 +291,8 @@ export const lookups = (sql: D1Client.D1Client) => {
   });
 
   /**
-   * A CLI login or service account whose access the owner may change: a request's key is not a
-   * service account until the request is approved.
+   * A CLI login or key whose access the owner may change: a plan's key is not a key until its
+   * `access` step is approved.
    */
   const approvedServiceAccountIn = Effect.fnUntraced(function* (accountId: string, id: string) {
     const found = yield* serviceAccountRow({ accountId, id, isAnsweredOnly: true }).pipe(
@@ -313,7 +311,7 @@ export const lookups = (sql: D1Client.D1Client) => {
   /**
    * Refuses once the account would hold more than the beta allows, `adding` more. Counted before
    * the write, so two requests at once can pass together and overshoot: a cap on growth, not an
-   * invariant. A credential counts while it works: not revoked, not expired, and not a request
+   * invariant. A credential counts while it works: not revoked, not expired, and not a plan's key
    * past its hour that the daily run has yet to tidy.
    */
   const underLimit = Effect.fnUntraced(function* (
@@ -329,9 +327,9 @@ export const lookups = (sql: D1Client.D1Client) => {
       serviceAccounts: sql`SELECT COUNT(*) AS held FROM credential
         WHERE account_id = ${accountId} AND revoked_at IS NULL
           AND (expires_at IS NULL OR expires_at > ${now})
-          AND NOT EXISTS (SELECT 1 FROM access_request r
-            WHERE r.credential_id = credential.id AND r.status = 'pending'
-              AND r.created_at <= ${now - REQUEST_WAIT_MS})`,
+          AND NOT EXISTS (SELECT 1 FROM plan_step s JOIN plan p ON p.id = s.plan_id
+            WHERE s.key_id = credential.id AND s.type = 'access' AND s.status = 'pending'
+              AND p.created_at <= ${now - PLAN_WAIT_MS})`,
     }[what];
     const [row] = yield* held.pipe(Effect.orDie);
     if (Number(row?.held ?? 0) + adding > LIMITS[what]) {
@@ -410,11 +408,34 @@ export const lookups = (sql: D1Client.D1Client) => {
     });
   });
 
+  const waitingChanges = SqlSchema.findAll({
+    Request: Schema.Struct({ keyId: Schema.String, now: Schema.Finite }),
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: ({ keyId, now }) =>
+      sql`SELECT p.id FROM plan_step s JOIN plan p ON p.id = s.plan_id
+          WHERE s.key_id = ${keyId} AND s.type = 'change' AND s.status = 'pending'
+            AND p.cancelled_at IS NULL AND p.created_at > ${now - PLAN_WAIT_MS}`,
+  });
+
+  /** Refuses a change to a key while another plan's step waits to change it: one at a time. */
+  const noChangeWaiting = Effect.fnUntraced(function* (key: {
+    readonly id: string;
+    readonly name: string;
+  }) {
+    const now = yield* Clock.currentTimeMillis;
+    const [waiting] = yield* waitingChanges({ keyId: key.id, now }).pipe(Effect.orDie);
+    if (waiting === undefined) return;
+    return yield* new AlreadyExistsError({
+      message: `Plan ${waiting.id} still waits for the owner to change ${key.name}. Wait for it (\`baymutt ask wait ${waiting.id}\`) or withdraw it (\`baymutt ask cancel ${waiting.id}\`) first.`,
+    });
+  });
+
   return {
+    noChangeWaiting,
     environmentsOf,
     environmentFor,
     ownersEnvironment,
-    needing,
+    reading,
     serviceAccountIn,
     approvedServiceAccountIn,
     underLimit,
@@ -430,13 +451,12 @@ export const namesNotSealed = (orgSlug: string) =>
     message: `The names in ${orgSlug} are not sealed yet, so nothing with a new name can be made in it. The owner seals them by opening the baymutt dashboard once; then try again.`,
   });
 
-/** A grant written by the owner, upserted. `onlyIf` conditions it inside a batch. */
+/** A read granted by the owner, upserted. `onlyIf` conditions it inside a batch. */
 export const grantStatement = (
   sql: D1Client.D1Client,
   {
     environmentId,
     credentialId,
-    canWrite,
     readWrap,
     keyProof,
     keyVersion,
@@ -444,8 +464,7 @@ export const grantStatement = (
   }: {
     readonly environmentId: string;
     readonly credentialId: string;
-    readonly canWrite: boolean;
-    readonly readWrap: string | null;
+    readonly readWrap: string;
     readonly keyProof: string;
     readonly keyVersion: number;
     readonly now: number;
@@ -453,13 +472,32 @@ export const grantStatement = (
   onlyIf: Statement.Fragment = sql`1 = 1`,
 ) =>
   sql`INSERT INTO environment_grant
-        (environment_id, credential_id, can_write, read_wrap, key_proof, key_version, created_at)
-      SELECT ${environmentId}, ${credentialId}, ${canWrite ? 1 : 0}, ${readWrap}, ${keyProof},
-        ${keyVersion}, ${now}
+        (environment_id, credential_id, read_wrap, key_proof, key_version, created_at)
+      SELECT ${environmentId}, ${credentialId}, ${readWrap}, ${keyProof}, ${keyVersion}, ${now}
       WHERE ${onlyIf}
       ON CONFLICT (environment_id, credential_id) DO UPDATE
-        SET can_write = excluded.can_write, read_wrap = excluded.read_wrap,
-            key_proof = excluded.key_proof, key_version = excluded.key_version`;
+        SET read_wrap = excluded.read_wrap, key_proof = excluded.key_proof,
+            key_version = excluded.key_version`;
+
+/** An org's names key wrapped to a reader, upserted. `onlyIf` conditions it inside a batch. */
+export const namesKeyWrapStatement = (
+  sql: D1Client.D1Client,
+  {
+    orgId,
+    readerId,
+    wrap,
+    now,
+  }: {
+    readonly orgId: string;
+    readonly readerId: string;
+    readonly wrap: string;
+    readonly now: number;
+  },
+  onlyIf: Statement.Fragment,
+) =>
+  sql`INSERT INTO names_key_wrap (org_id, reader_id, wrap, created_at)
+      SELECT ${orgId}, ${readerId}, ${wrap}, ${now} WHERE ${onlyIf}
+      ON CONFLICT (org_id, reader_id) DO UPDATE SET wrap = excluded.wrap`;
 
 /** A new environment and its owner's member copy, both only while `onlyIf` holds. */
 export const newEnvironmentStatements = (

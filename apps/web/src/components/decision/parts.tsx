@@ -1,29 +1,12 @@
-// The parts every decision page is built from: the environments it names, its answer, and the
-// line that says who asked. The column and the outcome are the shell's (`DecisionColumn`, `Outcome`).
+// The parts every decision page is built from: its answer, and the line that says who asked. The column and the outcome are the shell's (`DecisionColumn`, `Outcome`).
 import { useAtomValue } from '@effect/atom-react';
 import { cn } from 'cn';
 import type { ReactNode } from 'react';
-import { type OpenedRequestItem, serviceAccountsAtom } from '../../lib/data.ts';
+import { serviceAccountsAtom } from '../../lib/data.ts';
 import { exactTime } from '../../lib/format.ts';
 import { latest } from '../../lib/result.ts';
 import { useOwner } from '../gate.tsx';
 import { RelativeTime } from '../ui/page.tsx';
-import { Address } from '../ui/text.tsx';
-
-/** One environment in `.grants`: its address, then what the line is about in `muted`. */
-export const Grant = ({
-  item,
-  children,
-}: {
-  readonly item: Pick<OpenedRequestItem, 'orgSlug' | 'openedEnvironmentName'>;
-  /** Left out for an environment named alone (an environment request). */
-  readonly children?: ReactNode;
-}) => (
-  <li>
-    <Address orgSlug={item.orgSlug} name={item.openedEnvironmentName} />
-    {children !== undefined && <span className="muted">{children}</span>}
-  </li>
-);
 
 /**
  * `.answer`: Reject, then the primary (or one button, `.answer.single`), and under it the store's
@@ -55,9 +38,12 @@ export const Answer = ({
 export const Vouch = ({
   askedAt,
   maker,
+  children,
 }: {
   readonly askedAt: number;
   readonly maker: { readonly id: string; readonly name: string };
+  /** A sentence after it: when a plan expires. */
+  readonly children?: ReactNode;
 }) => {
   const approvedAt = latest(useAtomValue(serviceAccountsAtom(useOwner())))?.find(
     login => login.id === maker.id,
@@ -71,7 +57,7 @@ export const Vouch = ({
           you approved <RelativeTime at={approvedAt} />
         </>
       )}
-      .
+      .{children !== undefined && <> {children}</>}
     </p>
   );
 };

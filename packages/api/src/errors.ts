@@ -16,10 +16,10 @@ export class AlreadyExistsError extends Schema.TaggedError<AlreadyExistsError>()
   { httpApiStatus: 409 },
 ) {}
 
-/** The credential is real and lacks the grant this needs on the environment. */
+/** The credential is real and lacks the read this needs on the environment. */
 export class NoAccessError extends Schema.TaggedError<NoAccessError>()(
   'NoAccessError',
-  { message: ErrorMessageSchema, need: Schema.Literals(['read', 'write']) },
+  { message: ErrorMessageSchema, need: Schema.Literal('read') },
   { httpApiStatus: 403 },
 ) {}
 
@@ -58,6 +58,8 @@ export const LIMITS = {
   serviceAccounts: 200,
   secretsPerEnvironment: 500,
   versionsPerSecret: 1000,
+  /** Plans with a step still waiting for the owner, in one org. */
+  waitingPlansPerOrg: 20,
 } as const;
 
 /** A single-use link that was used, cancelled or has expired. */

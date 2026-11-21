@@ -126,10 +126,6 @@ export const orgs = ({
           JOIN environment e ON e.id = s.environment_id
           WHERE e.org_id = ${orgId} AND s.sealed_name IS NULL
           UNION
-          SELECT p.environment_id, p.name FROM paste_link p
-          JOIN environment e ON e.id = p.environment_id
-          WHERE e.org_id = ${orgId} AND p.sealed_name IS NULL
-          UNION
           SELECT environment_id, secret_name FROM activity_event
           WHERE org_id = ${orgId} AND environment_id IS NOT NULL
             AND secret_name IS NOT NULL AND secret_sealed_name IS NULL
@@ -195,10 +191,6 @@ export const orgs = ({
               AND EXISTS (SELECT 1 FROM ${names} AS j
                           WHERE j.environment_id = secret.environment_id
                             AND j.unsealed_name = secret.name)
-              AND ${notSealed}`,
-        sql`UPDATE paste_link SET name = j.name, sealed_name = j.sealed_name FROM ${names} AS j
-            WHERE paste_link.environment_id = j.environment_id AND paste_link.name = j.unsealed_name
-              AND paste_link.sealed_name IS NULL
               AND ${notSealed}`,
         sql`UPDATE activity_event
             SET secret_name = j.name, secret_sealed_name = j.sealed_name FROM ${names} AS j

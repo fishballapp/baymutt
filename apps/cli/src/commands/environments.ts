@@ -17,19 +17,22 @@ const listCommand = Command.make(
   {},
   Effect.fn('env.list')(function* () {
     const { environments } = yield* listEnvironments();
+    // A key only reads, so the store's `canWrite` (kept for older CLIs) is false for every caller here.
     yield* print({
-      environments: environments.map(({ namesKey: _, ...environment }) => environment),
+      environments: environments.map(
+        ({ namesKey: _, canWrite: __, ...environment }) => environment,
+      ),
     });
   }, report),
 ).pipe(
   Command.withDescription(
-    'The environments this key reaches, across its orgs, and what it may do in each. A CLI login lists every environment of its orgs and holds none: `baymutt ask access` gets one. Deleted ones are in `baymutt bin list`',
+    'The environments this key reaches, across its orgs, and whether it reads each. A CLI login lists every environment of its orgs and holds none: a plan’s `access` step gets one (`baymutt ask`). Deleted ones are in `baymutt bin list`',
   ),
 );
 
 export const envCommand = Command.make('env').pipe(
   Command.withDescription(
-    'List environments. The owner creates them in the dashboard; `baymutt ask create-environment` asks for a new one',
+    'List environments. A plan’s `environments` step asks the owner for a new one (`baymutt ask`)',
   ),
   Command.withAlias('environment'),
   Command.withSubcommands([listCommand]),

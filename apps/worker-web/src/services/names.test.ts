@@ -30,7 +30,6 @@ const PLAIN_NAMES = [
   'app/gone',
   'API_KEY',
   'OLD_KEY',
-  'STRIPE_KEY',
   'DB_URL',
   'GONE_KEY',
 ];
@@ -46,8 +45,8 @@ const bearer = async (id: string) => {
 
 /**
  * What 0.7 left behind in an org: a live environment with a secret written twice, one in the bin,
- * a pending paste link, an environment in the bin, one only the activity names, a CLI login and a
- * CI service account; every name stored as written.
+ * an environment in the bin, one only the activity names, a CLI login and a CI key; every name
+ * stored as written.
  */
 const legacy = async (world: StoreWorld) => {
   const { w, owner, accountId, orgId: sealedOrg } = world;
@@ -127,17 +126,11 @@ const legacy = async (world: StoreWorld) => {
   );
   run(
     `INSERT INTO environment_grant
-       (environment_id, credential_id, can_write, read_wrap, key_proof, key_version, created_at)
-     VALUES ('live-env', ?, 1, ?, ?, 1, 0)`,
+       (environment_id, credential_id, read_wrap, key_proof, key_version, created_at)
+     VALUES ('live-env', ?, ?, ?, 1, 0)`,
     deploy.id,
     sealedLike('read-wrap'),
     sealedLike('key-proof'),
-  );
-  run(
-    `INSERT INTO paste_link (id, environment_id, name, reason, hint, status, created_by, created_at)
-     VALUES ('00000000-0000-4000-8000-00000000000a', 'live-env', 'STRIPE_KEY', 'to take payments', 'Stripe', 'pending', ?, ?)`,
-    by,
-    Date.now(),
   );
   run(
     `INSERT INTO activity_event
@@ -146,14 +139,15 @@ const legacy = async (world: StoreWorld) => {
     orgId,
     by,
   );
-  // What CI did on 0.7, by name, through the API: a write, a delete and a load, each logged.
+  // What the owner and CI did since, by name, through the API: a write, a delete and a load, each
+  // logged.
   const path = '/environments/live-env/secrets';
-  await ok(w, 'PUT', `${path}/API_KEY`, deployBearer.headers, {
+  await ok(w, 'PUT', `${path}/API_KEY`, owner, {
     version: 2,
     keyVersion: 1,
     ciphertext: sealedLike('API_KEY-v2', 96),
   });
-  await ok(w, 'DELETE', `${path}/OLD_KEY`, deployBearer.headers);
+  await ok(w, 'DELETE', `${path}/OLD_KEY`, owner);
   await ok(w, 'GET', '/environments/live-env/bundle', deployBearer.headers);
   return {
     orgId,
@@ -236,7 +230,6 @@ describe('sealing an org’s names', () => {
         { environmentId: 'gone-env', name: 'GONE_KEY' },
         { environmentId: 'live-env', name: 'API_KEY' },
         { environmentId: 'live-env', name: 'OLD_KEY' },
-        { environmentId: 'live-env', name: 'STRIPE_KEY' },
       ],
     });
     const { namesKey, payload } = await sealing({
@@ -312,11 +305,15 @@ describe('sealing an org’s names', () => {
     const path = `/environments/live-env/secrets/${apiKey.name}`;
     const third = { version: 3, keyVersion: 1, ciphertext: sealedLike('API_KEY-v3', 96) };
     expect(await call(w, 'PUT', path, deploy.headers, third)).toMatchObject({
+      status: 403,
+      body: { code: 'OwnerRequiredError' },
+    });
+    expect(await call(w, 'PUT', path, owner, third)).toMatchObject({
       status: 200,
       body: { name: apiKey.name, sealedName: apiKey.sealedName, currentVersion: 3 },
     });
     expect(
-      await call(w, 'PUT', '/environments/live-env/secrets/API_KEY', deploy.headers, {
+      await call(w, 'PUT', '/environments/live-env/secrets/API_KEY', owner, {
         ...third,
         version: 4,
       }),
@@ -341,32 +338,11 @@ describe('sealing an org’s names', () => {
       'OLD_KEY',
     );
     expect(
-      await call(
-        w,
-        'POST',
-        `/environments/live-env/secrets/${oldKey.name}/rollback`,
-        deploy.headers,
-        {
-          version: 1,
-          fromBin: true,
-        },
-      ),
-    ).toMatchObject({ status: 200, body: { currentVersion: 1 } });
-
-    // The paste link, answered under its own sealed name.
-    const { links } = await ok<{
-      links: Array<{ id: string; name: string; sealedName: string | null }>;
-    }>(w, 'GET', '/paste-links', owner);
-    const [link] = links;
-    if (link === undefined) throw new Error('the paste link is gone');
-    expect(await open(namesKey, 'live-env', link.name, link.sealedName)).toBe('STRIPE_KEY');
-    expect(
-      await call(w, 'POST', '/paste/00000000-0000-4000-8000-00000000000a', owner, {
+      await call(w, 'POST', `/environments/live-env/secrets/${oldKey.name}/rollback`, owner, {
         version: 1,
-        keyVersion: 1,
-        ciphertext: sealedLike('stripe', 96),
+        fromBin: true,
       }),
-    ).toMatchObject({ status: 200, body: { name: link.name, sealedName: link.sealedName } });
+    ).toMatchObject({ status: 200, body: { currentVersion: 1 } });
 
     // The activity, before and after: every name opens.
     const { events } = await ok<{
@@ -387,7 +363,6 @@ describe('sealing an org’s names', () => {
         'environment.load',
         'secret.purge',
         'secret.rollback',
-        'paste-link.fulfil',
       ]),
     );
     const opened = await Promise.all(
@@ -408,7 +383,6 @@ describe('sealing an org’s names', () => {
         ['app/gone', 'GONE_KEY'],
         ['app/production', 'API_KEY'],
         ['app/production', 'OLD_KEY'],
-        ['app/production', 'STRIPE_KEY'],
         ['app/production', null],
       ]),
     );
@@ -477,8 +451,8 @@ describe('handing an org’s names key on', () => {
     const other = await world.org('other');
     const unsealed = await world.org('legacy', { isSealed: false });
     const login = await pair('laptop');
-    // A service account of this org, which the other org's names key is never handed to.
-    const made = await serviceAccount([{ environmentId: await environment('app'), read: true }], {
+    // A key of this org, which the other org's names key is never handed to.
+    const made = await serviceAccount([await environment('app')], {
       maker: login,
     });
     const put = (org: string, readerId: string, headers = owner) =>

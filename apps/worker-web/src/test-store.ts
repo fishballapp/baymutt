@@ -86,13 +86,6 @@ const newKey = async (name: string) => {
 
 export type Credential = { readonly id: string; readonly headers: Headers_ };
 
-/** What a request asks for on one environment. */
-export type Ask = {
-  readonly environmentId: string;
-  readonly read?: boolean;
-  readonly write?: boolean;
-};
-
 export const storeWorld = async (userId = 'user-1') => {
   const w = testWorld();
   const user = w.user(userId);
@@ -213,94 +206,89 @@ export const storeWorld = async (userId = 'user-1') => {
     return id;
   };
 
-  /** A request a CLI login makes for `asks`: its key holds nothing until the owner approves. */
+  /** The org an environment belongs to, as the store has it. */
+  const orgOf = (environmentId: string) =>
+    (
+      w.sqlite.prepare('SELECT org_id FROM environment WHERE id = ?').get(environmentId) as
+        | { org_id: string }
+        | undefined
+    )?.org_id ?? orgId;
+
+  /**
+   * A key a CLI login asks for in a plan of one `access` step, reading `read`: it holds nothing
+   * until the owner approves the step. `id` is the key's; `planId` the plan's.
+   */
   const ask = async (
     login: Credential,
-    asks: ReadonlyArray<Ask>,
+    read: ReadonlyArray<string>,
     {
       name = `key-${keyCount + 1}`,
       reason = 'to run the tests',
       command = null,
-      lifetime = null,
+      end = 'never',
     }: {
       readonly name?: string;
       readonly reason?: string;
       readonly command?: string | null;
-      readonly lifetime?: number | null;
+      readonly end?: 'never' | number;
     } = {},
   ) => {
     const { headers, ...key } = await newKey(name);
-    const answer = await call(w, 'POST', '/requests', login.headers, {
-      ...key,
-      vouchers: VOUCHERS,
+    const planId = crypto.randomUUID();
+    const answer = await call(w, 'POST', '/plans', login.headers, {
+      id: planId,
+      orgId: orgOf(read[0] ?? ''),
       reason,
-      command,
-      lifetime,
-      items: asks.map(({ environmentId, read = false, write = false }) => ({
-        environmentId,
-        canRead: read,
-        canWrite: write,
-      })),
+      steps: [{ type: 'access', key: { ...key, vouchers: VOUCHERS }, command, end, read }],
     });
-    return { id: key.id, name, headers, answer };
+    return { id: key.id, planId, name, headers, answer };
   };
 
-  type RequestItem = {
-    environmentId: string;
-    orgId: string;
-    canRead: boolean;
-  };
+  /** What the owner's dashboard sends to approve an `access` step exactly as it was asked. */
+  const approval = (read: ReadonlyArray<string>, expiresAt: number | null = null) => ({
+    type: 'access',
+    expiresAt,
+    grants: read.map(environmentId => ({
+      environmentId,
+      readWrap: sealedLike('read-wrap'),
+      keyProof: sealedLike('key-proof'),
+      keyVersion: 1,
+    })),
+    namesKeyWraps: [...new Set(read.map(orgOf))].map(id => ({ orgId: id, wrap: NAMES_KEY_WRAP })),
+  });
 
-  /** What the owner's dashboard sends to approve a request exactly as it was asked. */
-  const approval = async (requestId: string, expiresAt: number | null = null) => {
-    const { items } = await ok<{ items: RequestItem[] }>(w, 'GET', `/requests/${requestId}`, owner);
-    return {
-      expiresAt,
-      grants: items.map(item => ({
-        environmentId: item.environmentId,
-        readWrap: item.canRead ? sealedLike('read-wrap') : null,
-        keyProof: sealedLike('key-proof'),
-        keyVersion: 1,
-      })),
-      namesKeyWraps: [...new Set(items.map(item => item.orgId))].map(id => ({
-        orgId: id,
-        wrap: NAMES_KEY_WRAP,
-      })),
-    };
-  };
+  const approve = (
+    asked: { readonly planId: string },
+    read: ReadonlyArray<string>,
+    expiresAt: number | null = null,
+  ) => call(w, 'POST', `/plans/${asked.planId}/steps/0/approve`, owner, approval(read, expiresAt));
 
-  const approve = async (requestId: string, expiresAt: number | null = null) =>
-    call(w, 'POST', `/requests/${requestId}/approve`, owner, await approval(requestId, expiresAt));
-
-  /** A service account: a request a CLI login made and the owner approved. */
+  /** A key that reads `read`: asked for by a CLI login in a plan, and approved by the owner. */
   const serviceAccount = async (
-    asks: ReadonlyArray<Ask>,
+    read: ReadonlyArray<string>,
     {
       name,
       maker,
       expiresAt = null,
+      command = null,
     }: {
       readonly name?: string;
       readonly maker?: Credential;
       readonly expiresAt?: number | null;
+      readonly command?: string | null;
     } = {},
   ) => {
     const login = maker ?? (await pair());
-    const request = await ask(login, asks, name === undefined ? {} : { name });
-    expect(request.answer).toMatchObject({ status: 201 });
-    expect(await approve(request.id, expiresAt)).toMatchObject({ status: 200 });
-    return { id: request.id, name: request.name, headers: request.headers, maker: login };
+    const asked = await ask(login, read, { ...(name === undefined ? {} : { name }), command });
+    expect(asked.answer).toMatchObject({ status: 201 });
+    expect(await approve(asked, read, expiresAt)).toMatchObject({ status: 200 });
+    return { id: asked.id, name: asked.name, headers: asked.headers, maker: login };
   };
 
-  /** The owner grants an existing service account access, from the dashboard. */
-  const grant = (
-    environmentId: string,
-    serviceAccountId: string,
-    { read = false, write = false }: { readonly read?: boolean; readonly write?: boolean },
-  ) =>
-    ok(w, 'PUT', `/environments/${environmentId}/grants/${serviceAccountId}`, owner, {
-      canWrite: write,
-      readWrap: read ? sealedLike('read-wrap') : null,
+  /** The owner lets an existing key read an environment, from the dashboard. */
+  const grant = (environmentId: string, keyId: string) =>
+    ok(w, 'PUT', `/environments/${environmentId}/grants/${keyId}`, owner, {
+      readWrap: sealedLike('read-wrap'),
       keyProof: sealedLike('key-proof'),
       keyVersion: 1,
     });
@@ -308,7 +296,7 @@ export const storeWorld = async (userId = 'user-1') => {
   /** A secret's stored name in an environment of a sealed org. */
   const secretName = (environmentId: string, name: string) => indexOf(environmentId, name);
 
-  /** A write of `name` as a client in a sealed org sends it: under its index, with its sealed name. */
+  /** The owner's write of `name`, as the dashboard sends it in a sealed org: under its index, with its sealed name. */
   const write = (environmentId: string, name: string, version: number, headers = owner) =>
     call(
       w,

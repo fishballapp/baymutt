@@ -24,68 +24,45 @@ describe('a key', () => {
     return { ...world, other, production, elsewhere, login };
   };
 
-  it('belongs to the org of the environments it was asked for, and an ask across orgs is refused', async () => {
-    const { w, owner, orgId, production, elsewhere, login, ask, approve } = await setup();
-
-    const across = await ask(login, [
-      { environmentId: production, read: true },
-      { environmentId: elsewhere, read: true },
-    ]);
-    expect(across.answer).toMatchObject({
-      status: 400,
-      body: {
-        code: 'InvalidRequestError',
-        message: expect.stringMatching(/belongs to one org.*2 \(org-user-1, other\).*once per org/),
-      },
-    });
-    expect(w.sqlite.prepare('SELECT COUNT(*) AS n FROM access_request').get()).toEqual({ n: 0 });
-
-    const request = await ask(login, [{ environmentId: production, read: true }], {
-      name: 'deploy',
-    });
-    expect(request.answer).toMatchObject({
-      status: 201,
-      body: { org: { id: orgId, slug: 'org-user-1' } },
-    });
-    await approve(request.id);
+  it('belongs to the org of the plan that asked for it', async () => {
+    const { w, owner, orgId, production, login, ask, approve } = await setup();
+    const asked = await ask(login, [production], { name: 'deploy' });
+    expect(asked.answer).toMatchObject({ status: 201, body: { org: { id: orgId } } });
+    expect(await approve(asked, [production])).toMatchObject({ status: 200 });
     const { credentials } = await ok<{
       credentials: Array<{ id: string; org: { id: string; slug: string } | null }>;
     }>(w, 'GET', '/credentials', owner);
     expect(credentials.map(({ id, org }) => ({ id, org }))).toEqual([
       { id: login.id, org: null },
-      { id: request.id, org: { id: orgId, slug: 'org-user-1' } },
+      { id: asked.id, org: { id: orgId, slug: 'org-user-1' } },
     ]);
   });
 
   it('is changed to add environments of its own org only, and keeps its org once it holds nothing', async () => {
-    const { w, owner, orgId, production, elsewhere, login, serviceAccount } = await setup();
-    const key = await serviceAccount([{ environmentId: production, read: true }], {
-      maker: login,
-    });
-    const change = (body: { add: unknown[]; giveBack: string[] }) =>
-      call(w, 'POST', '/key-changes', login.headers, {
+    const { w, owner, orgId, other, production, elsewhere, login, serviceAccount } = await setup();
+    const key = await serviceAccount([production], { maker: login });
+    const change = (inOrg: string, body: { read: string[]; giveBack: string[] }) =>
+      call(w, 'POST', '/plans', login.headers, {
         id: crypto.randomUUID(),
-        keyId: key.id,
+        orgId: inOrg,
         reason: 'more',
-        lifetime: null,
-        ...body,
+        steps: [{ type: 'change', keyId: key.id, end: 'keep', ...body }],
       });
 
-    expect(
-      await change({
-        add: [{ environmentId: elsewhere, canRead: true, canWrite: false }],
-        giveBack: [],
-      }),
-    ).toMatchObject({
+    // Not an environment of the plan's org, nor, in a plan of the other org, of the key's.
+    expect(await change(orgId, { read: [elsewhere], giveBack: [] })).toMatchObject({
+      status: 404,
+    });
+    expect(await change(other, { read: [elsewhere], giveBack: [] })).toMatchObject({
       status: 400,
       body: {
         code: 'InvalidRequestError',
         message: expect.stringMatching(/belongs to org-user-1/),
       },
     });
-    expect(await change({ add: [], giveBack: [production] })).toMatchObject({
+    expect(await change(orgId, { read: [], giveBack: [production] })).toMatchObject({
       status: 201,
-      body: { status: 'applied', org: { id: orgId } },
+      body: { steps: [{ status: 'applied' }] },
     });
     const { credentials } = await ok<{
       credentials: Array<{ id: string; org: unknown; grants: unknown[] }>;
@@ -98,21 +75,19 @@ describe('a key', () => {
 
   it('is given access by the owner on environments of its own org only', async () => {
     const { w, owner, production, elsewhere, login, serviceAccount } = await setup();
-    const key = await serviceAccount([{ environmentId: production, read: true }], {
+    const key = await serviceAccount([production], {
       maker: login,
     });
     const refused = { status: 400, body: { code: 'InvalidRequestError' } };
     expect(
       await call(w, 'PUT', `/credentials/${key.id}/grants/${elsewhere}`, owner, {
-        canRead: false,
-        canWrite: true,
+        readWrap: sealedLike('read-wrap'),
         keyProof: sealedLike('key-proof'),
       }),
     ).toMatchObject(refused);
     expect(
       await call(w, 'PUT', `/environments/${elsewhere}/grants/${key.id}`, owner, {
-        canWrite: true,
-        readWrap: null,
+        readWrap: sealedLike('read-wrap'),
         keyProof: sealedLike('key-proof'),
         keyVersion: 1,
       }),
@@ -126,7 +101,7 @@ describe('a key', () => {
 
   it('gets the names key of its own org alone: sealing, a wrap put later, and the list refuse or leave out another', async () => {
     const { w, owner, accountId, org, production, login, serviceAccount, seal } = await setup();
-    const key = await serviceAccount([{ environmentId: production, read: true }], {
+    const key = await serviceAccount([production], {
       maker: login,
     });
     const third = await org('third', { isSealed: false });
@@ -175,7 +150,7 @@ describe('a key', () => {
 
   it('goes with its org when the org is deleted', async () => {
     const { w, owner, other, elsewhere, login, serviceAccount } = await setup();
-    const key = await serviceAccount([{ environmentId: elsewhere, read: true }], { maker: login });
+    const key = await serviceAccount([elsewhere], { maker: login });
     await ok(w, 'DELETE', `/environments/${elsewhere}`, owner);
     // A purge answers 204, with no body.
     const purged = await w.api(
@@ -301,9 +276,6 @@ it('revokes a live key with nothing to tell its org by, and guesses none for it'
       .prepare('SELECT org_id, revoked_at, bearer_hash FROM credential WHERE id = ?')
       .get('bare'),
   ).toMatchObject({ org_id: null, revoked_at: expect.any(Number), bearer_hash: '' });
-  expect(
-    sqlite.prepare('SELECT status FROM access_request WHERE credential_id = ?').get('bare'),
-  ).toEqual({ status: 'expired' });
   expect(sqlite.prepare('SELECT revoked_at FROM credential WHERE id = ?').get('login')).toEqual({
     revoked_at: null,
   });
@@ -320,7 +292,7 @@ it('takes back the names key of another org from a key, and leaves a CLI loginâ€
           INSERT INTO credential (id, account_id, name, public_key, bearer_hash, parent_id, created_at)
             VALUES ('key', 'a', 'key', 'pk', 'h', 'login', ${NOW});
           INSERT INTO environment_grant (environment_id, credential_id, can_write, read_wrap, key_proof, key_version, created_at)
-            VALUES ('e1', 'key', 1, NULL, 'proof', 1, ${NOW});
+            VALUES ('e1', 'key', 0, 'wrap', 'proof', 1, ${NOW});
           INSERT INTO names_key_wrap (org_id, reader_id, wrap, created_at)
             VALUES ('one', 'a', 'w', ${NOW}), ('two', 'a', 'w', ${NOW}),
                    ('one', 'login', 'w', ${NOW}), ('two', 'login', 'w', ${NOW}),

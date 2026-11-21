@@ -1,5 +1,5 @@
-// Secrets: named values in an environment. Every write adds a version and nothing is overwritten, which
-// is what makes it safe for a credential to write without asking.
+// Secrets: named values in an environment. Every write adds a version and nothing is overwritten. A
+// key only reads: the owner writes from the dashboard, and an agent asks for a write in a plan.
 
 import { coded } from '@internal/effect-api';
 import * as HttpApiEndpoint from 'effect/http-api/HttpApiEndpoint';
@@ -117,7 +117,7 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
       OpenApi.annotations({
         summary: 'List an environment’s secrets',
         description:
-          'Sealed names, versions and sizes; never a value. Either grant is enough, and so is being a CLI login of the environment’s org.',
+          'Sealed names, versions and sizes; never a value. A key granted the environment lists them, and so does a CLI login of its org.',
       }),
     ),
     HttpApiEndpoint.get('bundle', '/environments/:environmentId/bundle', {
@@ -131,35 +131,26 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
           'Every current value as ciphertext, with the environment key wrapped to the caller. Needs a read grant.',
       }),
     ),
+    // The owner's alone, from the dashboard with the vault open: a key only reads, and an agent
+    // asks for a write in a plan's `secrets` step.
     HttpApiEndpoint.put('write', '/environments/:environmentId/secrets/:name', {
       params: secretParams,
       payload: WriteSecretPayloadSchema,
       success: SecretSchema,
       error: [
         coded(NotFoundError),
-        coded(NoAccessError),
+        coded(OwnerRequiredError),
         coded(VersionConflictError),
         coded(LimitReachedError),
         coded(NamesNotSealedError),
       ],
-    }).annotateMerge(
-      OpenApi.annotations({
-        summary: 'Write a secret',
-        description:
-          'Adds a version and makes it current. Needs a write grant, and no key. A new name comes with `sealedName`, and is refused in an org whose names are not sealed yet.',
-      }),
-    ),
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
     HttpApiEndpoint.delete('remove', '/environments/:environmentId/secrets/:name', {
       params: secretParams,
       success: SecretSchema,
-      error: [coded(NotFoundError), coded(NoAccessError)],
-    }).annotateMerge(
-      OpenApi.annotations({
-        summary: 'Delete a secret',
-        description:
-          'It goes to the bin: a load stops answering it, and a rollback brings it back with every version. After 30 days in the bin it is removed for good.',
-      }),
-    ),
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
+    // On a deleted secret, it is how one leaves the bin; `fromBin` refuses when it has already left.
     HttpApiEndpoint.post('rollback', '/environments/:environmentId/secrets/:name/rollback', {
       params: secretParams,
       payload: Schema.Struct({
@@ -168,14 +159,8 @@ export class SecretsGroup extends HttpApiGroup.make('secrets')
         fromBin: Schema.optionalKey(Schema.Boolean),
       }),
       success: SecretSchema,
-      error: [coded(NotFoundError), coded(NoAccessError)],
-    }).annotateMerge(
-      OpenApi.annotations({
-        summary: 'Make an earlier version current',
-        description:
-          'Needs a write grant. No version is removed. On a deleted secret, it is how one leaves the bin; `fromBin` refuses when it has already left.',
-      }),
-    ),
+      error: [coded(NotFoundError), coded(OwnerRequiredError)],
+    }).annotateMerge(OpenApi.annotations({ exclude: true })),
     HttpApiEndpoint.get('versions', '/environments/:environmentId/secrets/:name/versions', {
       params: secretParams,
       success: Schema.Struct({ versions: Schema.Array(SecretVersionSchema) }),

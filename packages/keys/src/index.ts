@@ -58,6 +58,18 @@ export {
 } from './owner.ts';
 export { openWelcome, sealWelcome, type Welcome } from './pairing.ts';
 export {
+  type ItemSlot,
+  MAX_HINT_BYTES,
+  MAX_NOTE_BYTES,
+  type NoteStep,
+  openHint,
+  openNote,
+  openProposedValue,
+  sealHint,
+  sealNote,
+  sealProposedValue,
+} from './plans.ts';
+export {
   generateServiceAccountToken,
   type ServiceAccountKey,
   serviceAccountKeyFromToken,

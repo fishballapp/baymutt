@@ -1,8 +1,7 @@
-/** Secrets and paste links (`Secrets`). */
+/** Secrets (`Secrets`). */
 import { Api, CurrentActor } from '@baymutt/api';
 import * as Effect from 'effect/Effect';
 import * as HttpApiBuilder from 'effect/http-api/HttpApiBuilder';
-import * as Layer from 'effect/Layer';
 import { Bin } from '../../services/bin.ts';
 import { Secrets } from '../../services/secrets.ts';
 
@@ -44,46 +43,4 @@ const SecretHandlers = HttpApiBuilder.group(
   }),
 );
 
-const PasteLinkHandlers = HttpApiBuilder.group(
-  Api,
-  'pasteLinks',
-  Effect.fn(function* (handlers) {
-    const secrets = yield* Secrets;
-    return handlers.handleAll({
-      list: Effect.fn(function* () {
-        return { links: yield* secrets.listPasteLinks(yield* CurrentActor) };
-      }),
-      create: Effect.fn(function* ({ payload }) {
-        return yield* secrets.createPasteLink({ actor: yield* CurrentActor, paste: payload });
-      }),
-      get: Effect.fn(function* ({ params }) {
-        return yield* secrets.getPasteLink({ actor: yield* CurrentActor, id: params.id });
-      }),
-      cancel: Effect.fn(function* ({ params }) {
-        return yield* secrets.cancelPasteLink({ actor: yield* CurrentActor, id: params.id });
-      }),
-    });
-  }),
-);
-
-const PasteHandlers = HttpApiBuilder.group(
-  Api,
-  'paste',
-  Effect.fn(function* (handlers) {
-    const secrets = yield* Secrets;
-    return handlers.handleAll({
-      target: Effect.fn(function* ({ params }) {
-        return yield* secrets.pasteTarget({ actor: yield* CurrentActor, id: params.id });
-      }),
-      fulfil: Effect.fn(function* ({ params, payload }) {
-        return yield* secrets.fulfilPaste({
-          actor: yield* CurrentActor,
-          id: params.id,
-          write: payload,
-        });
-      }),
-    });
-  }),
-);
-
-export const SecretsHandlers = Layer.mergeAll(SecretHandlers, PasteLinkHandlers, PasteHandlers);
+export const SecretsHandlers = SecretHandlers;

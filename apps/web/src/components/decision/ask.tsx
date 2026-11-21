@@ -1,12 +1,8 @@
-// What the three ask pages share: reading the ask at the address, the way back to the item it
-// waits under, and the Ends a request and a key change offer.
-import { Link } from '@tanstack/react-router';
+// What the plan page reads an ask with, and the Ends an `access` or `change` step offers.
 import * as Option from 'effect/Option';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { durationWords, MINUTE_MS } from '../../lib/format.ts';
 import { failureMessage, latest } from '../../lib/result.ts';
-import { useOrg } from '../org-scope.tsx';
-import { buttonClass } from '../ui/button.tsx';
 import type { SelectOption } from '../ui/select.tsx';
 
 /**
@@ -35,28 +31,6 @@ export const askState = <A, E extends { readonly _tag: string; readonly message:
   const message = failureMessage(result);
   return message === null ? { kind: 'loading' } : { kind: 'failed', message };
 };
-
-/** An outcome's way back to Keys. */
-export const SeeKeys = () => (
-  <Link
-    to="/orgs/$slug/keys"
-    params={{ slug: useOrg().slug }}
-    className={buttonClass({ size: 'lg' })}
-  >
-    See keys
-  </Link>
-);
-
-/** An outcome's way back to Environments. */
-export const SeeEnvironments = () => (
-  <Link
-    to="/orgs/$slug/environments"
-    params={{ slug: useOrg().slug }}
-    className={buttonClass({ size: 'lg' })}
-  >
-    See environments
-  </Link>
-);
 
 /** The ends the owner may pick besides what the agent asked for and no end. */
 const LIFETIMES = [15 * MINUTE_MS, 60 * MINUTE_MS, 24 * 60 * MINUTE_MS] as const;

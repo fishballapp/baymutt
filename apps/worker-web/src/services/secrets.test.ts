@@ -1,4 +1,4 @@
-/** Values as ciphertext: versioned writes, soft deletes, loads, and the paste link. */
+/** Values as ciphertext: the owner's versioned writes and soft deletes, and a key's loads. */
 import { tokenHash } from '@baymutt/keys/wire';
 import { describe, expect, it } from 'vitest';
 import { call, indexOf, ok, type StoreWorld, sealedOf, storeWorld } from '../test-store.ts';
@@ -8,27 +8,24 @@ const setup = async () => {
   const world = await storeWorld();
   const environmentId = await world.environment('app/production');
   const login = await world.pair('laptop');
-  const reader = await world.serviceAccount([{ environmentId, read: true }], {
+  const reader = await world.serviceAccount([environmentId], {
     name: 'reader',
     maker: login,
   });
-  const writer = await world.serviceAccount([{ environmentId, write: true }], {
-    name: 'writer',
-    maker: login,
-  });
   const apiKey = world.secretName(environmentId, 'API_KEY');
-  return { ...world, environmentId, login, reader, writer, apiKey };
+  return { ...world, environmentId, login, reader, apiKey };
 };
 
 describe('writing', () => {
-  it('needs a write grant and no key, and a writer can never load', async () => {
-    const { w, environmentId, reader, writer, write, apiKey } = await setup();
+  it('is the owner’s alone: a key that reads and a CLI login are told to ask in a plan', async () => {
+    const { w, environmentId, reader, login, write, apiKey } = await setup();
 
-    expect(await write(environmentId, 'API_KEY', 1, reader.headers)).toMatchObject({
-      status: 403,
-      body: { code: 'NoAccessError', need: 'write' },
-    });
-    expect(await write(environmentId, 'API_KEY', 1, writer.headers)).toMatchObject({
+    for (const headers of [reader.headers, login.headers]) {
+      const refused = await write(environmentId, 'API_KEY', 1, headers);
+      expect(refused).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
+      expect(JSON.stringify(refused.body)).toContain('`secrets` step');
+    }
+    expect(await write(environmentId, 'API_KEY', 1)).toMatchObject({
       status: 200,
       body: {
         name: apiKey,
@@ -36,18 +33,12 @@ describe('writing', () => {
         currentVersion: 1,
         latestVersion: 1,
         size: 72,
-        updatedBy: { kind: 'credential', name: 'writer' },
+        updatedBy: { kind: 'owner' },
       },
     });
+    // A key that reads lists names and versions, which carry no value.
     expect(
-      await call(w, 'GET', `/environments/${environmentId}/bundle`, writer.headers),
-    ).toMatchObject({
-      status: 403,
-      body: { code: 'NoAccessError', need: 'read' },
-    });
-    // Either grant lists names and versions, which carry no value.
-    expect(
-      await call(w, 'GET', `/environments/${environmentId}/secrets`, writer.headers),
+      await call(w, 'GET', `/environments/${environmentId}/secrets`, reader.headers),
     ).toMatchObject({
       status: 200,
       body: { secrets: [{ name: apiKey, sealedName: sealedOf('API_KEY'), currentVersion: 1 }] },
@@ -55,8 +46,8 @@ describe('writing', () => {
   });
 
   it('adds a version each time and keeps every one, and its sealed name is the first write’s', async () => {
-    const { w, owner, environmentId, writer, write, apiKey } = await setup();
-    await write(environmentId, 'API_KEY', 1, writer.headers);
+    const { w, owner, environmentId, write, apiKey } = await setup();
+    await write(environmentId, 'API_KEY', 1);
 
     // A later write's sealed name is ignored: the name is the one the store already filed.
     expect(
@@ -82,7 +73,7 @@ describe('writing', () => {
       body: {
         versions: [
           { version: 2, isCurrent: true, createdBy: { kind: 'owner' } },
-          { version: 1, isCurrent: false, createdBy: { kind: 'credential', name: 'writer' } },
+          { version: 1, isCurrent: false, createdBy: { kind: 'owner' } },
         ],
       },
     });
@@ -144,7 +135,7 @@ describe('writing', () => {
   });
 
   it('gives one of two writers of the same version the slot and the other a conflict', async () => {
-    const { w, environmentId, writer, write } = await setup();
+    const { w, environmentId, write } = await setup();
     await write(environmentId, 'API_KEY', 1);
     // The other writer lands between this request's checks and its batch.
     w.beforeStatement(/INSERT INTO secret\b/, () => {
@@ -156,7 +147,7 @@ describe('writing', () => {
       );
     });
 
-    expect(await write(environmentId, 'API_KEY', 2, writer.headers)).toMatchObject({
+    expect(await write(environmentId, 'API_KEY', 2)).toMatchObject({
       status: 409,
       body: { code: 'VersionConflictError', latestVersion: 2 },
     });
@@ -233,7 +224,7 @@ describe('loading', () => {
   });
 
   it('stops for an environment in the bin, which only the owner deletes', async () => {
-    const { w, owner, environmentId, reader, writer, login, write } = await setup();
+    const { w, owner, environmentId, reader, login, write } = await setup();
 
     for (const headers of [reader.headers, login.headers]) {
       expect(await call(w, 'DELETE', `/environments/${environmentId}`, headers)).toMatchObject({
@@ -248,7 +239,7 @@ describe('loading', () => {
     ).toMatchObject({
       status: 404,
     });
-    expect(await write(environmentId, 'API_KEY', 1, writer.headers)).toMatchObject({ status: 404 });
+    expect(await write(environmentId, 'API_KEY', 1)).toMatchObject({ status: 404 });
     expect(await call(w, 'GET', '/environments', owner)).toMatchObject({
       status: 200,
       body: { environments: [] },
@@ -258,8 +249,8 @@ describe('loading', () => {
 
 describe('an org whose names are not sealed yet', () => {
   /**
-   * What 0.7 left behind: an environment and a secret under their plain names, and a CI service
-   * account holding read and write on it.
+   * What 0.7 left behind: an environment and a secret under their plain names, and a CI key that
+   * reads it.
    */
   const legacy = async (world: StoreWorld) => {
     const { w, accountId } = world;
@@ -289,8 +280,8 @@ describe('an org whose names are not sealed yet', () => {
     w.sqlite
       .prepare(
         `INSERT INTO environment_grant
-           (environment_id, credential_id, can_write, read_wrap, key_proof, key_version, created_at)
-         VALUES ('legacy-env', ?, 1, ?, ?, 1, 0)`,
+           (environment_id, credential_id, read_wrap, key_proof, key_version, created_at)
+         VALUES ('legacy-env', ?, ?, ?, 1, 0)`,
       )
       .run(id, sealedLike('read-wrap'), sealedLike('key-proof'));
     return {
@@ -302,7 +293,7 @@ describe('an org whose names are not sealed yet', () => {
 
   it('keeps working by name for what exists: load, write, delete, roll back, list', async () => {
     const world = await storeWorld();
-    const { w } = world;
+    const { w, owner } = world;
     const { deploy } = await legacy(world);
     const path = '/environments/legacy-env/secrets/API_KEY';
 
@@ -314,7 +305,7 @@ describe('an org whose names are not sealed yet', () => {
       },
     });
     expect(
-      await call(w, 'PUT', path, deploy.headers, {
+      await call(w, 'PUT', path, owner, {
         version: 2,
         keyVersion: 1,
         ciphertext: sealedLike('legacy-v2', 96),
@@ -323,9 +314,9 @@ describe('an org whose names are not sealed yet', () => {
       status: 200,
       body: { name: 'API_KEY', sealedName: null, currentVersion: 2 },
     });
-    expect(await call(w, 'DELETE', path, deploy.headers)).toMatchObject({ status: 200 });
+    expect(await call(w, 'DELETE', path, owner)).toMatchObject({ status: 200 });
     expect(
-      await call(w, 'POST', `${path}/rollback`, deploy.headers, { version: 2, fromBin: true }),
+      await call(w, 'POST', `${path}/rollback`, owner, { version: 2, fromBin: true }),
     ).toMatchObject({ status: 200, body: { currentVersion: 2 } });
     expect(await call(w, 'GET', '/environments/legacy-env/secrets', deploy.headers)).toMatchObject({
       status: 200,
@@ -340,33 +331,20 @@ describe('an org whose names are not sealed yet', () => {
     });
   });
 
-  it('makes nothing with a new name: no secret, no paste link', async () => {
+  it('makes nothing with a new name', async () => {
     const world = await storeWorld();
-    const { w } = world;
-    const { deploy, login } = await legacy(world);
-    const notSealed = { status: 409, body: { code: 'NamesNotSealedError' } };
+    const { w, owner } = world;
+    await legacy(world);
 
     for (const name of ['NEW_KEY', indexOf('legacy-env', 'NEW_KEY')]) {
       expect(
-        await call(w, 'PUT', `/environments/legacy-env/secrets/${name}`, deploy.headers, {
+        await call(w, 'PUT', `/environments/legacy-env/secrets/${name}`, owner, {
           version: 1,
           keyVersion: 1,
           ciphertext: sealedLike('x', 96),
           sealedName: sealedOf('NEW_KEY'),
         }),
-      ).toMatchObject(notSealed);
-    }
-    for (const headers of [deploy.headers, login.headers]) {
-      expect(
-        await call(w, 'POST', '/paste-links', headers, {
-          id: crypto.randomUUID(),
-          environmentId: 'legacy-env',
-          name: indexOf('legacy-env', 'STRIPE_KEY'),
-          sealedName: sealedOf('STRIPE_KEY'),
-          reason: 'to take payments',
-          hint: 'Stripe',
-        }),
-      ).toMatchObject(notSealed);
+      ).toMatchObject({ status: 409, body: { code: 'NamesNotSealedError' } });
     }
   });
 });
@@ -407,7 +385,7 @@ describe('revealing in the dashboard', () => {
 
 describe('deleting and rolling back', () => {
   it('a delete hides the value from a load and keeps its versions; a rollback brings one back', async () => {
-    const { w, owner, environmentId, reader, writer, write, apiKey, secretName } = await setup();
+    const { w, owner, environmentId, reader, write, apiKey, secretName } = await setup();
     await write(environmentId, 'API_KEY', 1);
     await write(environmentId, 'API_KEY', 2);
     const loaded = async () =>
@@ -422,9 +400,9 @@ describe('deleting and rolling back', () => {
 
     expect(
       await call(w, 'DELETE', `/environments/${environmentId}/secrets/${apiKey}`, reader.headers),
-    ).toMatchObject({ status: 403, body: { code: 'NoAccessError' } });
+    ).toMatchObject({ status: 403, body: { code: 'OwnerRequiredError' } });
     expect(
-      await call(w, 'DELETE', `/environments/${environmentId}/secrets/${apiKey}`, writer.headers),
+      await call(w, 'DELETE', `/environments/${environmentId}/secrets/${apiKey}`, owner),
     ).toMatchObject({ status: 200, body: { currentVersion: null, latestVersion: 2, size: null } });
     expect(await loaded()).toEqual([]);
     expect(w.sqlite.prepare('SELECT COUNT(*) AS versions FROM secret_version').get()).toEqual({
@@ -432,13 +410,9 @@ describe('deleting and rolling back', () => {
     });
 
     expect(
-      await call(
-        w,
-        'POST',
-        `/environments/${environmentId}/secrets/${apiKey}/rollback`,
-        writer.headers,
-        { version: 1 },
-      ),
+      await call(w, 'POST', `/environments/${environmentId}/secrets/${apiKey}/rollback`, owner, {
+        version: 1,
+      }),
     ).toMatchObject({ status: 200, body: { currentVersion: 1, latestVersion: 2 } });
     expect(await loaded()).toEqual([1]);
     // The next write is still one above the highest ever written, never over a kept version.
@@ -459,286 +433,5 @@ describe('deleting and rolling back', () => {
         owner,
       ),
     ).toMatchObject({ status: 404 });
-  });
-});
-
-describe('a paste link', () => {
-  const STRIPE = 'STRIPE_SECRET_KEY';
-
-  const request = async (
-    { w }: StoreWorld,
-    environmentId: string,
-    headers: Record<string, string>,
-    id: string = crypto.randomUUID(),
-  ) => {
-    const answer = await call(w, 'POST', '/paste-links', headers, {
-      id,
-      environmentId,
-      name: indexOf(environmentId, STRIPE),
-      sealedName: sealedOf(STRIPE),
-      reason: 'to take payments',
-      hint: 'Stripe dashboard, Developers, API keys',
-    });
-    return { id, answer };
-  };
-  const pasted = (version: number) => ({
-    version,
-    keyVersion: 1,
-    ciphertext: sealedLike('pasted', 96),
-  });
-
-  it('is made by a CLI login of the org or a service account that writes, and answered by the owner alone, once', async () => {
-    const world = await setup();
-    const { w, owner, locked, orgId, environmentId, login, reader, writer } = world;
-    const stripe = indexOf(environmentId, STRIPE);
-
-    expect((await request(world, environmentId, reader.headers)).answer).toMatchObject({
-      status: 403,
-      body: { code: 'NoAccessError', need: 'write' },
-    });
-    expect((await request(world, environmentId, writer.headers)).answer).toMatchObject({
-      status: 201,
-      body: { createdBy: { name: 'writer' } },
-    });
-    const { id, answer } = await request(world, environmentId, login.headers);
-    expect(answer).toMatchObject({
-      status: 201,
-      body: { status: 'pending', name: stripe, sealedName: sealedOf(STRIPE) },
-    });
-    expect(answer.body).not.toHaveProperty('linkExpiresAt');
-    expect(await call(w, 'GET', '/paste-links', owner)).toMatchObject({
-      body: { links: [{ id, name: stripe, createdBy: { name: 'laptop' } }] },
-    });
-    expect(await call(w, 'GET', '/paste-links', login.headers)).toMatchObject({
-      body: { links: [{ id }] },
-    });
-
-    // Nobody but the signed-in owner: not the CLI login that made it, not a service account.
-    for (const headers of [login.headers, writer.headers]) {
-      expect(await call(w, 'GET', `/paste/${id}`, headers)).toMatchObject({
-        status: 403,
-        body: { code: 'OwnerRequiredError' },
-      });
-      expect(await call(w, 'POST', `/paste/${id}`, headers, pasted(1))).toMatchObject({
-        status: 403,
-        body: { code: 'OwnerRequiredError' },
-      });
-    }
-    expect(await call(w, 'GET', `/paste/${id}`, {})).toMatchObject({ status: 401 });
-    expect(await call(w, 'POST', `/paste/${id}`, locked, pasted(1))).toMatchObject({
-      status: 403,
-      body: { code: 'VaultLockedError' },
-    });
-    expect(await call(w, 'GET', `/paste/${id}`, owner)).toMatchObject({
-      status: 200,
-      body: {
-        environmentPublicKey: keyLike('p'),
-        keyVersion: 1,
-        nextVersion: 1,
-        link: {
-          orgId,
-          environmentName: indexOf(orgId, 'app/production'),
-          environmentSealedName: sealedOf('app/production'),
-          name: stripe,
-          sealedName: sealedOf(STRIPE),
-        },
-      },
-    });
-
-    // The value goes in under the link's own name and sealed name, as the owner's act.
-    expect(await call(w, 'POST', `/paste/${id}`, owner, pasted(1))).toMatchObject({
-      status: 200,
-      body: {
-        name: stripe,
-        sealedName: sealedOf(STRIPE),
-        currentVersion: 1,
-        updatedBy: { kind: 'owner' },
-      },
-    });
-    expect(
-      w.sqlite
-        .prepare(
-          "SELECT actor, secret_name, secret_sealed_name FROM activity_event WHERE action = 'paste-link.fulfil'",
-        )
-        .get(),
-    ).toMatchObject({
-      actor: expect.stringContaining('"kind":"owner"'),
-      secret_name: stripe,
-      secret_sealed_name: sealedOf(STRIPE),
-    });
-    for (const [method, body] of [
-      ['GET', undefined],
-      ['POST', pasted(2)],
-    ] as const) {
-      expect(await call(w, method, `/paste/${id}`, owner, body)).toMatchObject({
-        status: 410,
-        body: { code: 'LinkSpentError' },
-      });
-    }
-    expect(await call(w, 'GET', '/paste-links', owner)).toEqual({
-      status: 200,
-      body: { links: [] },
-    });
-  });
-
-  it('is answered only by an owner of its own org', async () => {
-    const world = await setup();
-    const { w, environmentId, login } = world;
-    const { id } = await request(world, environmentId, login.headers);
-    const stranger = await storeWorld('user-2');
-
-    expect(await call(stranger.w, 'GET', `/paste/${id}`, stranger.owner)).toMatchObject({
-      status: 404,
-    });
-    expect(await call(w, 'GET', `/paste/${crypto.randomUUID()}`, world.owner)).toMatchObject({
-      status: 404,
-    });
-  });
-
-  it('stays unspent when the pasted value loses its slot to another write', async () => {
-    const world = await setup();
-    const { w, owner, environmentId, writer, write } = world;
-    const { id } = await request(world, environmentId, writer.headers);
-    await write(environmentId, STRIPE, 1);
-
-    expect(await call(w, 'POST', `/paste/${id}`, owner, pasted(1))).toMatchObject({
-      status: 409,
-      body: { code: 'VersionConflictError', latestVersion: 1 },
-    });
-    expect(await call(w, 'GET', `/paste/${id}`, owner)).toMatchObject({
-      status: 200,
-      body: { nextVersion: 2 },
-    });
-    expect(await call(w, 'POST', `/paste/${id}`, owner, pasted(2))).toMatchObject({ status: 200 });
-  });
-
-  it('is one per name: asking again replaces the earlier one, and a paste closes the rest', async () => {
-    const world = await setup();
-    const { w, owner, environmentId, writer } = world;
-    const first = await request(world, environmentId, writer.headers);
-    const second = await request(world, environmentId, writer.headers);
-    const pending = async () =>
-      (await ok<{ links: { id: string }[] }>(w, 'GET', '/paste-links', owner)).links.map(
-        ({ id }) => id,
-      );
-
-    expect(await pending()).toEqual([second.id]);
-    // The first request sent again (a retry whose answer was lost) is refused.
-    expect((await request(world, environmentId, writer.headers, first.id)).answer).toMatchObject({
-      status: 409,
-    });
-    expect(await call(w, 'GET', `/paste/${first.id}`, owner)).toMatchObject({ status: 410 });
-
-    // Two left open by an older build are both closed by one paste.
-    w.sqlite.exec("UPDATE paste_link SET status = 'pending', resolved_at = NULL");
-    expect(await call(w, 'POST', `/paste/${second.id}`, owner, pasted(1))).toMatchObject({
-      status: 200,
-    });
-    expect(await pending()).toEqual([]);
-    expect(w.sqlite.prepare('SELECT status FROM paste_link ORDER BY status').all()).toEqual([
-      { status: 'cancelled' },
-      { status: 'fulfilled' },
-    ]);
-  });
-
-  it('expires an hour after it was made, unanswered: read as expired, and past pasting', async () => {
-    const world = await setup();
-    const { w, owner, environmentId, reader, login } = world;
-    const { id } = await request(world, environmentId, login.headers);
-    expect(await call(w, 'GET', `/paste-links/${id}`, login.headers)).toMatchObject({
-      body: { status: 'pending' },
-    });
-    // Its maker and the owner read it, and no other key.
-    expect(await call(w, 'GET', `/paste-links/${id}`, reader.headers)).toMatchObject({
-      status: 404,
-    });
-
-    w.sqlite
-      .prepare('UPDATE paste_link SET created_at = created_at - ? WHERE id = ?')
-      .run(3600 * 1000, id);
-
-    for (const headers of [login.headers, owner]) {
-      expect(await call(w, 'GET', `/paste-links/${id}`, headers)).toMatchObject({
-        body: { status: 'expired' },
-      });
-    }
-    expect(await ok(w, 'GET', '/paste-links', owner)).toEqual({ links: [] });
-    expect(await call(w, 'GET', `/paste/${id}`, owner)).toMatchObject({
-      status: 410,
-      body: { code: 'LinkSpentError' },
-    });
-    expect(await call(w, 'POST', `/paste/${id}`, owner, pasted(1))).toMatchObject({
-      status: 410,
-    });
-    expect(await call(w, 'DELETE', `/paste-links/${id}`, login.headers)).toMatchObject({
-      status: 410,
-    });
-    expect(w.sqlite.prepare('SELECT COUNT(*) AS n FROM secret_version').get()).toEqual({ n: 0 });
-  });
-
-  it('is cancelled by its maker or the owner, and not by another key', async () => {
-    const world = await setup();
-    const { w, owner, environmentId, reader, login } = world;
-    const { id } = await request(world, environmentId, login.headers);
-
-    expect(await call(w, 'DELETE', `/paste-links/${id}`, reader.headers)).toMatchObject({
-      status: 404,
-    });
-    expect(await call(w, 'DELETE', `/paste-links/${id}`, login.headers)).toMatchObject({
-      status: 200,
-      body: { status: 'cancelled' },
-    });
-    expect(await call(w, 'POST', `/paste/${id}`, owner, pasted(1))).toMatchObject({
-      status: 410,
-    });
-    expect(w.sqlite.prepare('SELECT COUNT(*) AS versions FROM secret_version').get()).toEqual({
-      versions: 0,
-    });
-    expect(
-      w.sqlite
-        .prepare("SELECT secret_sealed_name FROM activity_event WHERE action = 'paste-link.cancel'")
-        .get(),
-    ).toEqual({ secret_sealed_name: sealedOf(STRIPE) });
-  });
-
-  it('is not cancelled, nor logged so, when it is answered between its read and its write', async () => {
-    const world = await setup();
-    const { w, environmentId, login } = world;
-    const { id } = await request(world, environmentId, login.headers);
-    // The owner pastes the value just before the cancel's batch.
-    w.beforeStatement(/INSERT INTO activity_event/, () => {
-      w.sqlite.exec(`UPDATE paste_link SET status = 'fulfilled'`);
-    });
-
-    expect(await call(w, 'DELETE', `/paste-links/${id}`, login.headers)).toMatchObject({
-      status: 410,
-      body: { code: 'LinkSpentError', message: expect.stringContaining('fulfilled') },
-    });
-    expect(
-      w.sqlite
-        .prepare("SELECT COUNT(*) AS n FROM activity_event WHERE action = 'paste-link.cancel'")
-        .get(),
-    ).toEqual({ n: 0 });
-  });
-
-  it('stays expired when its environment goes to the bin and comes back', async () => {
-    const world = await setup();
-    const { w, owner, environmentId, login } = world;
-    const expired = await request(world, environmentId, login.headers);
-    w.sqlite
-      .prepare('UPDATE paste_link SET created_at = created_at - ? WHERE id = ?')
-      .run(3600 * 1000, expired.id);
-    // Asked again once the first expired, so it does not replace it.
-    const waiting = await request(world, environmentId, login.headers);
-
-    await ok(w, 'DELETE', `/environments/${environmentId}`, owner);
-    await ok(w, 'POST', `/environments/${environmentId}/restore`, owner);
-
-    expect(await call(w, 'GET', `/paste-links/${expired.id}`, owner)).toMatchObject({
-      body: { status: 'expired' },
-    });
-    expect(await call(w, 'GET', `/paste-links/${waiting.id}`, owner)).toMatchObject({
-      body: { status: 'cancelled' },
-    });
   });
 });

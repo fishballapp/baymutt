@@ -14,9 +14,9 @@ import * as Schema from 'effect/Schema';
 import { aboutFlags, aboutPayload } from '../about.ts';
 import { listEnvironments } from '../environments.ts';
 import { crypto_, report, usage } from '../errors.ts';
+import { forgetAllKeys } from '../key-files.ts';
 import { KeyStore } from '../key-store.ts';
 import { print, say } from '../output.ts';
-import { forgetAllRequestKeys } from '../requests.ts';
 import { ServiceAccount, serviceAccountFromToken } from '../service-account.ts';
 import { readState, removeState, Settings, updateState } from '../settings.ts';
 import { namedKey } from './access.ts';
@@ -184,15 +184,15 @@ export const logoutCommand = Command.make(
       ? []
       : yield* Effect.gen(function* () {
           const { key, api } = yield* serviceAccountFromToken(kept.value);
-          // Logging out undoes `baymutt auth login`: this computer's state and every request key
-          // here go with it. A key from a request (one in BAYMUTT_KEY_FILE) is not that.
+          // Logging out undoes `baymutt auth login`: this computer's state and every key file here
+          // go with it. A key from a plan (one in BAYMUTT_KEY_FILE) is not that.
           if (key.issuerPublicKey !== null) {
             return yield* usage(
-              `This key is ${key.credentialId}, from a request, not this computer's CLI login. Nothing was revoked or removed. To stop it, run \`baymutt key revoke ${key.credentialId}\`.`,
+              `This key is ${key.credentialId}, from a plan, not this computer's CLI login. Nothing was revoked or removed. To stop it, run \`baymutt key revoke ${key.credentialId}\`.`,
             );
           }
           // Another CLI login's key, brought here in BAYMUTT_KEY_FILE: this computer's state and
-          // request keys are not its to remove.
+          // key files are not its to remove.
           const { loginId } = yield* readState;
           if (store.source === 'keyFile' && loginId !== undefined && loginId !== key.credentialId) {
             return yield* usage(
@@ -207,7 +207,7 @@ export const logoutCommand = Command.make(
         });
     yield* store.remove;
     yield* removeState;
-    yield* forgetAllRequestKeys;
+    yield* forgetAllKeys;
     yield* print({
       status: 'loggedOut',
       revoked,

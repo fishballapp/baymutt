@@ -11,7 +11,6 @@ import * as Schema from 'effect/Schema';
 import {
   AlreadyExistsError,
   LimitReachedError,
-  LinkSpentError,
   NamesNotSealedError,
   NoAccessError,
   NotFoundError,
@@ -56,20 +55,23 @@ export const EnvironmentSchema = Schema.Struct({
    * the member wrap, and for a caller with no grant on it.
    */
   keyProof: Schema.NullOr(KeyProofSchema),
-  /** What the caller may do. An owner of its org may always do both; a CLI login, neither. */
+  /** Whether the caller reads it: an owner of its org, or a key it was granted to. Never a CLI login. */
   canRead: Schema.Boolean,
+  /**
+   * Whether the caller writes it: an owner of its org, and no one else, since a key only reads.
+   * Kept for the CLI and the plugin before 0.11.0, which require it to load.
+   */
   canWrite: Schema.Boolean,
 }).annotate({ identifier: 'Environment' });
 export type Environment = typeof EnvironmentSchema.Type;
 
+/** A key that reads the environment: a grant is a read, the environment key wrapped to the key. */
 export const GrantSchema = Schema.Struct({
   credentialId: Schema.String,
   credentialName: LabelSchema,
   credentialPublicKey: PublicKeySchema,
   parentId: Schema.NullOr(Schema.String),
   endorsement: Schema.NullOr(SealedSchema),
-  canRead: Schema.Boolean,
-  canWrite: Schema.Boolean,
   createdAt: TimestampSchema,
 }).annotate({ identifier: 'Grant' });
 export type Grant = typeof GrantSchema.Type;
@@ -105,15 +107,9 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
         memberWrap: WrapSchema,
         /** The owner's proof of `publicKey`, to their own account. */
         memberProof: KeyProofSchema,
-        /**
-         * The environment request this approves: `id`, `orgId`, `name` and `sealedName` must be
-         * the request's own, and it is approved in the same write that creates the environment.
-         */
-        answers: Schema.optionalKey(IdSchema),
       }),
       success: EnvironmentSchema.pipe(HttpApiSchema.status(201)),
       error: [
-        coded(LinkSpentError),
         coded(AlreadyExistsError),
         coded(OwnerRequiredError),
         coded(LimitReachedError),
@@ -124,7 +120,7 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
       OpenApi.annotations({
         summary: 'Create an environment',
         description:
-          'An owner of the org only, from the dashboard: the owner’s browser makes the key pair. A CLI login asks for one with an environment request, which the owner approves by creating it here with `answers`. `LinkSpentError` when that request was already answered or has expired.',
+          'An owner of the org only, from the dashboard: the owner’s browser makes the key pair. A CLI login asks for one in a plan’s `environments` step.',
       }),
     ),
     HttpApiEndpoint.get('get', '/environments/:id', {
@@ -179,13 +175,12 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
       params: idParam,
       success: Schema.Struct({ grants: Schema.Array(GrantSchema) }),
       error: [coded(NotFoundError), coded(NoAccessError)],
-    }).annotateMerge(OpenApi.annotations({ summary: 'Who can read or write an environment' })),
+    }).annotateMerge(OpenApi.annotations({ summary: 'Which keys read an environment' })),
     HttpApiEndpoint.put('setGrant', '/environments/:id/grants/:credentialId', {
       params: { ...idParam, credentialId: Schema.String },
       payload: Schema.Struct({
-        canWrite: Schema.Boolean,
-        /** The environment key wrapped to the credential, or null for no read. */
-        readWrap: Schema.NullOr(WrapSchema),
+        /** The environment key wrapped to the key: a grant is a read. */
+        readWrap: WrapSchema,
         keyProof: KeyProofSchema,
         keyVersion: Schema.Int,
       }),
@@ -193,7 +188,7 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
     }).annotateMerge(
       OpenApi.annotations({
-        summary: 'Grant a service account access',
+        summary: 'Let a key read an environment',
         description:
           'An owner of its org only: it is what lets a new party read. Refused for a CLI login, which holds no environment.',
       }),
@@ -202,7 +197,7 @@ export class EnvironmentsGroup extends HttpApiGroup.make('environments')
       params: { ...idParam, credentialId: Schema.String },
       success: Schema.Struct({ removed: Schema.Boolean }),
       error: [coded(NotFoundError), coded(OwnerRequiredError)],
-    }).annotateMerge(OpenApi.annotations({ summary: 'Remove a service account’s access' })),
+    }).annotateMerge(OpenApi.annotations({ summary: 'Stop a key reading an environment' })),
   )
   .middleware(Authenticated)
   .middleware(Credentials)

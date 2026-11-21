@@ -21,6 +21,7 @@ import * as account from './areas/account.ts';
 import * as approvals from './areas/approvals.ts';
 import * as environments from './areas/environments.ts';
 import * as lists from './areas/lists.ts';
+import * as plans from './areas/plans.ts';
 import * as spine from './spine.ts';
 import { shots } from './support.ts';
 
@@ -30,15 +31,11 @@ const main = async (browser: Browser) => {
   const { context, page, recoveryKey } = await account.signUp({ browser });
   await environments.firstSecret({ context, page });
   const { laptop, production } = await approvals.pairing({ browser, page });
-  const { asked, agentKey, agentEnv } = await approvals.askAccess({ laptop, page });
-  const { creating } = await approvals.environmentRequest({ laptop, page });
-  await approvals.rejectedRequest({ laptop, page });
-  const { changeKey } = await approvals.keyChange({ agentKey, asked, laptop, page });
-  await approvals.unopenedNames({ creating, laptop, page, production });
-  await approvals.pasteLink({ agentEnv, browser, laptop, page });
+  const { keyId } = await plans.plans({ laptop, page });
+  await approvals.unopenedNames({ laptop, page, production });
   const { ci, ciEnv } = await approvals.ciKey({ laptop, page });
-  await lists.keysPage({ changeKey, ciEnv, page });
-  const { toPurged } = await environments.environmentPage({ agentKey, changeKey, laptop, page });
+  await lists.keysPage({ ciEnv, keyId, laptop, page });
+  const { toPurged } = await environments.environmentPage({ keyId, laptop, page });
   await lists.binAndActivity({ laptop, page, toPurged });
   await spine.legacyOrg({ ci, laptop, page });
   await account.deleteOrg({ laptop, page });

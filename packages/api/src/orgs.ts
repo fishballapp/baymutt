@@ -53,7 +53,7 @@ export const UnsealedNamesSchema = Schema.Struct({
   environments: Schema.Array(
     Schema.Struct({ id: Schema.String, name: StoredEnvironmentNameSchema }),
   ),
-  /** Every secret name, per environment: live, in the bin, on a paste link or only in the activity. */
+  /** Every secret name, per environment: live, in the bin, or only in the activity. */
   secrets: Schema.Array(
     Schema.Struct({ environmentId: Schema.String, name: StoredSecretNameSchema }),
   ),

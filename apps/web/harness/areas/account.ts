@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import {
+  askPlan,
   check,
   followLink,
   keepRecoveryKey,
@@ -8,6 +9,7 @@ import {
   type Run,
   shooter,
   WEB,
+  waitPlan,
   withPasskeys,
 } from '../support.ts';
 import * as environments from './environments.ts';
@@ -76,11 +78,14 @@ export const deleteOrg = async ({ laptop, page }: Pick<Run, 'laptop' | 'page'>) 
   await environments.environmentsEmpty(page, 'Scratch');
   await environments.createEnvironment(page, 'app/tmp');
   await page.getByRole('link', { name: /scratch\/app\/tmp/ }).waitFor();
-  const scratchAsk = laptop.cli(['ask', 'access', '--read', 'scratch/app/tmp', '--reason', 'tmp']);
-  await page.goto(scratchAsk.json.url);
-  await page.getByRole('button', { name: 'Approve read' }).click();
-  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
-  laptop.cli(['ask', 'wait', scratchAsk.json.id]);
+  const scratchAsk = askPlan(laptop, {
+    reason: 'tmp',
+    steps: [{ type: 'access', read: ['scratch/app/tmp'] }],
+  });
+  await page.goto(scratchAsk.url);
+  await page.getByRole('button', { name: 'Approve key' }).click();
+  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  waitPlan(laptop, scratchAsk.id);
   await page.goto(`${WEB}/orgs/scratch/environments`);
   await page.getByRole('link', { name: /scratch\/app\/tmp/ }).click();
   await page.getByRole('button', { name: 'Delete environment' }).click();

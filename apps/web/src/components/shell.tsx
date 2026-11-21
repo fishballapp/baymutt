@@ -4,8 +4,8 @@ import type { Org } from '@baymutt/api';
 import { useAtomValue } from '@effect/atom-react';
 import {
   CaretUpDownIcon,
-  ClipboardTextIcon,
   KeyIcon,
+  ListChecksIcon,
   PulseIcon,
   StackIcon,
   TrashIcon,
@@ -20,12 +20,7 @@ import {
   useState,
 } from 'react';
 import mark from '../assets/mark.svg';
-import {
-  orgsAtom,
-  pendingEnvironmentRequestsAtom,
-  pendingKeyAsksAtom,
-  pendingPasteLinksAtom,
-} from '../lib/data.ts';
+import { orgsAtom, pendingPlansAtom } from '../lib/data.ts';
 import { latest } from '../lib/result.ts';
 import { useNamesSealing, useOwner } from './gate.tsx';
 import { homeOrg } from './org-scope.tsx';
@@ -37,34 +32,30 @@ import { Tooltip } from './ui/tooltip.tsx';
 const ORG_ITEMS = [
   { item: 'environments', to: '/orgs/$slug/environments', label: 'Environments', Glyph: StackIcon },
   { item: 'keys', to: '/orgs/$slug/keys', label: 'Keys', Glyph: KeyIcon },
-  {
-    item: 'paste-links',
-    to: '/orgs/$slug/paste-links',
-    label: 'Paste links',
-    Glyph: ClipboardTextIcon,
-  },
+  { item: 'plans', to: '/orgs/$slug/plans', label: 'Plans', Glyph: ListChecksIcon },
   { item: 'activity', to: '/orgs/$slug/activity', label: 'Activity', Glyph: PulseIcon },
   { item: 'bin', to: '/orgs/$slug/bin', label: 'Bin', Glyph: TrashIcon },
 ] as const;
 
 type OrgItem = (typeof ORG_ITEMS)[number]['item'];
 
+type DecisionPlace = 'plans' | 'account';
+
 /**
- * Where a path sits: an org's item, Account, or a decision page and the item it waits under. An
- * ask for access or a key change waits under Keys, an ask for an environment under Environments,
- * and a pairing link under Account.
+ * Where a path sits: an org's item, Account, or a decision page and the item it waits under. A
+ * plan (`ask/<id>`) waits under Plans, and a pairing link under Account.
  */
 const placeOf = (
   path: string,
 ):
   | { readonly kind: 'item'; readonly item: OrgItem | null }
   | { readonly kind: 'account' }
-  | { readonly kind: 'decision'; readonly waitsUnder: 'environments' | 'keys' | 'account' } => {
+  | { readonly kind: 'decision'; readonly waitsUnder: DecisionPlace } => {
   if (path.startsWith('/account')) return { kind: 'account' };
   if (path.startsWith('/pair')) return { kind: 'decision', waitsUnder: 'account' };
-  const [, segment, ask] = /^\/orgs\/[^/]+\/([^/]+)(?:\/([^/]+))?/.exec(path) ?? [];
-  if (segment === 'ask') {
-    return { kind: 'decision', waitsUnder: ask === 'create-environment' ? 'environments' : 'keys' };
+  const [, segment, id, rest] = /^\/orgs\/[^/]+\/([^/]+)(?:\/([^/]+))?(\/.*)?/.exec(path) ?? [];
+  if (segment === 'ask' && id !== undefined && rest === undefined) {
+    return { kind: 'decision', waitsUnder: 'plans' };
   }
   return { kind: 'item', item: ORG_ITEMS.find(({ item }) => item === segment)?.item ?? null };
 };
@@ -75,20 +66,13 @@ export const isDecisionPath = (path: string) => placeOf(path).kind === 'decision
 type Waiting = Readonly<Partial<Record<OrgItem, number>>>;
 
 /**
- * What waits on the owner in one org, by the item it waits under: environment requests under
- * Environments, requests and key changes under Keys, paste links under Paste links. Nothing hints
- * that another org has something waiting.
+ * What waits on the owner in one org, by the item it waits under: every ask is a plan, under
+ * Plans. Nothing hints that another org has something waiting.
  */
 const useWaiting = (org: Org | null): Waiting => {
-  const environmentRequests = latest(useAtomValue(pendingEnvironmentRequestsAtom)) ?? [];
-  const keyAsks = latest(useAtomValue(pendingKeyAsksAtom)) ?? [];
-  const pasteLinks = latest(useAtomValue(pendingPasteLinksAtom)) ?? [];
+  const plans = latest(useAtomValue(pendingPlansAtom)) ?? [];
   if (org === null) return {};
-  return {
-    environments: environmentRequests.filter(request => request.orgId === org.id).length,
-    keys: keyAsks.filter(ask => ask.org.id === org.id).length,
-    'paste-links': pasteLinks.filter(link => link.orgId === org.id).length,
-  };
+  return { plans: plans.filter(plan => plan.org.id === org.id).length };
 };
 
 /** `<title>`: the screen's subject, then its org when it has one, then "baymutt". */
@@ -306,7 +290,7 @@ const ShellFrame = ({
 const BACK = {
   environments: { label: 'Environments', to: '/orgs/$slug/environments' },
   keys: { label: 'Keys', to: '/orgs/$slug/keys' },
-  'paste-links': { label: 'Paste links', to: '/orgs/$slug/paste-links' },
+  plans: { label: 'Plans', to: '/orgs/$slug/plans' },
 } as const;
 
 /**
@@ -357,11 +341,7 @@ export const DecisionBar = ({
 };
 
 /** A decision page under the app: its bar, then `main.decide` with the page. */
-const DecisionFrame = ({
-  waitsUnder,
-}: {
-  readonly waitsUnder: 'environments' | 'keys' | 'account';
-}) => {
+const DecisionFrame = ({ waitsUnder }: { readonly waitsUnder: DecisionPlace }) => {
   const { slug } = useParams({ strict: false });
   const orgs = latest(useAtomValue(orgsAtom));
   const org = orgs?.find(listed => listed.slug === slug) ?? null;

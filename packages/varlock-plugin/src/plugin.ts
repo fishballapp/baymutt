@@ -4,10 +4,10 @@
 //   # @initBaymutt(key=$BAYMUTT_KEY)
 //   # @setValuesBulk(baymuttLoad("acme/app/production"))
 //
-// The environment is named with its org first, `<org>/<name>`. `key` is a service account key: what
-// `baymutt ask access` gives once the owner approves, or a CI secret. Left unset or empty, the key is read
-// as the CLI reads it, from the file BAYMUTT_KEY_FILE names (the `keyFile` `baymutt ask access` printed). A
-// CLI login holds no environment, so its own key loads nothing.
+// The environment is named with its org first, `<org>/<name>`. `key` is a key that reads it: what a
+// plan's `access` step gives once the owner approves (`baymutt ask`), or a CI secret. Left unset or
+// empty, the key is read as the CLI reads it, from the file BAYMUTT_KEY_FILE names (the `keyFile`
+// `baymutt ask wait` printed). A CLI login holds no environment, so its own key loads nothing.
 import { loadEnvironment } from '@baymutt/cli/load';
 import { plugin } from 'varlock/plugin-lib';
 
@@ -29,7 +29,7 @@ const optionalString = async (resolver: Resolver | undefined, what: string) => {
 plugin.registerRootDecorator({
   name: 'initBaymutt',
   description:
-    'Connect to baymutt with a service account key (from `baymutt ask access`, or BAYMUTT_KEY_FILE), for baymuttLoad()',
+    'Connect to baymutt with a key that reads (from a plan, `baymutt ask`, or BAYMUTT_KEY_FILE), for baymuttLoad()',
   isFunction: true,
   async process(argsVal) {
     const { key, url } = argsVal.objArgs ?? {};

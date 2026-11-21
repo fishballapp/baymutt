@@ -113,10 +113,8 @@ const Secrets = ({ environment }: { readonly environment: OpenedEnvironment }) =
           return (
             <EmptyState
               example={{
-                lead: 'A key that can write here sets one like this:',
-                commands: [
-                  `baymutt secret set ${addressOf({ orgSlug: environment.orgSlug, name: environment.openedName })} STRIPE_SECRET_KEY < stripe.key`,
-                ],
+                lead: 'An agent asks you for one in a plan’s `secrets` step:',
+                commands: ['baymutt ask plan.json'],
               }}
             >
               Its secrets show here. Add a secret seals the first in this browser.

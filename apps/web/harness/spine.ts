@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import * as environmentSteps from './areas/environments.ts';
 import * as listSteps from './areas/lists.ts';
 import {
+  askPlan,
   check,
   d1,
   fail,
@@ -15,6 +16,7 @@ import {
   sqlText,
   varlockLoads,
   WEB,
+  waitPlan,
 } from './support.ts';
 
 const shell = shooter('shell');
@@ -37,24 +39,24 @@ export const legacyOrg = async ({ ci, laptop, page }: Pick<Run, 'ci' | 'laptop' 
   await page.getByRole('link', { name: /legacy\/app\/legacy/ }).click();
   await environmentSteps.addSecret(page, 'LEGACY_TOKEN', 'legacy-value');
   const legacyCiKey = join(laptop.home, 'legacy-ci-key');
-  const legacyAsk = laptop.cli([
-    'ask',
-    'access',
-    '--read',
-    'legacy/app/legacy',
-    '--reason',
-    'CI: legacy deploy',
-    '--name',
-    'Legacy CI',
-    '--',
-    'sh',
-    '-c',
-    `cat > ${legacyCiKey}`,
-  ]);
-  await page.goto(legacyAsk.json.url);
-  await page.getByRole('button', { name: 'Approve read' }).click();
-  await page.getByRole('heading', { name: 'Approved', exact: true }).waitFor();
-  laptop.cli(['ask', 'wait', legacyAsk.json.id]);
+  const legacyAsk = askPlan(laptop, {
+    reason: 'CI: legacy deploy',
+    steps: [
+      {
+        type: 'access',
+        name: 'Legacy CI',
+        read: ['legacy/app/legacy'],
+        command: ['sh', '-c', `cat > ${legacyCiKey}`],
+      },
+    ],
+  });
+  await page.goto(legacyAsk.url);
+  await page.getByRole('button', { name: 'Approve key' }).click();
+  await page.getByRole('heading', { name: 'Plan answered' }).waitFor();
+  waitPlan(laptop, legacyAsk.id);
+  const legacyKeyId = String(
+    d1(`SELECT key_id FROM plan_step WHERE plan_id = ${sqlText(legacyAsk.id)}`)[0]?.key_id,
+  );
   const legacyEnv = { ...ci.env, BAYMUTT_KEY: readFileSync(legacyCiKey, 'utf8').trim() };
   const legacyOrg = laptop
     .cli(['org', 'list'])
@@ -118,7 +120,7 @@ export const legacyOrg = async ({ ci, laptop, page }: Pick<Run, 'ci' | 'laptop' 
   check(
     'a service account whose environment there is in the bin gets the org’s names too',
     d1(`SELECT count(*) AS wraps FROM names_key_wrap
-        WHERE org_id = ${org} AND reader_id = ${sqlText(legacyAsk.json.id)}`)[0]?.wraps === 1,
+        WHERE org_id = ${org} AND reader_id = ${sqlText(legacyKeyId)}`)[0]?.wraps === 1,
   );
   d1(`UPDATE environment SET deleted_at = NULL, purge_at = NULL WHERE id = ${environment}`);
   check(

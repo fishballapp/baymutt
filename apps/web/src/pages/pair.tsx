@@ -76,7 +76,7 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
           </Link>
         }
       >
-        The terminal picks this up by itself. Each request it makes waits for you.
+        The terminal picks this up by itself. Each plan it sends waits for you.
       </Outcome>
     );
   }
@@ -96,8 +96,8 @@ const Pairing = ({ hash }: { readonly hash: string }) => {
         <p>This must match the code in the terminal.</p>
       </div>
       <p className="makes">
-        Approving lets it <b>list the names of your orgs, environments and secrets</b>, make paste
-        links, and ask you for access. It opens no value and writes none.
+        Approving lets it <b>list the names of your orgs, environments and secrets</b>, and ask you
+        for anything in a plan. It opens no value and writes none.
       </p>
       <ExpiryField
         placement="decision"

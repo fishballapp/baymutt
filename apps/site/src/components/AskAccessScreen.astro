@@ -1,14 +1,14 @@
 ---
-// The ask access page's parts, drawn static and inert.
+// A plan step asking for a key, as the plan page draws it, static and inert.
 import Address from './Address.astro';
 ---
 
 <div class="screen" aria-hidden="true" inert>
-  <p class="ask"><b>Work laptop</b> asks for a key it calls <b>Stripe webhooks</b></p>
+  <p class="ask"><b>Work laptop</b> asks for a new key, <b>Stripe webhooks</b></p>
   <p class="claim t-title">“set up the Stripe webhook and save its signing secret”</p>
   <div class="grants">
     <ul>
-      <li><Address org="acme" path="app/production" /><span class="muted">read and <span class="w">write</span></span></li>
+      <li><Address org="acme" path="app/production" /><span class="muted">read</span></li>
     </ul>
   </div>
   <div class="ends">
@@ -18,5 +18,5 @@ import Address from './Address.astro';
       <svg class="gl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
     </span>
   </div>
-  <div class="answer"><span class="btn lg">Reject</span><span class="btn lg primary">Approve read and write</span></div>
+  <div class="answer"><span class="btn lg">Reject</span><span class="btn lg primary">Approve key</span></div>
 </div>

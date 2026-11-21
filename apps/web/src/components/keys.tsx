@@ -27,12 +27,9 @@ import { RowMenu } from './ui/menu.tsx';
 import { RelativeTime } from './ui/page.tsx';
 import { AccessWords, Address } from './ui/text.tsx';
 
-type Held = { readonly canRead: boolean; readonly canWrite: boolean };
-
-const heldOn = (key: OpenedServiceAccount, environmentId: string): Held => {
-  const grant = key.grants.find(held => held.environmentId === environmentId);
-  return { canRead: grant?.canRead ?? false, canWrite: grant?.canWrite ?? false };
-};
+/** Whether a key reads an environment: a grant is a read. */
+const readsOn = (key: OpenedServiceAccount, environmentId: string): boolean =>
+  key.grants.some(held => held.environmentId === environmentId);
 
 /** The words a filter on Keys matches: the key's name, its reason and its environments' addresses. */
 export const keyWords = (key: OpenedServiceAccount): ReadonlyArray<string> => [
@@ -44,10 +41,10 @@ export const keyWords = (key: OpenedServiceAccount): ReadonlyArray<string> => [
 ];
 
 /**
- * What a key can reach, changed here under the key it already has: from its row on Keys, and from
- * "Keys that reach it" on an environment. A read or an environment it
- * gains needs its key as its CLI login vouched for it; one made by a CLI before 0.4.0 has no such
- * voucher, so it can only lose access, and gain write on an environment it holds.
+ * What a key reads, changed here under the key it already has: from its row on Keys, and from
+ * "Keys that reach it" on an environment. A key only reads. A read it gains needs its key as its
+ * CLI login vouched for it; one made by a CLI before 0.4.0 has no such voucher, so it can only
+ * stop reading.
  */
 export const AccessDialog = ({
   keyToChange,
@@ -73,16 +70,15 @@ export const AccessDialog = ({
   const [saving, save] = useAtom(changeAccessAtom, { mode: 'promiseExit' });
   // One atom serves every key: another key's failure is cleared when this dialog opens.
   const forget = useAtomSet(changeAccessAtom);
-  const [chosen, setChosen] = useState<Readonly<Record<string, Held>>>({});
+  const [chosen, setChosen] = useState<Readonly<Record<string, boolean>>>({});
   const isKeyVouched = isVouched(keyToChange) && maker !== undefined;
-  const accessOn = (environment: OpenedEnvironment) =>
-    chosen[environment.id] ?? heldOn(keyToChange, environment.id);
+  const readsAfter = (environment: OpenedEnvironment) =>
+    chosen[environment.id] ?? readsOn(keyToChange, environment.id);
   const changes: ReadonlyArray<AccessChange> = environments.flatMap(({ environment }) => {
-    const before = heldOn(keyToChange, environment.id);
-    const after = accessOn(environment);
-    return before.canRead === after.canRead && before.canWrite === after.canWrite
+    const canRead = readsAfter(environment);
+    return canRead === readsOn(keyToChange, environment.id)
       ? []
-      : [{ environmentId: environment.id, orgId: environment.orgId, ...after }];
+      : [{ environmentId: environment.id, orgId: environment.orgId, canRead }];
   });
   const shown = environments.filter(({ address }) => filter.matches(address));
   return (
@@ -94,7 +90,7 @@ export const AccessDialog = ({
         filter.clear();
         forget(Atom.Reset);
       }}
-      title={`What can ${keyToChange.name} reach?`}
+      title={`What can ${keyToChange.name} read?`}
       confirmLabel="Save access"
       pendingLabel="Saving…"
       isPending={saving.waiting}
@@ -114,26 +110,19 @@ export const AccessDialog = ({
       ) : (
         <ul className="access-list">
           {shown.map(({ environment, address }) => {
-            const before = heldOn(keyToChange, environment.id);
-            const after = accessOn(environment);
-            const set = (next: Held) =>
-              setChosen(current => ({ ...current, [environment.id]: next }));
+            const before = readsOn(keyToChange, environment.id);
             return (
-              // biome-ignore lint/a11y/useSemanticElements: a fieldset would put a legend's box in the list; the group only names the two checkboxes.
+              // biome-ignore lint/a11y/useSemanticElements: a fieldset would put a legend's box in the list; the group only names its checkbox.
               <li key={environment.id} role="group" aria-label={address}>
                 <Address orgSlug={environment.orgSlug} name={environment.openedName} />
                 <span className="checks">
                   <Checkbox
                     label="read"
-                    checked={after.canRead}
-                    disabled={!isKeyVouched && !before.canRead}
-                    onCheckedChange={canRead => set({ ...after, canRead })}
-                  />
-                  <Checkbox
-                    label="write"
-                    checked={after.canWrite}
-                    disabled={!isKeyVouched && !before.canRead && !before.canWrite}
-                    onCheckedChange={canWrite => set({ ...after, canWrite })}
+                    checked={readsAfter(environment)}
+                    disabled={!isKeyVouched && !before}
+                    onCheckedChange={canRead =>
+                      setChosen(current => ({ ...current, [environment.id]: canRead }))
+                    }
                   />
                 </span>
               </li>
@@ -142,11 +131,13 @@ export const AccessDialog = ({
         </ul>
       )}
       {isKeyVouched ? (
-        <p>A read wraps the environment’s key to it. What it reads cannot be unread.</p>
+        <p>
+          A read wraps the environment’s key to it. A key only reads: a write is asked for in a
+          plan. What it reads cannot be unread.
+        </p>
       ) : (
         <p>
-          A CLI before 0.4.0 made it, so nothing vouches for its key: it can lose access here, and
-          gain only write on an environment it holds.
+          A CLI before 0.4.0 made it, so nothing vouches for its key: it can only stop reading here.
         </p>
       )}
     </Dialog>
@@ -244,7 +235,7 @@ const EndWords = ({ expiresAt }: { readonly expiresAt: number | null }) =>
   );
 
 /**
- * A service account or agent key: its name and quoted reason, what it reaches, when it ends and
+ * A service account or agent key: its name and quoted reason, what it reads, when it ends and
  * was last used, and its `⋯` with Access, Expiry and Revoke.
  */
 export const KeyRow = ({
@@ -268,13 +259,13 @@ export const KeyRow = ({
       </div>
       <ul className="reach">
         {keyToShow.grants.length === 0 ? (
-          <li className="t-small muted">No access to any environment.</li>
+          <li className="t-small muted">Reads no environment.</li>
         ) : (
           keyToShow.grants.map(grant => (
             <li key={grant.environmentId}>
               <Address orgSlug={grant.orgSlug} name={grant.openedEnvironmentName} />
               <span className="muted">
-                <AccessWords canRead={grant.canRead} canWrite={grant.canWrite} />
+                <AccessWords canRead canWrite={false} />
               </span>
             </li>
           ))

@@ -1,5 +1,5 @@
 // Where the store is, and what this computer remembers about it: the account key it logged in
-// to. Nothing here is secret; the keys are `KeyStore`'s and the request key files'.
+// to. Nothing here is secret; the keys are `KeyStore`'s and the key files'.
 import { homedir } from 'node:os';
 import { PublicKeySchema } from '@baymutt/api';
 import * as Config from 'effect/Config';
@@ -52,7 +52,7 @@ const resolve = Effect.gen(function* () {
     origin: url.origin,
     stateFile: path.join(directory, 'state.json'),
     keyFile: path.join(directory, 'key'),
-    /** One owner-only file per key `baymutt ask access` made, named by its id, until it is used up or refused. */
+    /** One owner-only file per key a plan's `access` step made, named by its id, until it is used up or refused, and each plan's record. */
     keysDirectory: path.join(directory, 'keys'),
     keychainService: `baymutt ${url.origin}`,
   };

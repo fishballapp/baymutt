@@ -1,6 +1,6 @@
 // The environments and secrets area's steps, and the moves other areas' steps make on its pages.
 import type { Page } from '@playwright/test';
-import { check, DESKTOP, LONG_VALUE, PHONE, type Run, shooter, WEB } from '../support.ts';
+import { askPlan, check, DESKTOP, LONG_VALUE, PHONE, type Run, shooter, WEB } from '../support.ts';
 
 const { shoot, shootPhone } = shooter('environments');
 
@@ -157,38 +157,36 @@ export const firstSecret = async ({ context, page }: Pick<Run, 'context' | 'page
 
 /** An environment page, its history, Environments, and deleting an environment. */
 export const environmentPage = async ({
-  agentKey,
-  changeKey,
+  keyId,
   laptop,
   page,
-}: Pick<Run, 'agentKey' | 'changeKey' | 'laptop' | 'page'>) => {
-  laptop.cli(['secret', 'set', 'acme/app/production', 'OLD_TOKEN'], {
-    stdin: 'old-value',
-    keyFile: agentKey,
-  });
-  const binned = laptop.cli(['secret', 'delete', 'acme/app/production', 'OLD_TOKEN'], {
-    keyFile: agentKey,
-  });
-  check(
-    'a deleted secret goes to the bin, and the CLI login lists it there by name',
-    typeof binned.json?.purgeAt === 'number' &&
-      laptop.cli(['bin', 'list']).json?.secrets?.[0]?.name === 'OLD_TOKEN',
-  );
+}: Pick<Run, 'keyId' | 'laptop' | 'page'>) => {
   await page.goto(`${WEB}/orgs/acme/environments`);
   await page.getByRole('link', { name: /app\/production/ }).click();
   await page.getByText('STRIPE_SECRET_KEY').waitFor();
+  await addSecret(page, 'OLD_TOKEN', 'old-value');
+  await page.locator('li.just-written').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'OLD_TOKEN: replace, history, delete' }).click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete secret' }).click();
+  await secretRow(page, 'OLD_TOKEN').waitFor({ state: 'detached' });
+  check(
+    'a secret the owner deletes goes to the bin, and the CLI login lists it there by name',
+    laptop.cli(['bin', 'list']).json?.secrets?.[0]?.name === 'OLD_TOKEN',
+  );
   const shownNames = await page.locator('li.row-secret > .name').allInnerTexts();
   check(
     'the environment lists its secrets by name, sorted in the browser, and no deleted one',
     JSON.stringify(shownNames) ===
       JSON.stringify(shownNames.toSorted((a, b) => a.localeCompare(b))) &&
       !shownNames.includes('OLD_TOKEN') &&
-      shownNames.includes('API_KEY'),
+      shownNames.includes('SIGNING_KEY'),
   );
   check(
-    'it lists the keys that reach it, each with its end',
+    'it lists the keys that read it, each with its end, and none that writes',
     (await page.locator('li.row-reach').count()) > 0 &&
-      (await page.locator('li.row-reach .status').first().innerText()).includes('expires'),
+      (await page.locator('li.row-reach .status').first().innerText()).includes('expires') &&
+      (await page.locator('li.row-reach .access').getByText('write').count()) === 0,
   );
   await shoot(page, '10-environment');
   await page
@@ -224,28 +222,15 @@ export const environmentPage = async ({
 
   await createEnvironment(page, 'app/old');
   await page.getByRole('link', { name: /app\/old/ }).click();
-  // A change waits for it, and the dashboard learns of it from what the owner does next.
-  const toPurged = changeKey(['--read', 'acme/app/old', '--reason', 'one last look']);
+  // A plan's change waits for it while it goes to the bin, and then for good.
+  const toPurged = askPlan(laptop, {
+    reason: 'one last look',
+    steps: [{ type: 'change', key: keyId, read: ['acme/app/old'] }],
+  });
   await page.getByRole('button', { name: 'Delete environment' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete environment' }).click();
   await page.waitForURL(`${WEB}/orgs/acme/environments`);
   return { toPurged };
-};
-
-/** An environment request waiting on Environments, counted on its nav item. */
-export const environmentsRequestWaiting = async (page: Page) => {
-  await page.goto(`${WEB}/orgs/acme/environments`);
-  await page.getByRole('heading', { name: 'Waiting for you' }).waitFor();
-  check(
-    'an environment request waits at the top of Environments, counted on its nav item',
-    (await page.getByText('set up staging').count()) === 1 &&
-      (await page
-        .getByRole('navigation', { name: 'Acme' })
-        .getByRole('link', { name: /^Environments/ })
-        .getByText('1 waiting')
-        .count()) === 1,
-  );
-  await shoot(page, '08e-environments-request-waiting');
 };
 
 /** An environment in the dark scheme, desktop and phone. */

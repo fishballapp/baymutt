@@ -179,7 +179,7 @@ describe('a session whose vault is locked', () => {
       [
         'PUT',
         `/environments/${environmentId}/grants/${serviceAccount.id}`,
-        { canWrite: true, readWrap: null, keyProof: sealedLike('p'), keyVersion: 1 },
+        { readWrap: sealedLike('w'), keyProof: sealedLike('p'), keyVersion: 1 },
       ],
       [
         'PUT',
