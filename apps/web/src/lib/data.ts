@@ -236,6 +236,22 @@ const namesKeysAtom = Atom.family((owner: Owner) =>
   ),
 );
 
+/**
+ * What `make` makes for an open vault, kept for as long as that vault is. For a family of atoms
+ * per owner: `Atom.family` holds what it makes weakly, so a family it made would be collected
+ * while a page reads its atoms, and the page's next read would be of a new atom with nothing in it.
+ */
+const perOwner = <T extends object>(make: (owner: Owner) => T) => {
+  const made = new WeakMap<Owner, T>();
+  return (owner: Owner): T => {
+    const kept = made.get(owner);
+    if (kept !== undefined) return kept;
+    const fresh = make(owner);
+    made.set(owner, fresh);
+    return fresh;
+  };
+};
+
 /** Opens every item of a list the store sent, with the names keys the vault holds. */
 const opening = <Raw, A, E>(
   owner: Owner,
@@ -443,7 +459,7 @@ const environmentQuery = Atom.family((id: string) =>
   ApiClient.query('environments', 'get', { params: { id }, reactivityKeys: ['environments'] }),
 );
 
-export const environmentAtom = Atom.family((owner: Owner) =>
+export const environmentAtom = perOwner(owner =>
   Atom.family((id: string) =>
     opening(owner, get => get.result(environmentQuery(id)), openEnvironment),
   ),
@@ -456,7 +472,7 @@ const secretsQuery = Atom.family((environmentId: string) =>
 );
 
 /** An environment's secrets, the bin's among them, sorted by name. */
-export const secretsAtom = Atom.family((owner: Owner) =>
+export const secretsAtom = perOwner(owner =>
   Atom.family((environmentId: string) =>
     opening(
       owner,
@@ -1152,7 +1168,7 @@ const askQuery = Atom.family((id: string) =>
   ApiClient.query('asks', 'get', { params: { id }, reactivityKeys: ['asks'] }),
 );
 
-export const askAtom = Atom.family((owner: Owner) =>
+export const askAtom = perOwner(owner =>
   Atom.family((id: string) =>
     opening(
       owner,
@@ -1498,7 +1514,7 @@ const activityQuery = Atom.family((orgId: string) =>
 );
 
 /** One org's activity, beside the account's own. */
-export const activityAtom = Atom.family((owner: Owner) =>
+export const activityAtom = perOwner(owner =>
   Atom.family((orgId: string) =>
     opening(
       owner,
