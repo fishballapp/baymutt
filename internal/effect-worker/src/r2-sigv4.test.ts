@@ -127,3 +127,23 @@ describe('presignPutUrl for a whole object of a fixed type', () => {
     expect(new URL(await presign()).searchParams.get('X-Amz-SignedHeaders')).toBe('host');
   });
 });
+
+describe('presignPutUrl for one part of a multipart upload', () => {
+  it('signs as an independent SigV4 signer does, upload id and part number included', async () => {
+    const url = await presignPutUrl({
+      creds: { ...creds, bucket: 'dynm-link-files' },
+      key: 'uploads/user_1/01J/big file.bin',
+      expiresInSeconds: 3600,
+      now: FIXED,
+      part: { uploadId: 'UPLOAD-ID+1', partNumber: 7 },
+    });
+    const params = new URL(url).searchParams;
+    expect(params.get('partNumber')).toBe('7');
+    expect(params.get('uploadId')).toBe('UPLOAD-ID+1');
+    expect(params.get('X-Amz-SignedHeaders')).toBe('host');
+    // Checked against aws4fetch (`signQuery: true`), an independent SigV4 signer.
+    expect(params.get('X-Amz-Signature')).toBe(
+      '43b8ed1cee8cf9d29efcfd5d8a0af0b1d36f9092e9d7cca1b811e45594ac9425',
+    );
+  });
+});

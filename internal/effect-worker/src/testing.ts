@@ -188,12 +188,31 @@ export type FakeObject = {
   uploaded?: Date;
 };
 
-/** An in-memory R2 bucket (head / get with range / put / delete / list by prefix), with the objects
- * it holds by key. */
+/** A multipart upload the fake bucket holds open: its parts by number, as the last PUT left them. */
+export type FakeMultipartUpload = {
+  readonly key: string;
+  readonly contentType: string | undefined;
+  readonly parts: Map<number, { readonly etag: string; readonly body: Uint8Array }>;
+};
+
+/** An error as R2's binding throws it: the code on the error and at the end of its message. */
+const r2Error = (operation: string, code: number, message: string) =>
+  Object.assign(new Error(`${operation}: ${message} (${code})`), { code });
+
+const R2_MIN_PART_BYTES = 5 * 1024 * 1024;
+
+/** An in-memory R2 bucket (head / get with range / put / delete / list by prefix, and multipart
+ * uploads), with the objects it holds by key and the multipart uploads it holds open by id. Its
+ * multipart refusals are the codes miniflare's R2 answers (probed 2026-11-25), checked in the same
+ * order. */
 export const fakeR2 = (
   initial: Record<string, FakeObject> = {},
-): R2Bucket & { readonly objects: Map<string, FakeObject> } => {
+): R2Bucket & {
+  readonly objects: Map<string, FakeObject>;
+  readonly multipartUploads: Map<string, FakeMultipartUpload>;
+} => {
   const objects = new Map(Object.entries(initial));
+  const multipartUploads = new Map<string, FakeMultipartUpload>();
   // A copy, so its buffer is a plain `ArrayBuffer` whatever the stored view's was.
   const bytesOf = (object: FakeObject) =>
     (typeof object.body === 'string' ? new TextEncoder().encode(object.body) : object.body).slice();
@@ -205,8 +224,83 @@ export const fakeR2 = (
     httpEtag: `"${key}"`,
     httpMetadata: object.contentType === undefined ? {} : { contentType: object.contentType },
   });
+  let nextId = 0;
+  const openUpload = (operation: string, key: string, uploadId: string) => {
+    const upload = multipartUploads.get(uploadId);
+    if (upload === undefined || upload.key !== key) {
+      throw r2Error(operation, 10024, 'The specified multipart upload does not exist.');
+    }
+    return upload;
+  };
+  const multipartUpload = (key: string, uploadId: string) => ({
+    key,
+    uploadId,
+    uploadPart: async (partNumber: number, value: ArrayBuffer | Uint8Array | string) => {
+      const upload = openUpload('uploadPart', key, uploadId);
+      const body =
+        typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value).slice();
+      const etag = `etag-${nextId++}`;
+      upload.parts.set(partNumber, { etag, body });
+      return { partNumber, etag };
+    },
+    abort: async () => {
+      multipartUploads.delete(uploadId);
+    },
+    complete: async (uploaded: { partNumber: number; etag: string }[]) => {
+      const operation = 'completeMultipartUpload';
+      const upload = openUpload(operation, key, uploadId);
+      if (new Set(uploaded.map(part => part.partNumber)).size !== uploaded.length) {
+        throw r2Error(operation, 10001, 'We encountered an internal error.');
+      }
+      const listed = uploaded.map(({ partNumber, etag }) => {
+        const part = upload.parts.get(partNumber);
+        if (part === undefined || part.etag !== etag) {
+          throw r2Error(operation, 10025, 'One or more of the specified parts could not be found.');
+        }
+        return { partNumber, body: part.body };
+      });
+      if (listed.slice(0, -1).some(part => part.body.byteLength < R2_MIN_PART_BYTES)) {
+        throw r2Error(
+          operation,
+          10011,
+          'Your proposed upload is smaller than the minimum allowed object size.',
+        );
+      }
+      const parts = listed.toSorted((a, b) => a.partNumber - b.partNumber);
+      const leading = parts.slice(0, -1).map(part => part.body.byteLength);
+      const partSize = leading[0];
+      const last = parts.at(-1)?.body.byteLength ?? 0;
+      if (leading.some(size => size !== partSize) || (partSize !== undefined && last > partSize)) {
+        throw r2Error(operation, 10048, 'There was a problem with the multipart upload.');
+      }
+      const body = new Uint8Array(parts.reduce((sum, part) => sum + part.body.byteLength, 0));
+      parts.reduce((offset, part) => {
+        body.set(part.body, offset);
+        return offset + part.body.byteLength;
+      }, 0);
+      const object: FakeObject =
+        upload.contentType === undefined ? { body } : { body, contentType: upload.contentType };
+      objects.set(key, object);
+      multipartUploads.delete(uploadId);
+      return meta(key, object);
+    },
+  });
   return {
     objects,
+    multipartUploads,
+    createMultipartUpload: async (
+      key: string,
+      options?: { httpMetadata?: { contentType?: string } },
+    ) => {
+      const uploadId = `upload-${nextId++}`;
+      multipartUploads.set(uploadId, {
+        key,
+        contentType: options?.httpMetadata?.contentType,
+        parts: new Map(),
+      });
+      return multipartUpload(key, uploadId);
+    },
+    resumeMultipartUpload: multipartUpload,
     head: async (key: string) => {
       const object = objects.get(key);
       return object === undefined ? null : meta(key, object);
@@ -249,7 +343,10 @@ export const fakeR2 = (
       truncated: false,
       delimitedPrefixes: [],
     }),
-  } as unknown as R2Bucket & { readonly objects: Map<string, FakeObject> };
+  } as unknown as R2Bucket & {
+    readonly objects: Map<string, FakeObject>;
+    readonly multipartUploads: Map<string, FakeMultipartUpload>;
+  };
 };
 
 /** A Queue that records each message it was sent (or rejects every send, to exercise a failure). */
