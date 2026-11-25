@@ -89,9 +89,13 @@ const sign = async ({
   return new Uint8Array(await hmacSha256(await signingKey(creds, dateStamp), stringToSign)).toHex();
 };
 
+/** An object as a copy names its source (`x-amz-copy-source`): the bucket, then the encoded key. */
+export const copySource = (creds: R2Creds, key: string): string => canonicalUri(creds, key);
+
 /**
  * The headers that sign a Worker → R2 control call with `Authorization` (the multipart create and
- * complete calls, which carry no user bytes).
+ * complete calls, a server-side copy: none carries user bytes). `headers` are sent and signed with
+ * them: S3 refuses an `x-amz-*` header it wasn't signed for. Their names are lower case.
  */
 export const signedControlHeaders = async ({
   creds,
@@ -99,15 +103,18 @@ export const signedControlHeaders = async ({
   key,
   query,
   now,
+  headers: extra = {},
 }: {
   creds: R2Creds;
   method: string;
   key: string;
   query: Record<string, string>;
   now: number;
+  headers?: Record<string, string>;
 }): Promise<Record<string, string>> => {
   const { amzDate, dateStamp } = amzDates(now);
   const headers: Record<string, string> = {
+    ...extra,
     host: creds.host,
     'x-amz-content-sha256': UNSIGNED_PAYLOAD,
     'x-amz-date': amzDate,

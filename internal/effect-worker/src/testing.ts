@@ -319,11 +319,17 @@ export const fakeR2 = (
           bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
       };
     },
+    // `onlyIf: { etagDoesNotMatch: '*' }` writes only a key that is free, as R2 does (`null` when
+    // taken); no other condition is kept.
     put: async (
       key: string,
       value: ArrayBuffer | Uint8Array | string,
-      options?: { httpMetadata?: { contentType?: string } },
+      options?: {
+        httpMetadata?: { contentType?: string };
+        onlyIf?: { etagDoesNotMatch?: string };
+      },
     ) => {
+      if (options?.onlyIf?.etagDoesNotMatch === '*' && objects.has(key)) return null;
       const body = typeof value === 'string' ? value : new Uint8Array(value);
       objects.set(key, {
         body,

@@ -1,6 +1,6 @@
 import * as Redacted from 'effect/Redacted';
 import { describe, expect, it } from 'vitest';
-import { presignPutUrl, type R2Creds } from './r2-sigv4';
+import { copySource, presignPutUrl, type R2Creds, signedControlHeaders } from './r2-sigv4';
 
 const creds: R2Creds = {
   accessKeyId: 'AKIAEXAMPLE0000000000',
@@ -144,6 +144,30 @@ describe('presignPutUrl for one part of a multipart upload', () => {
     // Checked against aws4fetch (`signQuery: true`), an independent SigV4 signer.
     expect(params.get('X-Amz-Signature')).toBe(
       '43b8ed1cee8cf9d29efcfd5d8a0af0b1d36f9092e9d7cca1b811e45594ac9425',
+    );
+  });
+});
+
+describe('signedControlHeaders for a server-side copy', () => {
+  it('signs the headers the copy carries, so S3 takes its x-amz-copy-source', async () => {
+    const headers = await signedControlHeaders({
+      creds,
+      method: 'PUT',
+      key: 'uploads/u/a b.txt',
+      query: {},
+      now: FIXED,
+      headers: {
+        'x-amz-copy-source': copySource(creds, 'incoming/uploads/u/a b.txt'),
+        'cf-copy-destination-if-none-match': '*',
+      },
+    });
+    expect(headers).toMatchObject({
+      'x-amz-copy-source': '/media-bucket/incoming/uploads/u/a%20b.txt',
+      'cf-copy-destination-if-none-match': '*',
+      host: 'acc123.r2.cloudflarestorage.com',
+    });
+    expect(headers.Authorization).toMatch(
+      /SignedHeaders=cf-copy-destination-if-none-match;host;x-amz-content-sha256;x-amz-copy-source;x-amz-date, Signature=[0-9a-f]{64}$/,
     );
   });
 });
