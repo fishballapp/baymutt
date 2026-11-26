@@ -50,8 +50,9 @@ An ask is JSON: a reason, and steps in the order they are to happen, all in one 
 - `ask` prints a link for the owner at once and keeps running until the owner has answered every
   step (each waits an hour, and `--timeout` ends the wait sooner); `--no-wait` returns after the
   link. The owner sees only your reply to them, not a command's output: run `ask` in the
-  background and end that reply with the link alone on its last line, since a command that
-  blocks first hides the link. If it is stopped, `ask wait <id>` picks up every answer and key.
+  background and show the link once, alone on the last line of your final reply for the turn, not
+  in an earlier message as well, since a command that blocks first hides the link. If it is
+  stopped, `ask wait <id>` picks up every answer and key.
   Both finish each step and print its JSON line as the owner answers it, with the owner's note when there is one, so a key is in hand the moment its step is approved; one process waits on an ask at a time, and a second exits 6; an approved `access` step prints its key file, used as
   `BAYMUTT_KEY_FILE=<path>`, or is piped into its `command` (for CI). It exits 0 when every step
   was approved, 9 while any still waits, 4 when one was rejected, withdrawn or expired. `ask cancel

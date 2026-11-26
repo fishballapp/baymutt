@@ -153,7 +153,7 @@ export const nextAfterSending = ({
       : `Nothing waits for the owner. Run \`baymutt ask wait ${id}\` to check what each key holds now.`;
   }
   if (shouldWait) {
-    return `Send the owner the link now: they see only your reply to them, not this output, so end that reply with the link, alone on its last line, without waiting for this command. This command is still running: it waits for the owner and prints one line per step as they answer it. If your tool call blocked until it ended, it should have been run in the background. If it is stopped first, \`baymutt ask wait ${id}\` picks up every answer and key; nothing is lost.`;
+    return `The owner sees only what you write to them, not this output. Show them the link once, alone on the last line of your final reply for this turn: do not send it in an earlier message, do not wait for this command to finish first, and if you already showed it, do not repeat it. This command is still running: it waits for the owner and prints one line per step as they answer it. If your tool call blocked until it ended, it should have been run in the background. If it is stopped first, \`baymutt ask wait ${id}\` picks up every answer and key; nothing is lost.`;
   }
-  return `The owner sees only your reply to them, not this output: end that reply with the link, alone on its last line. Each step waits an hour for them. Run \`baymutt ask wait ${id}\` in the background, or after that reply, never before it: a wait that blocks first hides the link.`;
+  return `Run \`baymutt ask wait ${id}\` in the background, or after your reply, never blocking before it: a wait that blocks first hides the link. The owner sees only what you write to them, not this output: show them the link once, alone on the last line of your final reply for this turn. Do not send it in an earlier message, and if you already showed it, do not repeat it. Each step waits an hour for them.`;
 };

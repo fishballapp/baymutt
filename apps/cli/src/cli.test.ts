@@ -1086,12 +1086,13 @@ layer(NodeServices.layer)(it => {
         expect(ask.stdout + ask.stderr).toContain('`baymutt ask schema`');
         expect(ask.stdout + ask.stderr).toContain('`baymutt ask --check ask.json`');
         expect(ask.stdout + ask.stderr).toContain('`wait`, `cancel` or `schema`');
-        // It waits, so an agent runs it in the background and hands the link over at once.
+        // It waits, so an agent runs it in the background and shows the link once, last.
         for (const said of [
           '`baymutt ask` waits for the owner',
           'up to an hour for each step',
-          'run it in the background and send the owner the link straight away',
-          'alone on its last line',
+          'so run it in the background.',
+          'show them the link once, alone on the last line of your final reply',
+          'Do not send it in an earlier message',
           '`baymutt ask wait <id>` picks up every answer and key',
           '`--no-wait`',
         ]) {
@@ -1234,7 +1235,9 @@ layer(NodeServices.layer)(it => {
               status: 'pending',
               url: `${ORIGIN}/orgs/acme/ask/${sent.json.id}`,
               steps: [0, 1, 2, 3, 4].map(index => ({ index, status: 'pending' })),
-              next: expect.stringMatching(/last line.*baymutt ask wait.*in the background/s),
+              next: expect.stringMatching(
+                /baymutt ask wait.*in the background.*link once.*last line.*not send it in an earlier message/s,
+              ),
             },
           });
           const id: string = sent.json.id;
@@ -1774,7 +1777,7 @@ layer(NodeServices.layer)(it => {
                 ],
               });
               expect(sent.next).toMatch(
-                /link now.*last line.*still running.*background.*ask wait/s,
+                /link once.*last line.*not send it in an earlier message.*still running.*background.*ask wait/s,
               );
               expect(sent.next).toContain(`baymutt ask wait ${sent.id}`);
               expect(yield* job.printed).toHaveLength(1);

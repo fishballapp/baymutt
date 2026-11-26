@@ -40,8 +40,9 @@ An ask is JSON: a reason, and steps in the order they are to happen, all in one 
 
 `baymutt ask` sends the ask, prints the link at once, and keeps running until the owner has
 answered every step. The owner sees only the agent's reply to them, so the agent runs it in the
-background and ends its reply with the link, alone on its last line: a command that blocks first
-hides the link until it ends. Each step waits an hour. The owner sees which CLI login asks, why,
+background and shows the link once, alone on the last line of its final reply, never in an earlier
+message as well: a command that blocks first hides the link until it ends. Each step waits an
+hour. The owner sees which CLI login asks, why,
 and each step, and approves or rejects each one, with a note back to the agent if they like.
 `ask` prints each step, and finishes it, as the owner answers it. An approved `access` step gives the path of
 a key file of the agent's own:
